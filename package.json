@@ -1,0 +1,36 @@
+{
+  "name": "lake-effect-helm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lake Effect Helm \u2014 multi-tenant MSP documentation and credential platform.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "db:migrate": "tsx db/migrate.ts",
+    "db:migrate:status": "tsx db/migrate.ts --status",
+    "db:seed": "tsx db/seed/seed.ts",
+    "db:generate": "drizzle-kit generate --name manual",
+    "db:drift": "tsx scripts/check-drift.ts",
+    "db:studio": "drizzle-kit studio",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:rls": "tsx scripts/run-sql-tests.ts",
+    "test:security": "./scripts/run-tests.sh"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.6",
+    "postgres": "^3.4.7",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "drizzle-kit": "^0.31.5",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

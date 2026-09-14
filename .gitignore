@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+.pnp.*
+.yarn/*
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+/dist
+
+# env / secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+helm-master-key*
+
+# database
+/db/migrations-generated/
+*.dump
+
+# misc
+.DS_Store
+*.log
+coverage/
+.vscode/
+.idea/
