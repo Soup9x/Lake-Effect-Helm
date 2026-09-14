@@ -114,14 +114,39 @@ Organisation scope uses an explicit sentinel rather than NULL:
 ### 4.1 Key hierarchy
 
 ```
-KEK — in KMS/Vault, never leaves the HSM boundary
+KEK — the master key. On-premises: HashiCorp Vault, or a key file on this host.
  └─ DEK — one per tenant per generation, stored only wrapped (tenant_data_key)
      └─ AES-256-GCM ciphertext — one row per secret version
 ```
 
 Postgres never sees a plaintext secret or an unwrapped DEK. The database stores
-an opaque envelope; the application asks KMS to unwrap the DEK and decrypts
-in-process.
+an opaque envelope; the application unwraps the DEK and decrypts in-process.
+
+Helm is deployed **on-premises with no cloud KMS**, so the master key comes from
+one of two places, and the difference between them is worth stating plainly
+because it is the difference in what a breach costs:
+
+| Provider | Where the master key lives | Root on the Helm host can… |
+| --- | --- | --- |
+| `vault-transit` | HashiCorp Vault's transit engine, on another host | …use Helm's Vault token until it is revoked. Every unwrap is a Vault audit entry. |
+| `local-keyfile` | A mode-0400 file on the Helm host | …read the master key and decrypt the entire database offline, leaving no trace. |
+
+Both defeat the threat the envelope scheme is really aimed at — a stolen
+database dump, replica or backup tape yields wrapped DEKs and ciphertext and
+nothing else. They differ on host compromise, and `vault-transit` is preferred
+precisely because it gives you a revocation point and a record.
+
+`tenant_data_key.host_held_kek` is a generated column recording which case each
+key falls under, so "could someone with root on the app server have read this"
+is a query rather than an exercise in reconstructing deployment history.
+
+`local-dev` is refused when `NODE_ENV=production`. It is not a third production
+option: its key is unversioned, so the master key could never be rotated without
+stranding every tenant DEK.
+
+**Master key rotation** is a distinct, much cheaper operation than data key
+rotation: the DEK does not change, so no field ciphertext is touched. See
+`docs/architecture/03-crypto-operations.md` §4.
 
 pgcrypto is deliberately **not** used for field encryption. Passing a key as a
 SQL literal puts it in `pg_stat_activity`, in `log_statement` output, and in any

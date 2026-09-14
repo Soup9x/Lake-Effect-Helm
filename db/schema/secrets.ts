@@ -9,6 +9,7 @@
  * db/sql/0210_secret_access_api.sql, which writes the audit event in the same
  * transaction as the read.
  */
+import { sql } from 'drizzle-orm';
 import { bigint, boolean, index, integer, jsonb, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { bytea, tstz } from './_types';
 import { actorType, dataKeyStatus, secretKind, secretSensitivity } from './enums';
@@ -35,6 +36,16 @@ export const tenantDataKey = pgTable('tenant_data_key', {
   createdAt: tstz('created_at').notNull().defaultNow(),
   createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
   rotationReason: text('rotation_reason'),
+
+  /**
+   * Database-generated. True when the KEK that wrapped this DEK was readable
+   * from the application host — the on-premises master key providers — and
+   * false for a KMS or Vault KEK. Generated rather than supplied so a worker
+   * cannot mislabel its own key custody. See db/sql/0280_onprem_kek.sql.
+   */
+  hostHeldKek: boolean('host_held_kek').generatedAlwaysAs(
+    sql`wrap_provider = ANY (ARRAY['local-keyfile'::text, 'local-dev'::text])`,
+  ),
 }, (t) => [
   uniqueIndex('tenant_data_key_generation_uk').on(t.tenantId, t.generation),
   index('tenant_data_key_status_idx').on(t.tenantId, t.status),

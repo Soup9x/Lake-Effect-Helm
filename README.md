@@ -24,14 +24,16 @@ src/
     api/        Route wrapper, typed HTTP errors. The tenant-context choke point.
     auth/       API tokens, identity resolution, Auth.js config.
     db/         Per-role pools; withTenant() opens the RLS session context.
-    crypto/     KEK providers, DEK cache, AES-256-GCM envelope, TOTP, blind index.
+    crypto/     KEK providers (Vault transit, on-prem key file), DEK cache,
+                AES-256-GCM envelope, TOTP, blind index.
     secrets/    SecretService and key lifecycle over the audited SQL API.
     graph/      Relation vocabulary, canonicalisation, the link engine.
     flexible/   JSON Schema guard and record validator.
     search/     Global search over helm.search().
 tests/
-  unit/         129 tests — RFC 6238 vectors, envelope semantics, schema guard.
-  integration/  115 tests against a real cluster as the real roles.
+  unit/         185 tests — RFC 6238 vectors, envelope semantics, schema guard,
+                on-premises key custody.
+  integration/  123 tests against a real cluster as the real roles.
 docs/
   architecture/01-security-model.md     guarantees, mechanisms, and limitations
   architecture/02-data-model.md         schema shape and rejected alternatives
@@ -39,6 +41,7 @@ docs/
   architecture/04-api-layer.md          request flow, auth, untrusted schemas
 scripts/
   check-drift.ts        Drizzle schema vs. live catalog
+  rotate-kek.ts         re-wrap tenant DEKs onto a new master key version
   run-tests.sh          rebuild + fixtures + SQL security suite
   rebuild-test-db.sh    drop and reapply every migration
 ```
@@ -71,6 +74,7 @@ scripts/
 | `0250_graph_walk_fix` | One row per reachable node; parallel-edge regression guard |
 | `0260_secret_write_handshake` | Version allocation under lock, without granting UPDATE |
 | `0270_authentication` | The three pre-context authentication functions, and a guard fixing their number |
+| `0280_onprem_kek` | On-premises KEK custody, `host_held_kek`, key-custody reporting |
 | `0900_seed_system_data` | Roles and permissions |
 
 ---
@@ -112,6 +116,20 @@ write and the worker skips.
 **A route cannot query without a tenant context.** `tenantRoute()` hands the
 handler a transaction that already has one and no way to reach a pool. Declared
 permissions produce a clear error; RLS is what actually enforces them.
+
+**The master key never has to be a cloud service.** Helm runs on-premises.
+`vault-transit` keeps the KEK inside HashiCorp Vault — Helm holds a token, not a
+key, so revoking it stops decryption and every unwrap is in Vault's audit log.
+`local-keyfile` holds a mode-0400 versioned key ring on the host instead, which
+is simpler and honestly weaker: root on that box can decrypt the database
+offline. `tenant_data_key.host_held_kek` records which case each key is, so a
+breach assessment is a query.
+
+**Rotating the master key is not an outage.** The key ring is versioned, so old
+DEKs stay openable while `pnpm helm:rotate-kek` moves them onto the new version.
+The DEK does not change, so no field ciphertext is touched. The job is
+idempotent, reports what it could not re-wrap rather than skipping it, and exits
+non-zero — because the next thing the operator does is delete a key.
 
 **Technician-authored schemas are treated as untrusted code.** A structural scan
 plus an empirical cost probe reject patterns that backtrack catastrophically —

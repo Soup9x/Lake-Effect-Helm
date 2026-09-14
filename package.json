@@ -15,6 +15,7 @@
     "db:migrate": "tsx db/migrate.ts",
     "db:migrate:status": "tsx db/migrate.ts --status",
     "db:drift": "tsx scripts/check-drift.ts",
+    "helm:rotate-kek": "tsx scripts/rotate-kek.ts",
     "db:generate": "drizzle-kit generate --name manual",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
