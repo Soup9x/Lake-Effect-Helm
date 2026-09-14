@@ -89,6 +89,7 @@ const ROLE_USERS: Record<DbRole, string> = {
   auth: 'helm_auth',
   keyAdmin: 'helm_key_admin',
   auditor: 'helm_auditor',
+  worker: 'helm_worker',
 };
 
 export function connectPools(): void {

@@ -1,9 +1,10 @@
 /**
  * Database access.
  *
- * Four roles, four pools. The separation is the point: a bug in the request
- * path cannot reach the auth token store, and nothing in the request path can
- * write a key. See docs/architecture/01-security-model.md §6.
+ * Five roles, five pools. The separation is the point: a bug in the request
+ * path cannot reach the auth token store, nothing in the request path can write
+ * a key, and nothing in the request path can enumerate tenants.
+ * See docs/architecture/01-security-model.md §6.
  *
  * The only supported way to touch tenant data is withTenant(), which opens a
  * transaction, establishes the RLS session context inside it, and guarantees
@@ -28,13 +29,20 @@ type NoCustomTypes = {};
 export type HelmSql = postgres.Sql<NoCustomTypes>;
 export type HelmTx = postgres.TransactionSql<NoCustomTypes>;
 
-export type DbRole = 'app' | 'auth' | 'keyAdmin' | 'auditor';
+/**
+ * `worker` is a member of `app`, so it inherits exactly the request path's table
+ * privileges and RLS policies. What it adds is EXECUTE on the cross-tenant
+ * backlog enumerators in db/sql/0300, which `app` must never hold: anything the
+ * request role can execute is reachable from an HTTP request.
+ */
+export type DbRole = 'app' | 'auth' | 'keyAdmin' | 'auditor' | 'worker';
 
 const ROLE_ENV: Record<DbRole, string> = {
   app: 'DATABASE_URL',
   auth: 'DATABASE_URL_AUTH',
   keyAdmin: 'DATABASE_URL_KEY_ADMIN',
   auditor: 'DATABASE_URL_AUDITOR',
+  worker: 'DATABASE_URL_WORKER',
 };
 
 const pools = new Map<DbRole, HelmSql>();

@@ -383,18 +383,56 @@ SELECT helm_test.check_raises('a secret-bearing export cannot be self-approved',
            VALUES (%L, %L, 'client_offboarding', 'zip', true,
                    'offboarding handover for Acme', %L, %L, now(), now() + interval '7 days')$$,
          :t1, :t1_acme, :u_admin1, :u_admin1));
-SELECT helm_test.check_raises('a secret-bearing export cannot skip approval entirely',
-  format($$INSERT INTO export_job (tenant_id, organization_id, kind, format,
-                                   include_secrets, reason, requested_by, expires_at)
-           VALUES (%L, %L, 'client_offboarding', 'zip', true,
-                   'offboarding handover for Acme', %L, now() + interval '7 days')$$,
-         :t1, :t1_acme, :u_admin1));
-INSERT INTO export_job (tenant_id, organization_id, kind, format, include_secrets,
-                        reason, requested_by, approved_by, approved_at, expires_at)
-  VALUES (:t1, :t1_acme, 'client_offboarding', 'zip', true,
-          'offboarding handover for Acme', :u_admin1, :u_tech1, now(), now() + interval '7 days');
+-- An unapproved credential-bearing export CAN exist, parked in `queued`. That
+-- is the state a reviewer looks at, and making it unrepresentable would force
+-- the approver's name into the creation call — one person typing two names,
+-- which is not four eyes. The guarantee is about what it may DO, below.
+INSERT INTO export_job (id, tenant_id, organization_id, kind, format,
+                        include_secrets, reason, requested_by, expires_at)
+  VALUES ('e0000000-0000-0000-0000-000000000001', :t1, :t1_acme,
+          'client_offboarding', 'zip', true,
+          'offboarding handover for Acme', :u_admin1, now() + interval '7 days');
+SELECT helm_test.check('an unapproved secret-bearing export may await review',
+  EXISTS (SELECT 1 FROM export_job
+          WHERE id = 'e0000000-0000-0000-0000-000000000001' AND status = 'queued'));
+
+-- THE guarantee: it cannot start. begin_export_render is the transition into
+-- `running`, and running is where credentials get decrypted.
+SELECT helm_test.check_raises('an unapproved secret-bearing export cannot start rendering',
+  $$SELECT helm.begin_export_render('e0000000-0000-0000-0000-000000000001')$$);
+
+SELECT helm_test.check('an unapproved secret-bearing export is not offered to the render worker',
+  NOT EXISTS (SELECT 1 FROM export_job j
+              WHERE j.id = 'e0000000-0000-0000-0000-000000000001'
+                AND j.include_secrets
+                AND j.approved_by IS NOT NULL));
+
+DELETE FROM export_job WHERE id = 'e0000000-0000-0000-0000-000000000001';
+-- The supported path: someone else requested it, this session approves it.
+-- Going through the function rather than an INSERT is the point — approve_export
+-- is what records the scope digest, and a direct INSERT setting approved_by is
+-- refused by export_job_approved_scope_recorded precisely so that an approval
+-- always says what was approved.
+INSERT INTO export_job (id, tenant_id, organization_id, kind, format, include_secrets,
+                        reason, requested_by, expires_at)
+  VALUES ('e0000000-0000-0000-0000-000000000002', :t1, :t1_acme,
+          'client_offboarding', 'zip', true,
+          'offboarding handover for Acme', :u_tech1, now() + interval '7 days');
+
+SELECT helm_test.check_raises('an approval must record what was approved',
+  format($$UPDATE export_job SET approved_by = %L, approved_at = now()
+           WHERE id = 'e0000000-0000-0000-0000-000000000002'$$, :u_admin1));
+
+SELECT helm.approve_export('e0000000-0000-0000-0000-000000000002',
+                           'reviewed the scope; handover is contractually due');
 SELECT helm_test.check('an export approved by a second person is accepted',
-  EXISTS (SELECT 1 FROM export_job WHERE include_secrets));
+  EXISTS (SELECT 1 FROM export_job
+          WHERE id = 'e0000000-0000-0000-0000-000000000002'
+            AND approved_by = :u_admin1
+            AND approved_scope_sha256 IS NOT NULL));
+
+SELECT helm_test.check_raises('an approved export cannot be approved again',
+  $$SELECT helm.approve_export('e0000000-0000-0000-0000-000000000002')$$);
 ROLLBACK;
 
 \echo ''

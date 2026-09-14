@@ -138,6 +138,15 @@ export const serviceAccount = pgTable('service_account', {
   createdAt: tstz('created_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
   disabledAt: tstz('disabled_at'),
+
+  /**
+   * Reveal purposes this machine identity may use; null means unrestricted.
+   * Enforced inside helm.reveal_secret(), which is what makes it a boundary
+   * rather than a hint. See db/sql/0290_worker_identities.sql.
+   */
+  allowedRevealPurposes: textArray('allowed_reveal_purposes'),
+  /** A Helm-managed worker identity. Its authorisation is fixed by trigger. */
+  isSystem: boolean('is_system').notNull().default(false),
 }, (t) => [uniqueIndex('service_account_name_uk').on(t.tenantId, t.name)]);
 
 export const apiToken = pgTable('api_token', {

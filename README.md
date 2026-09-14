@@ -3,10 +3,9 @@
 Multi-tenant documentation and credential platform for IT Managed Service
 Providers.
 
-> **All three milestones complete.** PostgreSQL schema and security kernel
-> (Step 1), secret and relationship engine (Step 2), Next.js API layer with the
-> flexible-asset validator and global search (Step 3). The web interface is the
-> natural next piece; the API it would consume is here and tested.
+> **On-premises deployment.** The master key comes from HashiCorp Vault's
+> transit engine or a versioned key file on the Helm host — no cloud KMS. See
+> `docs/architecture/03-crypto-operations.md` §4.
 
 ---
 
@@ -19,7 +18,7 @@ db/
   tests/        SQL security suite (105 assertions) and fixtures.
   migrate.ts    Migration runner: transactional, locked, checksum-guarded.
 src/
-  app/          Next.js App Router — 14 API routes, all force-dynamic.
+  app/          Next.js App Router — 18 API routes, all force-dynamic.
   lib/
     api/        Route wrapper, typed HTTP errors. The tenant-context choke point.
     auth/       API tokens, identity resolution, Auth.js config.
@@ -30,15 +29,19 @@ src/
     graph/      Relation vocabulary, canonicalisation, the link engine.
     flexible/   JSON Schema guard and record validator.
     search/     Global search over helm.search().
+    exports/    Collection, JSON and PDF renderers, bundle format, storage.
+  workers/      Job runtime, expiry alerts, RMM/PSA sync, audit anchoring,
+                export rendering and expiry.
 tests/
-  unit/         185 tests — RFC 6238 vectors, envelope semantics, schema guard,
-                on-premises key custody.
-  integration/  123 tests against a real cluster as the real roles.
+  unit/         206 tests — RFC 6238 vectors, envelope semantics, schema guard,
+                on-premises key custody, PDF structure, bundle encryption.
+  integration/  177 tests against a real cluster as the real roles.
 docs/
   architecture/01-security-model.md     guarantees, mechanisms, and limitations
   architecture/02-data-model.md         schema shape and rejected alternatives
   architecture/03-crypto-operations.md  how reads, writes and rotation work
   architecture/04-api-layer.md          request flow, auth, untrusted schemas
+  architecture/05-workers-and-exports.md  jobs, worker identities, four eyes
 scripts/
   check-drift.ts        Drizzle schema vs. live catalog
   rotate-kek.ts         re-wrap tenant DEKs onto a new master key version
@@ -75,7 +78,12 @@ scripts/
 | `0260_secret_write_handshake` | Version allocation under lock, without granting UPDATE |
 | `0270_authentication` | The three pre-context authentication functions, and a guard fixing their number |
 | `0280_onprem_kek` | On-premises KEK custody, `host_held_kek`, key-custody reporting |
+| `0290_worker_identities` | `helm_worker`, per-tenant worker service accounts, reveal-purpose pinning |
+| `0300_worker_queues` | Backlog enumerators, alert evaluation, sync lifecycle, chain anchoring |
+| `0310_export_engine` | Export request/approve/render/download, four-eyes and scope binding |
+| `0320_export_approval_window` | The parked-approval window; `v_secret_metadata` without a join |
 | `0900_seed_system_data` | Roles and permissions |
+| `0910_worker_seed` | Worker roles, their permissions, and per-tenant identities |
 
 ---
 
@@ -130,6 +138,38 @@ DEKs stay openable while `pnpm helm:rotate-kek` moves them onto the new version.
 The DEK does not change, so no field ciphertext is touched. The job is
 idempotent, reports what it could not re-wrap rather than skipping it, and exits
 non-zero — because the next thing the operator does is delete a key.
+
+**No background worker holds a general reveal capability.** Each job runs as its
+own per-tenant service account, pinned to the reveal purposes that job actually
+has. For `integration` and `export` the scope is re-derived from the database on
+every call — the secret must be a live integration credential, or inside a live
+approved export. A compromised sync worker gets the RMM keys it was always going
+to need; it does not get the vault.
+
+**The request role cannot enumerate tenants.** Background jobs connect as
+`helm_worker`, a member of `helm_app` with the same tables and the same RLS,
+plus EXECUTE on the cross-tenant backlog functions. The membership runs one way,
+and a migration guard asserts it: nothing reachable from an HTTP request can ask
+which tenants exist.
+
+**Worker mutual exclusion is a Postgres advisory lock.** Two app servers both
+run the job runtime, and two concurrent syncs against one connection is how
+duplicate assets get created. Making that correctness depend on Redis — on a
+deployment where nobody is monitoring Redis — would be the wrong trade.
+
+**One alert per expiry, not four.** Of the lead-day thresholds an expiry has
+crossed and not yet fired, only the most urgent is delivered; the rest are
+recorded as suppressed so they can never fire later. A team that gets four
+alerts for one certificate stops reading alerts.
+
+**A credential export needs two people, and the approval is bound to what they
+read.** Approving records a digest of the scope; the render refuses if the scope
+changed since. Every credential in the bundle is decrypted through the audited
+path individually, and anything the worker could not decrypt is named on the
+cover page rather than quietly missing.
+
+**An export bundle's passphrase is stored nowhere.** Not in the database, not in
+the audit log. The file at rest is useless to anyone who has only the file.
 
 **Technician-authored schemas are treated as untrusted code.** A structural scan
 plus an empirical cost probe reject patterns that backtrack catastrophically —

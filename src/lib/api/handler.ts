@@ -222,6 +222,19 @@ function mapSecretDenial(error: SecretAccessDeniedError): ApiError {
     case 'missing_permission':
     case 'export_not_permitted':
       return new ApiError('forbidden', 'your role does not permit viewing this credential', details);
+    case 'purpose_not_permitted_for_actor':
+    case 'not_an_integration_credential':
+    case 'not_in_an_approved_export':
+      // Only a machine identity can hit these: its reveal purposes are pinned,
+      // and for 'integration' and 'export' the scope is re-derived from the
+      // database. A human seeing one means a service account token is being
+      // replayed somewhere it does not belong, which is worth saying plainly to
+      // whoever is holding it.
+      return new ApiError(
+        'forbidden',
+        'this credential is outside what this machine identity may decrypt',
+        details,
+      );
     case 'autofill_not_permitted_for_sensitivity':
       return new ApiError(
         'forbidden',

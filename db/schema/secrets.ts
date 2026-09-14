@@ -71,6 +71,19 @@ export const secret = pgTable('secret', {
   lastAccessedAt: tstz('last_accessed_at'),
   accessCount: bigint('access_count', { mode: 'number' }).notNull().default(0),
 
+  /**
+   * The current version's strength, length and write time, denormalised from
+   * secret_version by helm.write_secret_version().
+   *
+   * Here rather than joined because NO ROLE may read secret_version — not one
+   * column, not for a count — and v_secret_metadata would otherwise have to be
+   * the exception that quietly reintroduces one.
+   * See db/sql/0320_export_approval_window.sql.
+   */
+  currentStrengthScore: smallint('current_strength_score'),
+  currentPlaintextLength: smallint('current_plaintext_length'),
+  currentVersionCreatedAt: tstz('current_version_created_at'),
+
   createdAt: tstz('created_at').notNull().defaultNow(),
   createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
@@ -148,6 +161,9 @@ export type RevealDenialReason =
   | 'step_up_required'
   | 'reason_required'
   | 'export_not_permitted'
+  | 'not_in_an_approved_export'
+  | 'not_an_integration_credential'
+  | 'purpose_not_permitted_for_actor'
   | 'autofill_not_permitted_for_sensitivity'
   | 'no_such_version'
   | 'key_destroyed';
