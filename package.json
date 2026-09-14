@@ -11,15 +11,15 @@
   "scripts": {
     "db:migrate": "tsx db/migrate.ts",
     "db:migrate:status": "tsx db/migrate.ts --status",
-    "db:seed": "tsx db/seed/seed.ts",
-    "db:generate": "drizzle-kit generate --name manual",
     "db:drift": "tsx scripts/check-drift.ts",
+    "db:generate": "drizzle-kit generate --name manual",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
     "test": "vitest run",
-    "test:rls": "tsx scripts/run-sql-tests.ts",
-    "test:security": "./scripts/run-tests.sh"
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:sql": "./scripts/run-tests.sh",
+    "verify": "pnpm typecheck && pnpm test && pnpm db:drift"
   },
   "dependencies": {
     "drizzle-orm": "^0.44.6",

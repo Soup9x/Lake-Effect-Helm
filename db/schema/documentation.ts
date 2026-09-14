@@ -15,7 +15,7 @@ import {
 import { appUser } from './identity';
 import { secretKind } from './enums';
 import { secret } from './secrets';
-import { organization, tenant } from './tenancy';
+import { tenant } from './tenancy';
 
 // ---------------------------------------------------------------------------
 // Credentials

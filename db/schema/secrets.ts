@@ -13,7 +13,7 @@ import { bigint, boolean, index, integer, jsonb, pgTable, smallint, text, unique
 import { bytea, tstz } from './_types';
 import { actorType, dataKeyStatus, secretKind, secretSensitivity } from './enums';
 import { appUser } from './identity';
-import { organization, tenant } from './tenancy';
+import { tenant } from './tenancy';
 
 export const tenantDataKey = pgTable('tenant_data_key', {
   id: uuid('id').primaryKey().defaultRandom(),

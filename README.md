@@ -3,10 +3,10 @@
 Multi-tenant documentation and credential platform for IT Managed Service
 Providers.
 
-> **Step 1 of 3 — Data Model & Security Schema.**
-> This repository currently contains the PostgreSQL schema, its security kernel,
-> the typed query layer and a security test suite. The application (Next.js) and
-> the TypeScript secret/relationship engine are Steps 2 and 3.
+> **Steps 1–2 of 3 complete.**
+> The PostgreSQL schema and security kernel (Step 1), and the secret and
+> relationship engine over it (Step 2). The Next.js application, dynamic
+> flexible-asset validator and global search endpoint are Step 3.
 
 ---
 
@@ -16,14 +16,23 @@ Providers.
 db/
   sql/          PostgreSQL schema — the authority. Hand-authored, ordered.
   schema/       Drizzle ORM definitions — the typed query layer.
-  tests/        Security test suite (105 assertions).
+  tests/        SQL security suite (105 assertions) and fixtures.
   migrate.ts    Migration runner: transactional, locked, checksum-guarded.
+src/lib/
+  db/           Per-role pools; withTenant() opens the RLS session context.
+  crypto/       KEK providers, DEK cache, AES-256-GCM envelope, TOTP, blind index.
+  secrets/      SecretService and key lifecycle over the audited SQL API.
+  graph/        Relation vocabulary, canonicalisation, the link engine.
+tests/
+  unit/         78 tests — RFC 6238 vectors, envelope and cache semantics.
+  integration/  73 tests against a real cluster as the real roles.
 docs/
-  architecture/01-security-model.md    guarantees, mechanisms, and limitations
-  architecture/02-data-model.md        schema shape and rejected alternatives
+  architecture/01-security-model.md     guarantees, mechanisms, and limitations
+  architecture/02-data-model.md         schema shape and rejected alternatives
+  architecture/03-crypto-operations.md  how reads, writes and rotation work
 scripts/
   check-drift.ts        Drizzle schema vs. live catalog
-  run-tests.sh          rebuild + fixtures + security suite
+  run-tests.sh          rebuild + fixtures + SQL security suite
   rebuild-test-db.sh    drop and reapply every migration
 ```
 
@@ -50,6 +59,10 @@ scripts/
 | `0200_rls_policies` | RLS on every tenant table, with a catalog assertion |
 | `0210_secret_access_api` | The audited reveal/write API |
 | `0220_grants` | Privilege separation, with assertions |
+| `0230_key_rotation` | Rotation worker's read API — counts and ids, never ciphertext |
+| `0240_trigger_privileges` | Trigger functions that must run as definer, plus a catalog guard |
+| `0250_graph_walk_fix` | One row per reachable node; parallel-edge regression guard |
+| `0260_secret_write_handshake` | Version allocation under lock, without granting UPDATE |
 | `0900_seed_system_data` | Roles and permissions |
 
 ---
@@ -79,6 +92,15 @@ proves detection of row edits, row deletions, and re-hashed forgeries.
 DEFINER` routines, partitioning and column grants cannot be expressed in the
 Drizzle DSL. `pnpm db:drift` keeps the TypeScript honest.
 
+**Plaintext is hard to leak by accident.** Every decrypted value is a
+`SecretValue`: it redacts in `String()`, template literals, `JSON.stringify` and
+`console.log`. Reaching the real value takes an explicit `.expose()` that shows
+up in a diff.
+
+**Key rotation cannot revert a credential.** If a technician changes a password
+while the rotation worker holds a decrypted copy, the database refuses the stale
+write and the worker skips.
+
 ---
 
 ## Getting started
@@ -107,17 +129,24 @@ ALTER ROLE helm_key_admin PASSWORD '...';
 ALTER ROLE helm_auditor   PASSWORD '...';
 ```
 
-### Running the security suite
-
-The suite needs a throwaway cluster it can drop and rebuild:
+### Running the tests
 
 ```bash
-PGSOCK=/var/run/postgresql PGPORT=5432 ./scripts/run-tests.sh
+pnpm verify        # typecheck + 151 vitest tests + schema drift
+pnpm test:sql      # 105 SQL assertions including tamper detection
 ```
 
-It rebuilds the database from `db/sql/`, loads two mutually-hostile MSP tenants,
-and runs 105 assertions covering isolation, the reveal authorisation ladder,
-audit immutability and tamper detection.
+Both need a throwaway cluster they can drop and rebuild; point them at one with
+`PGSOCK` / `PGPORT` / `PGDATABASE`:
+
+```bash
+PGSOCK=/var/run/postgresql PGPORT=5432 pnpm verify
+```
+
+Integration tests connect as the real non-superuser roles. That is not
+thoroughness for its own sake: RLS policies, `SECURITY DEFINER` boundaries and
+grants do not exist in a mock, and three of the bugs found during Step 2 were
+invisible to any test that did not commit against real roles.
 
 ---
 
@@ -138,13 +167,37 @@ every grant, and asserted across the whole seeded set.
 
 ---
 
-## Next steps
+## Using the engine
 
-**Step 2 — Secret & Relationship Engine.** TypeScript modules for AES-256-GCM
-encrypt/decrypt against the envelope schema, KMS DEK unwrapping with an in-memory
-cache, TOTP generation, the bi-directional link engine, and the audited access
-wrappers.
+```ts
+const secrets = new SecretService({ dekCache, blindIndex });
 
-**Step 3 — Project Scaffold & Base API.** Next.js App Router layout, the
-request-scoped database client that opens and closes the RLS session context,
-the Ajv-based flexible-asset validator, and the global search endpoint.
+// Write. The version is allocated under a row lock and bound into the AAD.
+const { secretId } = await secrets.create(
+  { tenantId, actorId },
+  { organizationId, kind: 'password', label: 'ACME Domain Admin',
+    sensitivity: 'critical' },
+  plaintext,
+);
+
+// Read. Throws SecretAccessDeniedError on refusal — after the denial is
+// committed to the audit log.
+const revealed = await secrets.reveal({ tenantId, actorId }, secretId, {
+  reason: 'INC-4471 emergency domain controller restore',
+});
+revealed.value.use((password) => connectTo(host, password));
+
+// Link. Idempotent in either direction.
+await links.link({ tenantId, actorId }, {
+  sourceNodeId: firewallId, relation: 'secures', targetNodeId: networkId,
+});
+
+// What breaks if this fails?
+const blast = await links.impactOf({ tenantId, actorId }, domainControllerId);
+```
+
+## Next step
+
+**Step 3 — Project Scaffold & Base API.** Next.js App Router layout, request
+middleware wiring `withTenant()` to the session, the Ajv-based flexible-asset
+validator enforcing `x-helm-secret`, and the global search endpoint.

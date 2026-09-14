@@ -159,6 +159,16 @@ exactly what an investigation needs. `reveal_secret()` therefore *returns*
 `granted = false`, leaving the audit insert committed; the application turns that
 into a 403.
 
+The application half of that is easy to get wrong, and was: throwing inside the
+transaction wrapper rolls the audit row back and silently undoes the guarantee.
+`SecretService.reveal()` commits first and throws afterwards, and
+`tests/integration/secrets.test.ts` asserts the denial row survives.
+
+Refused **writes** are a different shape — a write that is refused cannot return
+a value, so `write_secret_version()` raises, and the raise rolls back the audit
+row it wrote first. The application records those from a separate transaction
+instead, so "every denied attempt is logged" holds on both paths.
+
 ### 4.4 Authorisation ladder
 
 Evaluated in order, most specific refusal first:
@@ -307,12 +317,24 @@ candidates — the extension never holds a searchable copy of the vault.
 ## 8. Verification
 
 ```bash
-./scripts/run-tests.sh     # 105 assertions against a real Postgres 16 cluster
-pnpm db:drift              # TypeScript schema vs. live catalog
+pnpm test:sql              # 105 SQL assertions against a real Postgres 16 cluster
+pnpm verify                # typecheck + 151 TypeScript tests + schema drift
 ```
 
-The suite covers fail-closed defaults, tenant isolation, organisation scoping,
-the full reveal authorisation ladder, audit immutability, three tamper scenarios,
-GCM nonce reuse, cross-tenant FK rejection, expiry projection, graph traversal
-across the isolation boundary, inline-secret rejection, and export four-eyes
-approval.
+The SQL suite covers fail-closed defaults, tenant isolation, organisation
+scoping, the full reveal authorisation ladder, audit immutability, three tamper
+scenarios, GCM nonce reuse, cross-tenant FK rejection, expiry projection, graph
+traversal across the isolation boundary, inline-secret rejection, and export
+four-eyes approval.
+
+The TypeScript suite adds the real cryptographic path end to end: RFC 6238
+vectors, AAD replay across tenant/secret/field/version, KEK context binding, DEK
+cache semantics, audit coupling on reveal and denial, key rotation with backlog
+convergence, and the stale-version guard that stops a rotation worker reverting
+a credential.
+
+Integration tests connect as the real non-superuser roles, which is what made
+three otherwise-invisible bugs findable: a deferred constraint trigger reading
+`secret_version` as the invoker (only fires at COMMIT, so a rolling-back suite
+never reached it), the denial-audit rollback above, and a graph traversal that
+duplicated every node downstream of a pair joined by two relations.

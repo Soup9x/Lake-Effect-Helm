@@ -5,7 +5,7 @@
  * them, but they are reachable only from the `helm_auth` connection — see
  * db/sql/0220_grants.sql. Do not import them into request-path code.
  */
-import { bigint, boolean, index, integer, pgTable, primaryKey, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, index, integer, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { bytea, citext, inet, inetArray, textArray, tstz, uuidArray } from './_types';
 import { apiTokenType, membershipStatus } from './enums';
 import { tenant } from './tenancy';
