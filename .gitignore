@@ -24,6 +24,9 @@ helm-master-key*
 /db/migrations-generated/
 *.dump
 
+# typescript
+*.tsbuildinfo
+
 # misc
 .DS_Store
 *.log

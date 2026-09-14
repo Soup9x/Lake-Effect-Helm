@@ -3,10 +3,10 @@
 Multi-tenant documentation and credential platform for IT Managed Service
 Providers.
 
-> **Steps 1–2 of 3 complete.**
-> The PostgreSQL schema and security kernel (Step 1), and the secret and
-> relationship engine over it (Step 2). The Next.js application, dynamic
-> flexible-asset validator and global search endpoint are Step 3.
+> **All three milestones complete.** PostgreSQL schema and security kernel
+> (Step 1), secret and relationship engine (Step 2), Next.js API layer with the
+> flexible-asset validator and global search (Step 3). The web interface is the
+> natural next piece; the API it would consume is here and tested.
 
 ---
 
@@ -18,18 +18,25 @@ db/
   schema/       Drizzle ORM definitions — the typed query layer.
   tests/        SQL security suite (105 assertions) and fixtures.
   migrate.ts    Migration runner: transactional, locked, checksum-guarded.
-src/lib/
-  db/           Per-role pools; withTenant() opens the RLS session context.
-  crypto/       KEK providers, DEK cache, AES-256-GCM envelope, TOTP, blind index.
-  secrets/      SecretService and key lifecycle over the audited SQL API.
-  graph/        Relation vocabulary, canonicalisation, the link engine.
+src/
+  app/          Next.js App Router — 14 API routes, all force-dynamic.
+  lib/
+    api/        Route wrapper, typed HTTP errors. The tenant-context choke point.
+    auth/       API tokens, identity resolution, Auth.js config.
+    db/         Per-role pools; withTenant() opens the RLS session context.
+    crypto/     KEK providers, DEK cache, AES-256-GCM envelope, TOTP, blind index.
+    secrets/    SecretService and key lifecycle over the audited SQL API.
+    graph/      Relation vocabulary, canonicalisation, the link engine.
+    flexible/   JSON Schema guard and record validator.
+    search/     Global search over helm.search().
 tests/
-  unit/         78 tests — RFC 6238 vectors, envelope and cache semantics.
-  integration/  73 tests against a real cluster as the real roles.
+  unit/         129 tests — RFC 6238 vectors, envelope semantics, schema guard.
+  integration/  115 tests against a real cluster as the real roles.
 docs/
   architecture/01-security-model.md     guarantees, mechanisms, and limitations
   architecture/02-data-model.md         schema shape and rejected alternatives
   architecture/03-crypto-operations.md  how reads, writes and rotation work
+  architecture/04-api-layer.md          request flow, auth, untrusted schemas
 scripts/
   check-drift.ts        Drizzle schema vs. live catalog
   run-tests.sh          rebuild + fixtures + SQL security suite
@@ -63,6 +70,7 @@ scripts/
 | `0240_trigger_privileges` | Trigger functions that must run as definer, plus a catalog guard |
 | `0250_graph_walk_fix` | One row per reachable node; parallel-edge regression guard |
 | `0260_secret_write_handshake` | Version allocation under lock, without granting UPDATE |
+| `0270_authentication` | The three pre-context authentication functions, and a guard fixing their number |
 | `0900_seed_system_data` | Roles and permissions |
 
 ---
@@ -101,6 +109,15 @@ up in a diff.
 while the rotation worker holds a decrypted copy, the database refuses the stale
 write and the worker skips.
 
+**A route cannot query without a tenant context.** `tenantRoute()` hands the
+handler a transaction that already has one and no way to reach a pool. Declared
+permissions produce a clear error; RLS is what actually enforces them.
+
+**Technician-authored schemas are treated as untrusted code.** A structural scan
+plus an empirical cost probe reject patterns that backtrack catastrophically —
+because a length limit does not: `^((a)+)+$` against 31 characters runs for over
+a minute.
+
 ---
 
 ## Getting started
@@ -132,8 +149,9 @@ ALTER ROLE helm_auditor   PASSWORD '...';
 ### Running the tests
 
 ```bash
-pnpm verify        # typecheck + 151 vitest tests + schema drift
+pnpm verify        # typecheck + 244 vitest tests + schema drift
 pnpm test:sql      # 105 SQL assertions including tamper detection
+pnpm build         # every route must compile and be dynamic
 ```
 
 Both need a throwaway cluster they can drop and rebuild; point them at one with
@@ -196,8 +214,33 @@ await links.link({ tenantId, actorId }, {
 const blast = await links.impactOf({ tenantId, actorId }, domainControllerId);
 ```
 
-## Next step
+## The API
 
-**Step 3 — Project Scaffold & Base API.** Next.js App Router layout, request
-middleware wiring `withTenant()` to the session, the Ajv-based flexible-asset
-validator enforcing `x-helm-secret`, and the global search endpoint.
+Fourteen routes, all tenant-scoped through one wrapper. See
+`docs/architecture/04-api-layer.md` for the full table and the reasoning.
+
+```ts
+// Every route looks like this. The handler is given a transaction that already
+// has the RLS session context set, and no way to reach a pool without one.
+export const GET = tenantRoute(
+  async ({ tx, session, identity }) => {
+    return search(tx, { query: 'acme-fw-01' });
+  },
+  { permissions: ['asset:read'] },
+);
+```
+
+```bash
+# Reveal is a POST: a GET would land in browser history, proxy logs and Referer
+# headers, for the one endpoint that hands out plaintext credentials.
+curl -X POST https://helm.example.com/api/secrets/$ID/reveal \
+  -H 'content-type: application/json' \
+  -d '{"reason":"INC-4471 emergency domain controller restore"}'
+```
+
+## Next steps
+
+The web interface, and the workers the schema is already shaped for: the
+expiry-alert dispatcher reading `alert_rule`/`alert_event`, the RMM/PSA sync
+using `external_identity` correlation, the audit-chain anchoring job, and the
+compliance export engine behind `export_job`'s four-eyes approval.

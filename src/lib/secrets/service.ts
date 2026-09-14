@@ -148,31 +148,47 @@ export class SecretService {
     input: CreateSecretInput,
     plaintext: string,
   ): Promise<WriteValueResult> {
-    return withTenant(actor, async (tx) => {
-      const [row] = await tx<{ id: string }[]>`
-        INSERT INTO secret (
-          tenant_id, organization_id, kind, sensitivity, label,
-          requires_step_up, requires_reason, min_role_rank,
-          rotation_interval_days, created_by, updated_by
-        )
-        VALUES (
-          ${actor.tenantId}::uuid, ${input.organizationId}::uuid,
-          ${input.kind}::secret_kind,
-          ${input.sensitivity ?? 'standard'}::secret_sensitivity,
-          ${input.label},
-          ${input.requiresStepUp ?? input.sensitivity === 'critical'},
-          ${input.requiresReason ?? input.sensitivity === 'critical'},
-          ${input.minRoleRank ?? 40},
-          ${input.rotationIntervalDays ?? null},
-          ${actor.actorId}::uuid, ${actor.actorId}::uuid
-        )
-        RETURNING id
-      `;
-      if (!row) throw new SecretWriteError('unknown', 'secret insert returned no row');
+    return withTenant(actor, (tx) => this.createInTransaction(tx, actor, input, plaintext));
+  }
 
-      const written = await this.#writeVersion(tx, actor.tenantId, row.id, plaintext, null);
-      return { secretId: row.id, ...written };
-    });
+  /**
+   * Create a secret inside a transaction the caller already owns.
+   *
+   * Needed wherever a secret is one part of a larger atomic write — a flexible
+   * asset record and the credentials attached to it, say. Doing those as
+   * separate transactions can leave a record whose documentation claims a
+   * password exists when it does not, which is worse than the write failing
+   * outright: the technician believes the credential is captured.
+   */
+  async createInTransaction(
+    tx: HelmTx,
+    actor: ActorRef,
+    input: CreateSecretInput,
+    plaintext: string,
+  ): Promise<WriteValueResult> {
+    const [row] = await tx<{ id: string }[]>`
+      INSERT INTO secret (
+        tenant_id, organization_id, kind, sensitivity, label,
+        requires_step_up, requires_reason, min_role_rank,
+        rotation_interval_days, created_by, updated_by
+      )
+      VALUES (
+        ${actor.tenantId}::uuid, ${input.organizationId}::uuid,
+        ${input.kind}::secret_kind,
+        ${input.sensitivity ?? 'standard'}::secret_sensitivity,
+        ${input.label},
+        ${input.requiresStepUp ?? input.sensitivity === 'critical'},
+        ${input.requiresReason ?? input.sensitivity === 'critical'},
+        ${input.minRoleRank ?? 40},
+        ${input.rotationIntervalDays ?? null},
+        ${actor.actorId}::uuid, ${actor.actorId}::uuid
+      )
+      RETURNING id
+    `;
+    if (!row) throw new SecretWriteError('unknown', 'secret insert returned no row');
+
+    const written = await this.#writeVersion(tx, actor.tenantId, row.id, plaintext, null);
+    return { secretId: row.id, ...written };
   }
 
   /**
