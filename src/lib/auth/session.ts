@@ -25,8 +25,24 @@ let resolver: SessionResolver = async () => {
   );
 };
 
+let registered = false;
+
 export function useSessionResolver(next: SessionResolver): void {
   resolver = next;
+  registered = true;
+}
+
+/**
+ * Whether anything has claimed the resolver slot.
+ *
+ * Exists so auto-installation (auth/bootstrap.ts) can stand down when a caller
+ * has already chosen one — a test with a fake identity, or a deployment that
+ * wires its own. Auto-installing over a deliberate choice would make the
+ * bootstrap the last writer to win, which is the opposite of what an explicit
+ * call means.
+ */
+export function hasSessionResolver(): boolean {
+  return registered;
 }
 
 export function getSessionUser(): Promise<SessionUser | null> {

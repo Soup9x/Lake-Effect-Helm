@@ -22,6 +22,7 @@ import { SecretAccessDeniedError, StaleSecretVersionError } from '../secrets/err
 import { HelmCryptoError } from '../crypto/errors';
 import { ApiError, toErrorBody, type ErrorCode } from './errors';
 import { resolveIdentity, type RequestIdentity } from '../auth/identity';
+import { installSessionResolver } from '../auth/bootstrap';
 
 export interface RouteContext {
   /** Tenant-scoped transaction. The only database handle a route ever sees. */
@@ -71,6 +72,15 @@ export function tenantRoute<T>(
     const requestId = request.headers.get('x-request-id') ?? randomUUID();
 
     try {
+      // Install the session resolver before resolving identity.
+      //
+      // Registration used to happen as a side effect of importing
+      // auth/config.ts, which only runs when the /api/auth route module is
+      // loaded — so a request that reached any other route first found no
+      // resolver and failed with a bare 500. Idempotent and memoised, so this
+      // costs one boolean check per request after the first.
+      await installSessionResolver();
+
       const identity = await resolveIdentity(request);
       const params = args?.params ? await args.params : {};
 
@@ -90,6 +100,16 @@ export function tenantRoute<T>(
         },
         options.role ? { role: options.role } : {},
       );
+
+      // A handler that built its own Response — a file download, a redirect —
+      // gets it back untouched. Without this it is JSON-serialised, and a
+      // Response has no enumerable own properties, so the caller receives the
+      // two bytes `{}` and a 200. Silent, and exactly the shape of bug that
+      // reaches production: the status is right and the body is empty.
+      if (result instanceof Response) {
+        result.headers.set('x-request-id', requestId);
+        return result;
+      }
 
       return json(result, 200, requestId);
     } catch (error) {
@@ -112,7 +132,14 @@ export function publicRoute<T>(
   return async (request: NextRequest) => {
     const requestId = request.headers.get('x-request-id') ?? randomUUID();
     try {
-      return json(await handler(request, requestId), 200, requestId);
+      const result = await handler(request, requestId);
+      // Same pass-through as tenantRoute: a handler that built its own Response
+      // must not be JSON-serialised into an empty object.
+      if (result instanceof Response) {
+        result.headers.set('x-request-id', requestId);
+        return result;
+      }
+      return json(result, 200, requestId);
     } catch (error) {
       return errorResponse(error, requestId);
     }

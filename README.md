@@ -18,7 +18,9 @@ db/
   tests/        SQL security suite (105 assertions) and fixtures.
   migrate.ts    Migration runner: transactional, locked, checksum-guarded.
 src/
-  app/          Next.js App Router — 18 API routes, all force-dynamic.
+  app/          Next.js App Router — 9 pages and 18 API routes, all dynamic.
+  components/   App shell, tenant switcher, reveal and export controls, and a
+                shadcn/ui-shaped primitive layer.
   lib/
     api/        Route wrapper, typed HTTP errors. The tenant-context choke point.
     auth/       API tokens, identity resolution, Auth.js config.
@@ -36,12 +38,15 @@ tests/
   unit/         206 tests — RFC 6238 vectors, envelope semantics, schema guard,
                 on-premises key custody, PDF structure, bundle encryption.
   integration/  177 tests against a real cluster as the real roles.
+                The UI was additionally driven end to end in a real browser;
+                see docs/architecture/06-web-interface.md §8.
 docs/
   architecture/01-security-model.md     guarantees, mechanisms, and limitations
   architecture/02-data-model.md         schema shape and rejected alternatives
   architecture/03-crypto-operations.md  how reads, writes and rotation work
   architecture/04-api-layer.md          request flow, auth, untrusted schemas
   architecture/05-workers-and-exports.md  jobs, worker identities, four eyes
+  architecture/06-web-interface.md      pages, tenant switching, secret handling
 scripts/
   check-drift.ts        Drizzle schema vs. live catalog
   rotate-kek.ts         re-wrap tenant DEKs onto a new master key version
@@ -82,6 +87,7 @@ scripts/
 | `0300_worker_queues` | Backlog enumerators, alert evaluation, sync lifecycle, chain anchoring |
 | `0310_export_engine` | Export request/approve/render/download, four-eyes and scope binding |
 | `0320_export_approval_window` | The parked-approval window; `v_secret_metadata` without a join |
+| `0330_export_render_context` | Requester and approver names, without granting the worker `user:read` |
 | `0900_seed_system_data` | Roles and permissions |
 | `0910_worker_seed` | Worker roles, their permissions, and per-tenant identities |
 
@@ -170,6 +176,11 @@ cover page rather than quietly missing.
 
 **An export bundle's passphrase is stored nowhere.** Not in the database, not in
 the audit log. The file at rest is useless to anyone who has only the file.
+
+**Secret material never reaches a server component.** Revealing a credential is
+a client-side fetch, because server-rendering it would put the plaintext in the
+RSC payload, the data cache and any proxy in between. It auto-hides, and copying
+is a separate audited call rather than a local read of what is already on screen.
 
 **Technician-authored schemas are treated as untrusted code.** A structural scan
 plus an empirical cost probe reject patterns that backtrack catastrophically —

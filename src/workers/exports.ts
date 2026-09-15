@@ -38,6 +38,9 @@ interface ExportBacklogRow {
   format: string;
   include_secrets: boolean;
   scope: ExportScope;
+  reason: string;
+  requested_by_name: string | null;
+  approved_by_name: string | null;
   requested_at: Date;
 }
 
@@ -162,6 +165,9 @@ async function renderExports(ctx: JobContext): Promise<JobResult> {
         format: job.format,
         includeSecrets: job.include_secrets,
         scope: job.scope ?? {},
+        reason: job.reason,
+        requestedByName: job.requested_by_name,
+        approvedByName: job.approved_by_name,
       });
 
       if (!result.rendered) {
@@ -176,8 +182,8 @@ async function renderExports(ctx: JobContext): Promise<JobResult> {
           organizationId: job.organization_id,
           kind: job.kind,
           passphrase: result.passphrase,
-          requestedBy: null,
-          approvedBy: null,
+          requestedBy: job.requested_by_name,
+          approvedBy: job.approved_by_name,
         });
       }
 

@@ -50,10 +50,31 @@ interface BacklogRow {
   format: string;
   include_secrets: boolean;
   scope: Record<string, unknown>;
+  reason: string;
+  requested_by_name: string | null;
+  approved_by_name: string | null;
   worker_actor_id: string;
 }
 
 const backlog = () => db('worker')<BacklogRow[]>`SELECT * FROM helm.export_backlog(10)`;
+
+/** The PDF's content streams are uncompressed, so text is greppable as latin1. */
+const pdfText = (bundle: { entries: { name: string; bytes: Buffer }[] }): string =>
+  bundle.entries.find((e) => e.name === 'export.pdf')!.bytes.toString('latin1');
+
+/** Render a backlog row exactly as the worker does. */
+const renderFrom = (job: BacklogRow) =>
+  getExportService().render(exportWorker(), {
+    exportJobId: job.export_job_id,
+    organizationId: job.organization_id,
+    kind: job.kind,
+    format: job.format,
+    includeSecrets: job.include_secrets,
+    scope: job.scope,
+    reason: job.reason,
+    requestedByName: job.requested_by_name,
+    approvedByName: job.approved_by_name,
+  });
 
 describe('export engine', () => {
   beforeAll(async () => {
@@ -137,14 +158,7 @@ describe('export engine', () => {
 
     it('renders an unencrypted bundle holding both renderings', async () => {
       const job = (await backlog()).find((r) => r.export_job_id === jobId)!;
-      const result = await getExportService().render(exportWorker(), {
-        exportJobId: job.export_job_id,
-        organizationId: job.organization_id,
-        kind: job.kind,
-        format: job.format,
-        includeSecrets: job.include_secrets,
-        scope: job.scope,
-      });
+      const result = await renderFrom(job);
 
       expect(result.rendered).toBe(true);
       // Nothing secret in it, so nothing to protect with a passphrase the
@@ -299,14 +313,7 @@ describe('export engine', () => {
 
     it('renders an encrypted bundle and returns the passphrase once', async () => {
       const job = (await backlog()).find((r) => r.export_job_id === jobId)!;
-      const result = await getExportService().render(exportWorker(), {
-        exportJobId: job.export_job_id,
-        organizationId: job.organization_id,
-        kind: job.kind,
-        format: job.format,
-        includeSecrets: job.include_secrets,
-        scope: job.scope,
-      });
+      const result = await renderFrom(job);
 
       expect(result.rendered).toBe(true);
       expect(result.passphrase).toMatch(/^([A-Z2-9]{5}-){5}[A-Z2-9]{5}$/);
@@ -373,14 +380,7 @@ describe('export engine', () => {
       );
 
       const job = (await backlog()).find((r) => r.export_job_id === request.exportJobId)!;
-      const result = await getExportService().render(exportWorker(), {
-        exportJobId: job.export_job_id,
-        organizationId: job.organization_id,
-        kind: job.kind,
-        format: job.format,
-        includeSecrets: job.include_secrets,
-        scope: job.scope,
-      });
+      const result = await renderFrom(job);
 
       const download = await getExportService().download(ADMIN, request.exportJobId);
       const unpacked = unpackBundle(download.bytes, result.passphrase!);
@@ -388,9 +388,20 @@ describe('export engine', () => {
       const document = JSON.parse(
         unpacked.entries.find((e) => e.name === 'export.json')!.bytes.toString('utf8'),
       ) as {
-        helm: { omittedSecrets: { label: string; reason: string }[] };
+        helm: {
+          omittedSecrets: { label: string; reason: string }[];
+          requestedBy: string | null;
+          approvedBy: string | null;
+        };
         credentials: { name: string; material?: string | null }[];
       };
+
+      // The four-eyes evidence has to survive into the document: it is the
+      // first thing an auditor reading a handover pack looks for, and the
+      // render worker has no user:read of its own to look it up with.
+      expect(document.helm.requestedBy).toBe('Northwind Admin');
+      expect(document.helm.approvedBy).toBe('Second Approver');
+      expect(pdfText(unpacked)).toContain('Second Approver');
 
       expect(document.helm.omittedSecrets).toHaveLength(1);
       const firewall = document.credentials.find((c) => c.name === 'Acme firewall admin');
@@ -398,8 +409,7 @@ describe('export engine', () => {
       const domainAdmin = document.credentials.find((c) => c.name === 'Acme domain admin');
       expect(domainAdmin?.material).toBeUndefined();
 
-      const pdf = unpacked.entries.find((e) => e.name === 'export.pdf')!.bytes.toString('latin1');
-      expect(pdf).toContain('could not be included');
+      expect(pdfText(unpacked)).toContain('could not be included');
     });
 
     it('audits every credential individually, not once per export', async () => {
@@ -425,14 +435,7 @@ describe('export engine', () => {
       });
 
       const job = (await backlog()).find((r) => r.export_job_id === request.exportJobId)!;
-      await getExportService().render(exportWorker(), {
-        exportJobId: job.export_job_id,
-        organizationId: job.organization_id,
-        kind: job.kind,
-        format: job.format,
-        includeSecrets: job.include_secrets,
-        scope: job.scope,
-      });
+      await renderFrom(job);
 
       await expect(getExportService().download(ADMIN, request.exportJobId)).resolves.toBeDefined();
 
@@ -458,14 +461,7 @@ describe('export engine', () => {
       });
 
       const job = (await backlog()).find((r) => r.export_job_id === request.exportJobId)!;
-      await getExportService().render(exportWorker(), {
-        exportJobId: job.export_job_id,
-        organizationId: job.organization_id,
-        kind: job.kind,
-        format: job.format,
-        includeSecrets: job.include_secrets,
-        scope: job.scope,
-      });
+      await renderFrom(job);
 
       const [stored] = await withTenant(ADMIN, async (tx) => {
         return tx<{ storage_key: string }[]>`

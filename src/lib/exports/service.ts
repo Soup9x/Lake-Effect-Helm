@@ -236,18 +236,12 @@ export class ExportService {
         secretCount = await this.#fillSecrets(actor, collected, omissions);
       }
 
-      const meta = await withTenant(
-        actor,
-        async (tx) => readRenderMeta(tx, job.exportJobId),
-        { role: 'worker' },
-      );
-
       const options = {
         kind: job.kind,
         includeSecrets: job.includeSecrets,
-        reason: meta.reason,
-        requestedBy: meta.requestedByName ?? 'unknown',
-        approvedBy: meta.approvedByName,
+        reason: job.reason,
+        requestedBy: job.requestedByName ?? 'unknown',
+        approvedBy: job.approvedByName,
         omissions,
       };
 
@@ -362,6 +356,15 @@ export interface RenderableJob {
   readonly format: string;
   readonly includeSecrets: boolean;
   readonly scope: ExportScope;
+  readonly reason: string;
+  /**
+   * Who stands behind this export. Supplied by helm.export_backlog() rather
+   * than looked up here, because the render worker deliberately has no
+   * user:read — it would have to be handed the tenant's staff directory to put
+   * two names on a cover page. See db/sql/0330_export_render_context.sql.
+   */
+  readonly requestedByName: string | null;
+  readonly approvedByName: string | null;
 }
 
 interface RawJobRow {
@@ -437,24 +440,6 @@ function toSummary(row: RawJobRow, actor: ActorRef): ExportJobSummary {
       row.status === 'queued' &&
       row.revoked_at === null &&
       row.requested_by !== actor.actorId,
-  };
-}
-
-async function readRenderMeta(
-  tx: HelmTx,
-  exportJobId: string,
-): Promise<{ reason: string; requestedByName: string | null; approvedByName: string | null }> {
-  const [row] = await tx<{ reason: string; requested_by_name: string | null; approved_by_name: string | null }[]>`
-    SELECT j.reason, req.name AS requested_by_name, app.name AS approved_by_name
-    FROM export_job j
-    LEFT JOIN app_user req ON req.id = j.requested_by
-    LEFT JOIN app_user app ON app.id = j.approved_by
-    WHERE j.id = ${exportJobId}::uuid
-  `;
-  return {
-    reason: row?.reason ?? '',
-    requestedByName: row?.requested_by_name ?? null,
-    approvedByName: row?.approved_by_name ?? null,
   };
 }
 
