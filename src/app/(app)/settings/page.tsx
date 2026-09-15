@@ -3,6 +3,7 @@ import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ChangePasswordCard } from '@/components/change-password-card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime, humanise } from '@/lib/ui/format';
@@ -56,11 +57,16 @@ function integrationTone(status: string): BadgeTone {
  * UI that can widen the sync worker's reveal purposes is a UI that can hand it
  * the vault.
  */
+interface CredentialRow {
+  must_change: boolean;
+  password_changed_at: Date;
+}
+
 export default async function SettingsPage() {
   const identity = await getServerIdentity();
 
-  const { keys, integrations, workers } = await withTenant(actorOf(identity), async (tx) => {
-    const [keyRows, integrationRows, workerRows] = await Promise.all([
+  const { keys, integrations, workers, credential } = await withTenant(actorOf(identity), async (tx) => {
+    const [keyRows, integrationRows, workerRows, credentialRows] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -72,8 +78,19 @@ export default async function SettingsPage() {
         SELECT id, name, role_key, allowed_reveal_purposes, disabled_at
         FROM service_account WHERE is_system ORDER BY name
       `,
+      // The view carries no hash — helm_app holds column grants that exclude it.
+      // Its only job here is to answer "do you have a local password, and did
+      // somebody else choose it".
+      tx<CredentialRow[]>`
+        SELECT must_change, password_changed_at FROM v_my_local_credential
+      `,
     ]);
-    return { keys: keyRows, integrations: integrationRows, workers: workerRows };
+    return {
+      keys: keyRows,
+      integrations: integrationRows,
+      workers: workerRows,
+      credential: credentialRows[0] ?? null,
+    };
   });
 
   const hostHeld = keys.some((key) => key.host_held_kek);
@@ -83,9 +100,15 @@ export default async function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        description="Key custody, integration health and the identities your background jobs run as."
+        description="Your password, key custody, integration health and the identities your background jobs run as."
       />
       <PageBody>
+        {/* First, because a must-change sign-in redirects here for exactly this. */}
+        <ChangePasswordCard
+          mustChange={credential?.must_change ?? false}
+          passwordChangedAt={credential ? credential.password_changed_at.toISOString() : null}
+        />
+
         <Card className={developmentKey ? 'border-danger/40' : undefined}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

@@ -17,6 +17,7 @@
  */
 import { cookies } from 'next/headers';
 import { withoutTenantContext } from '../db/client';
+import { installSessionResolver } from './bootstrap';
 import { getSessionUser } from './session';
 
 export const TENANT_COOKIE = 'helm_tenant';
@@ -70,8 +71,23 @@ interface MembershipRow {
  * render looks like. A helper that redirected would make this untestable and
  * would hide the difference between "not signed in" (re-auth helps) and "no
  * membership" (it does not).
+ *
+ * Installs the session resolver first, and that line is load-bearing. The
+ * layout under (app) also installs it, which looks like enough — but Next
+ * renders a layout and its page CONCURRENTLY, and every page calls this
+ * directly. On a cold process the page's call would reach getSessionUser()
+ * before the layout's await had finished, and the render would fail with "no
+ * session resolver registered" on a request carrying a perfectly good cookie.
+ * Only on the first request after a restart, which is exactly the kind of bug
+ * that reaches production.
+ *
+ * Making this the choke point removes the race and the chance of a new page
+ * forgetting: installSessionResolver() is idempotent and memoised on its
+ * promise, so a hundred concurrent callers share one dynamic import.
  */
 export async function getServerIdentity(): Promise<ServerIdentity> {
+  await installSessionResolver();
+
   const user = await getSessionUser();
   if (!user) throw new NotAuthenticatedError();
 

@@ -23,7 +23,7 @@ export function SignedOut({ reason }: { reason: 'unauthenticated' | 'no-membersh
           <>
             <p className="mt-1 text-sm text-ink-muted">Sign in to continue.</p>
             <Button asChild variant="primary" className="mt-5 w-full">
-              <Link href="/api/auth/signin">
+              <Link href="/sign-in">
                 <KeyRound aria-hidden />
                 Sign in
               </Link>

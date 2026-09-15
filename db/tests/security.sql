@@ -537,4 +537,62 @@ SELECT helm_test.check_raises('a user with no membership in a tenant cannot ente
 ROLLBACK;
 
 \echo ''
+\echo '== 20. Local authentication is unreachable from the request role =='
+BEGIN;
+-- The whole point of putting local passwords behind helm_auth: a bug anywhere
+-- in the request path must not be able to read a hash, mint a reset token, or
+-- forge a session.
+SELECT helm_test.check('helm_app cannot read a password hash',
+  NOT has_column_privilege('helm_app', 'local_credential', 'password_phc', 'SELECT'));
+SELECT helm_test.check('helm_app cannot read the password history either',
+  NOT has_column_privilege('helm_app', 'local_credential', 'previous_phc', 'SELECT'));
+SELECT helm_test.check('no runtime role but helm_auth can read a password hash',
+  NOT (has_column_privilege('helm_auditor', 'local_credential', 'password_phc', 'SELECT')
+    OR has_column_privilege('helm_worker',  'local_credential', 'password_phc', 'SELECT')
+    OR has_column_privilege('helm_key_admin','local_credential','password_phc', 'SELECT')));
+
+SELECT helm_test.check('the throttling ledger is helm_auth''s alone',
+  NOT has_table_privilege('helm_app', 'auth_attempt', 'SELECT'));
+SELECT helm_test.check('reset tokens are helm_auth''s alone',
+  NOT has_table_privilege('helm_app', 'password_reset', 'SELECT'));
+
+SELECT helm_test.check('helm_app cannot run the pre-context login challenge',
+  NOT has_function_privilege('helm_app', 'helm.local_login_challenge(text, inet)', 'EXECUTE'));
+SELECT helm_test.check('helm_app cannot forge a session',
+  NOT has_function_privilege('helm_app', 'helm.create_local_session(uuid, text, integer)', 'EXECUTE'));
+SELECT helm_test.check('helm_app cannot mint or redeem a reset token',
+  NOT (has_function_privilege('helm_app', 'helm.issue_password_reset(uuid, bytea, text, integer, uuid, inet)', 'EXECUTE')
+    OR has_function_privilege('helm_app', 'helm.redeem_password_reset(bytea)', 'EXECUTE')));
+
+-- ...and the column grants helm_app DOES hold are the ones its two views need.
+-- A security_invoker view over a table the invoker cannot read creates cleanly,
+-- grants cleanly, and fails only when somebody opens the page.
+SELECT helm_test.check('helm_app can read the columns v_my_local_credential selects',
+  has_column_privilege('helm_app', 'local_credential', 'must_change', 'SELECT')
+  AND has_column_privilege('helm_app', 'local_credential', 'locked_until', 'SELECT')
+  AND has_column_privilege('helm_app', 'local_credential', 'password_changed_at', 'SELECT'));
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+-- Selecting the hash must be refused even for one's own row: the policy scopes
+-- which rows are visible, the column grant scopes which columns are.
+SELECT helm_test.check_raises('even your own hash is not selectable',
+  'SELECT password_phc FROM local_credential');
+SELECT helm_test.check('but your own credential state is',
+  (SELECT count(*) FROM v_my_local_credential) >= 0);
+ROLLBACK;
+
+\echo ''
+\echo '== 21. A local session is the same object an SSO session is =='
+BEGIN;
+-- If these ever diverge, "cut this technician's access now" starts meaning two
+-- different things depending on which door they came through.
+SELECT helm_test.check('local sign-in writes into auth_session, not a table of its own',
+  to_regclass('public.local_session') IS NULL);
+SELECT helm_test.check('helm_app cannot read auth_session by any path',
+  NOT has_table_privilege('helm_app', 'auth_session', 'SELECT'));
+ROLLBACK;
+
+\echo ''
 \echo '== All security assertions passed =='

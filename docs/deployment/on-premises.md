@@ -136,14 +136,23 @@ obtains one from Let's Encrypt.
 
 ---
 
-## 5. Sign-in: the thing to decide before you go further
+## 5. Sign-in: two doors, and why you want both
 
-**Helm ships with Microsoft Entra ID as its only authentication provider.**
-There is no local username-and-password login. That is a deliberate scope
-choice — a credentials provider done properly needs password hashing policy,
-rate limiting, lockout, and a reset flow, and every one of those is a place to
-get a credential vault wrong — but it means **you cannot sign in until SSO is
-configured**.
+Helm has two ways in, and the second one is not a fallback you hope never to
+use — it is the one that works on the morning the first one does not.
+
+| | Microsoft Entra ID | Local password |
+|---|---|---|
+| Everyday use | Yes, this is the default | No |
+| Works when Entra is down | No | **Yes** |
+| Revocation | Immediate (database session) | Immediate (same session) |
+| MFA | Whatever Entra enforces | Helm's step-up, where configured |
+
+Both produce **the same session**: one row in `auth_session`, one cookie, one
+resolver. Nothing downstream can tell which door somebody came through, so
+"this technician left, cut their access now" means the same thing either way.
+
+### 5.1 Entra
 
 Register an application in Entra, then set in `.env`:
 
@@ -166,19 +175,94 @@ organisation scope and every permission come from the `membership` row in
 Helm's own database — so a person who authenticates successfully but has no
 membership is told exactly that, rather than being bounced through a login loop.
 
-### If you need local logins
+### 5.2 Local passwords
 
-`src/lib/auth/config.ts` is the only file that imports next-auth; adding a
-Credentials provider is contained, but it is a real piece of security work, not
-a config flag. Treat it as a project.
+Nothing to configure. The bootstrap command in §6 sets one on the first
+administrator and prints it once; after that, an administrator with `user:write`
+issues them for colleagues.
+
+What is enforced, so you do not have to:
+
+* **Argon2id**, `m=65536, t=3, p=1` — about a quarter of a second per
+  verification, which is a deliberate trade against offline cracking. The
+  parameters live inside each stored hash, so raising them later upgrades
+  existing passwords on their owners' next sign-in rather than forcing a reset.
+* **Twelve characters minimum**, no password containing the person's own name
+  or email address, no reuse of the last five, and a rejection of the handful of
+  passwords that get typed into a new deployment on its first day.
+* **Lockout after five wrong attempts**, backing off exponentially to a
+  fifteen-minute ceiling. It never becomes permanent: a lock an attacker can
+  trigger on demand is a denial of service against the break-glass account, and
+  attempts made *while* locked do not extend it.
+* **Rate limiting per account and per source address** (ten and thirty failures
+  in fifteen minutes). Both live in PostgreSQL, not Redis — Redis is optional in
+  this stack, and a rate limit that stops limiting when a cache is unavailable is
+  not a rate limit.
+* An administrator holding `user:write` can clear a lockout without changing the
+  password, which during an outage is considerably faster than a reset.
+
+### 5.3 Resets, and why email is the *secondary* path
+
+Your mail is almost certainly Microsoft 365. The outage that takes out Entra
+takes out the mailbox a reset email would land in. So the primary reset path
+does not touch email at all:
+
+**An administrator issues a code and reads it to the person.** In the UI, or:
+
+```bash
+curl -sS https://helm.internal.example.com/api/auth/local/reset \
+  -H 'content-type: application/json' \
+  -b "$COOKIE" \
+  -d '{"email":"tech@northwind.example.com","outOfBand":true}'
+```
+
+The response contains a single-use link, shown once. Read it down the phone —
+do not paste it into a ticket.
+
+Self-service reset by email is available on top, if you point Helm at something
+that can send mail:
+
+```ini
+HELM_RESET_DELIVERY_URL=https://mail-relay.internal.example.com/send
+```
+
+With that unset, the self-service endpoint **refuses** rather than accepting the
+request and silently dropping the mail. A form that says "check your email" when
+nothing was sent produces a support call and somebody who believes they are
+locked out permanently.
+
+Redeeming a reset **deletes every session on that account**, including any the
+previous password was holding open.
+
+### 5.4 Behind a reverse proxy
+
+The per-address rate limit needs the client's real address, and it reads it the
+same way API token IP allowlisting does — `HELM_TRUSTED_PROXY_HOPS`, counted
+from the **right** of `X-Forwarded-For`:
+
+```ini
+HELM_TRUSTED_PROXY_HOPS=1
+```
+
+One, for the Caddy in this stack. Raise it if you have another proxy in front.
+Counting from the right is the point: the leftmost entry is whatever the client
+sent, and an attacker who controls it controls which bucket their attempts count
+against — which would defeat the per-address limit entirely.
+
+### 5.5 TLS is not optional for this
+
+In production Helm writes its session cookie as `__Secure-authjs.session-token`.
+Browsers refuse a `__Secure-` cookie over plain http, with no useful error. A
+production Helm reached over http therefore cannot hold a session at all — sign
+-in appears to succeed and every subsequent page is anonymous. That is intended
+for a credential vault, and it is why §4 terminates TLS in front of the app.
 
 ### `HELM_DEV_SESSION_EMAIL`
 
 There is a development bypass that runs every request as a named user. It
 **throws on startup when `NODE_ENV=production`**, which is what this stack runs,
-so it cannot be used here — it exists for evaluating Helm on a laptop before
-SSO is set up. Mentioned so that finding it in `.env.example` does not look like
-a back door you missed.
+so it cannot be used here — it exists for evaluating Helm on a laptop. Mentioned
+so that finding it in `.env.example` does not look like a back door you missed.
 
 ---
 
@@ -201,6 +285,27 @@ the part that matters — **mints the tenant's first data key through the KEK
 provider**. A `tenant_data_key` row inserted by hand is a wrapped key nothing
 can unwrap, and that failure only surfaces the first time someone stores a
 password.
+
+It also sets a **local password** on that administrator and prints it once:
+
+```
+────────────────────────────────────────────────────────────────────────
+  INITIAL PASSWORD — shown once, stored nowhere.
+
+      admin@northwind.example.com
+      quarry-silver-trestle-willow-kettle-51
+
+  Sign in with it at /sign-in and change it immediately; Helm will
+  insist.
+────────────────────────────────────────────────────────────────────────
+```
+
+Use it now. It is flagged must-change, so Helm sends you to the change-password
+screen on first sign-in and the account is not useful until you have replaced
+it. It is also sitting in your terminal's scrollback, which is reason enough.
+
+Keeping a local password on at least one administrator after that is the point
+of §5 — it is what gets you in when Entra cannot be reached.
 
 It refuses to run twice against the same slug.
 
@@ -453,7 +558,9 @@ Stated plainly so they are decisions rather than surprises.
   failure loses everything since the last backup. Streaming replication or a
   managed Postgres is the answer for anything you would be embarrassed to lose;
   the five connection strings in `.env` point wherever you like.
-- **No local authentication.** §5. Entra, or nothing.
+- **No breach-corpus check on passwords.** §5.2 enforces length, reuse and
+  a short banned list, but does not consult Have I Been Pwned or an
+  equivalent. Front the deployment with one if that matters to you.
 - **The anchor volume is not a witness by default.** §7.
 - **Redis, if enabled, is unauthenticated** on the internal compose network.
   Fine while it stays there; add `requirepass` before exposing it.
@@ -472,4 +579,5 @@ Stated plainly so they are decisions rather than surprises.
 | `docs/architecture/03-crypto-operations.md` | Key hierarchy, rotation, both KEK providers |
 | `docs/architecture/05-workers-and-exports.md` | Worker identities, four-eyes exports |
 | `docs/architecture/06-web-interface.md` | Pages, tenant switching, secret handling |
+| `docs/architecture/07-local-authentication.md` | Passwords, lockout, reset, the outage case |
 | `.env.example` | Every variable, with the reasoning |

@@ -20,6 +20,7 @@ import { deliverExpiryAlertsJob, evaluateExpiryAlertsJob } from './alerts';
 import { anchorAuditChainJob } from './anchor';
 import { integrationSyncJob } from './sync';
 import { renderExportsJob, expireExportsJob } from './exports';
+import { pruneAuthAttemptsJob } from './auth-hygiene';
 import { WorkerRuntime, createLogger, type LogLevel } from './runtime';
 
 function jobs() {
@@ -30,6 +31,7 @@ function jobs() {
     anchorAuditChainJob(),
     renderExportsJob(),
     expireExportsJob(),
+    pruneAuthAttemptsJob(),
   ];
 }
 

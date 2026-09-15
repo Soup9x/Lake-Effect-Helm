@@ -30,12 +30,25 @@
 import { withoutTenantContext } from '../db/client';
 import { hasSessionResolver, useSessionResolver, type SessionUser } from './session';
 
-let installed = false;
+/**
+ * Process-wide, for the same reason the resolver slot itself is: a module-level
+ * `let` is per bundle chunk, and Helm's build has dozens of copies of this file.
+ * A per-copy flag would let each one think it still had to install, and — worse
+ * — would let a copy that had installed nothing believe it had.
+ */
+const INSTALLED_KEY = Symbol.for('helm.auth.resolver-installed');
 
 export async function installSessionResolver(): Promise<void> {
-  if (installed) return;
-  installed = true;
+  const host = globalThis as typeof globalThis & { [INSTALLED_KEY]?: Promise<void> };
 
+  // The promise, not a boolean. Two concurrent requests on a cold process would
+  // both see `installed = false` and both run the dynamic import; awaiting the
+  // first one's promise makes the second wait for it instead.
+  host[INSTALLED_KEY] ??= install();
+  return host[INSTALLED_KEY];
+}
+
+async function install(): Promise<void> {
   // Someone already chose one — a test with a fake identity, or a deployment
   // wiring its own. Stand down rather than overwrite it.
   if (hasSessionResolver()) return;
@@ -76,5 +89,17 @@ export async function installSessionResolver(): Promise<void> {
     return;
   }
 
-  await import('./config');
+  // Register explicitly rather than relying on config.ts's import side effect.
+  // The side effect registers into whichever copy of session.ts the bundler
+  // gave that chunk; calling useSessionResolver() here registers into the one
+  // this module is holding. Both now reach the same process-wide slot, but the
+  // explicit call is what makes that true by construction rather than by luck.
+  const { auth } = await import('./config');
+
+  useSessionResolver(async (): Promise<SessionUser | null> => {
+    const session = await auth();
+    const user = session?.user;
+    if (!user?.id || !user.email) return null;
+    return { id: user.id, email: user.email, name: user.name ?? undefined };
+  });
 }

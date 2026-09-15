@@ -35,9 +35,10 @@ src/
   workers/      Job runtime, expiry alerts, RMM/PSA sync, audit anchoring,
                 export rendering and expiry.
 tests/
-  unit/         206 tests — RFC 6238 vectors, envelope semantics, schema guard,
-                on-premises key custody, PDF structure, bundle encryption.
-  integration/  177 tests against a real cluster as the real roles.
+  unit/         230 tests — RFC 6238 vectors, envelope semantics, schema guard,
+                on-premises key custody, PDF structure, bundle encryption,
+                Argon2id and password policy, session cookie naming.
+  integration/  215 tests against a real cluster as the real roles.
                 The UI was additionally driven end to end in a real browser;
                 see docs/architecture/06-web-interface.md §8.
 docs/
@@ -47,6 +48,7 @@ docs/
   architecture/04-api-layer.md          request flow, auth, untrusted schemas
   architecture/05-workers-and-exports.md  jobs, worker identities, four eyes
   architecture/06-web-interface.md      pages, tenant switching, secret handling
+  architecture/07-local-authentication.md  passwords, lockout, reset, the outage case
   deployment/on-premises.md             docker compose, keys, TLS, rotation runbook
 scripts/
   check-drift.ts        Drizzle schema vs. live catalog
@@ -208,9 +210,11 @@ optional and are the usual causes of a failed first install:
 * **The master key file must be mode 0400 and owned by uid 10001.** Helm
   refuses to start otherwise — including from the 0444 `docker secret` produces
   by default. `init-secrets.sh` gets this right for you.
-* **Sign-in needs Microsoft Entra.** There is no local password login; that is
-  a deliberate scope choice, and it means SSO has to be configured before
-  anyone can get in.
+* **Decide your sign-in story before you invite anybody.** Entra and local
+  passwords both work, and both produce the same revocable session. Keep a
+  local password on at least one administrator — it is what gets you in when
+  Entra cannot be reached, which is the outage where you most need a client's
+  credentials.
 
 ---
 

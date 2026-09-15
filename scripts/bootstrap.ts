@@ -21,8 +21,14 @@
  *     TenantKeyService is a wrapped key nothing can unwrap, and the failure
  *     surfaces later as "we cannot decrypt anything".
  *
+ * It also sets a local password on the administrator it creates, printed once
+ * and never stored. That is not a convenience: Entra takes a support ticket and
+ * a redirect URI to configure, and until it is done there is no way into the
+ * deployment at all. More importantly it establishes the break-glass account on
+ * day one, rather than on the morning somebody discovers they need one.
+ *
  * Refuses to run twice against the same tenant slug. Safe to read before
- * running: it writes four rows and mints one key.
+ * running: it writes five rows and mints one key.
  *
  * Usage:
  *   pnpm helm:bootstrap --tenant "Northwind Managed Services" \
@@ -30,9 +36,10 @@
  *                       --admin-email admin@northwind.example.com \
  *                       --admin-name "Dana Whitfield"
  */
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { closeAllPools } from '../src/lib/db/client';
+import { hashPassword, checkPasswordPolicy } from '../src/lib/auth/password';
 import { describeKeyCustody, getKeyService } from '../src/lib/services';
 
 interface Options {
@@ -40,6 +47,46 @@ interface Options {
   slug: string;
   adminEmail: string;
   adminName: string;
+}
+
+/**
+ * Words for the generated password.
+ *
+ * A passphrase rather than a random string, because this one gets read aloud,
+ * typed from a terminal into a browser, and occasionally written on paper for
+ * an hour. "correct-horse-battery-staple" survives all three; a base64 blob
+ * produces a transcription error and a locked-out administrator.
+ *
+ * Short, unambiguous, no homophones and no words that differ only by a letter
+ * that sounds like another over a phone line.
+ */
+const WORDS = [
+  'anchor', 'amber', 'arrow', 'basin', 'beacon', 'birch', 'bridge', 'canyon',
+  'cedar', 'cobalt', 'compass', 'copper', 'coral', 'dune', 'ember', 'fathom',
+  'ferry', 'flint', 'forge', 'garnet', 'gravel', 'harbor', 'hollow', 'indigo',
+  'ivory', 'juniper', 'kettle', 'lantern', 'ledger', 'lichen', 'marble',
+  'meadow', 'mercury', 'mosaic', 'nickel', 'orchard', 'otter', 'pebble',
+  'pewter', 'pillar', 'quarry', 'quartz', 'rafter', 'ripple', 'saddle',
+  'sequoia', 'shale', 'silver', 'spruce', 'sterling', 'summit', 'thicket',
+  'timber', 'trestle', 'tundra', 'velvet', 'walnut', 'willow', 'window',
+  'zephyr',
+];
+
+/**
+ * Generate the initial password.
+ *
+ * Five words from a 60-word list is about 29 bits, which on its own is not
+ * enough for a credential vault. The two digits take it to roughly 36, and the
+ * three things that actually carry the weight are that it is MUST-CHANGE, that
+ * it is rate-limited and locked out after five wrong guesses, and that it is
+ * alive for as long as it takes the administrator to sign in once.
+ *
+ * randomInt is the CSPRNG. Math.random() here would be a genuinely exploitable
+ * mistake: the output is the only credential in a brand-new deployment.
+ */
+function generatePassphrase(): string {
+  const words = Array.from({ length: 5 }, () => WORDS[randomInt(WORDS.length)]!);
+  return `${words.join('-')}-${String(randomInt(10, 100))}`;
 }
 
 function parseArgs(argv: string[]): Options {
@@ -101,6 +148,27 @@ async function main(): Promise<void> {
   const tenantId = randomUUID();
   const userId = randomUUID();
 
+  // Generated and hashed BEFORE the transaction: Argon2id at Helm's parameters
+  // takes about a quarter of a second, and holding a transaction open across it
+  // for no reason is a habit worth not forming.
+  //
+  // The policy check is not ceremony. It asserts that this script cannot
+  // produce a password the application would refuse — a generator that drifts
+  // out of step with the policy produces an administrator who cannot sign in,
+  // discovered at the worst moment.
+  const initialPassword = generatePassphrase();
+  const policy = checkPasswordPolicy(initialPassword, {
+    email: options.adminEmail,
+    name: options.adminName,
+  });
+  if (!policy.ok) {
+    throw new Error(
+      `the generated password does not satisfy Helm's own policy (${policy.problems.join('; ')}). ` +
+        'This is a bug in scripts/bootstrap.ts, not something you did.',
+    );
+  }
+  const passwordPhc = await hashPassword(initialPassword);
+
   // Its OWN connection, deliberately not one of the five pools in
   // src/lib/db/client.ts. That registry is the product's privilege separation,
   // and adding a superuser role to it would put an unconstrained connection
@@ -152,6 +220,14 @@ async function main(): Promise<void> {
         INSERT INTO membership (tenant_id, user_id, role_key, status, org_scope_all)
         VALUES (${tenantId}::uuid, ${userId}::uuid, 'super_admin', 'active', true)
       `;
+
+      // must_change: this password was chosen by a script and printed to a
+      // terminal, which means it is in a scrollback buffer and possibly in a
+      // terminal recording. It is a way in, once, not a password.
+      await tx`
+        INSERT INTO local_credential (user_id, password_phc, must_change)
+        VALUES (${userId}::uuid, ${passwordPhc}, true)
+      `;
     });
   } finally {
     await sql.end({ timeout: 5 });
@@ -170,9 +246,25 @@ async function main(): Promise<void> {
 
   console.log(`data key    : generation ${key.generation}, wrapped by ${key.kekId}`);
   console.log('');
-  console.log('Sign-in is next. Helm ships with Microsoft Entra ID as its only');
-  console.log('provider, so configure AUTH_MICROSOFT_ENTRA_ID_* and sign in as');
-  console.log(`${options.adminEmail} — the address must match the one Entra asserts.`);
+
+  // Printed once, at the end, after everything that could fail has succeeded.
+  // Printing it earlier would put a live credential on the screen of a run that
+  // then aborts, leaving an operator unsure whether it means anything.
+  console.log('─'.repeat(72));
+  console.log('  INITIAL PASSWORD — shown once, stored nowhere.');
+  console.log('');
+  console.log(`      ${options.adminEmail}`);
+  console.log(`      ${initialPassword}`);
+  console.log('');
+  console.log('  Sign in with it at /sign-in and change it immediately; Helm will');
+  console.log('  insist. It is in this terminal\'s scrollback, so treat it as');
+  console.log('  compromised the moment it has been used.');
+  console.log('─'.repeat(72));
+  console.log('');
+  console.log('Microsoft Entra ID is the other way in. Configure');
+  console.log('AUTH_MICROSOFT_ENTRA_ID_* and sign in as the same address — it must');
+  console.log('match what Entra asserts. Keep the local password working as well:');
+  console.log('it is what gets you in when Entra cannot be reached.');
   console.log('See docs/deployment/on-premises.md §5.');
 }
 
