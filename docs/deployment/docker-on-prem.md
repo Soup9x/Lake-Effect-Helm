@@ -1,11 +1,12 @@
 # On-Premises Docker Installation Guide
 
-A step-by-step installation of Lake Effect Helm on a single on-premises host
-using Docker Compose. Follow it top to bottom and you will finish with a
-working, TLS-terminated deployment, an administrator who can sign in, and a
-backup you have actually restored from at least once.
+Installing Lake Effect Helm on a single on-premises host with Docker Compose.
 
-**Budget 45 minutes**, most of which is waiting for an image build.
+**[Quick Start](#quick-start-5-minute-deployment) runs the whole install for
+you.** Everything after it is the reference manual: the same five steps done by
+hand, plus TLS, backup and restore, verification and troubleshooting. Use the
+Quick Start to get running; come back to the manual when you need to know why
+something is the way it is, or when something breaks.
 
 > **Which guide is which.** These two sit side by side in this directory and
 > do different jobs. This one owns *installation*: getting from a bare host to
@@ -13,6 +14,96 @@ backup you have actually restored from at least once.
 > master-key rotation, migrating custody into Vault, storage separation,
 > upgrades. Where they overlap, this is the more detailed Docker walkthrough
 > and that is the runbook. Neither replaces the other.
+
+---
+
+## Quick Start (5-minute deployment)
+
+```bash
+git clone <your-fork> /opt/lake-effect-helm
+cd /opt/lake-effect-helm
+sudo ./deploy/setup.sh
+```
+
+That is the whole install. Five minutes of your attention, plus a few minutes
+of image build you can walk away from.
+
+### What it asks you
+
+Four questions, each validated as you answer and re-asked if it does not fit:
+
+| | Example | Why it matters |
+| --- | --- | --- |
+| Public hostname | `helm.internal.example.com` | Must match the certificate and the browser's address bar. §3 |
+| MSP name | `Northwind Managed Services` | Your own company — the root tenant |
+| URL slug | `northwind` | Offered for you, derived from the name |
+| Administrator email and name | `admin@northwind.example.com` | The first account. Must match what Entra asserts, if you later add SSO |
+
+### What it does
+
+| Phase | Equivalent manual section |
+| --- | --- |
+| 1. Preflight — Docker and Compose versions, root, disk, port conflicts | §1 |
+| 2. Secrets — generates the master key ring and every password, then **verifies** the key is mode `0400` and owned by uid 10001 | §2 |
+| 3. Configure — writes `HELM_PUBLIC_HOST` and `HELM_PUBLIC_URL` into `.env` | §3 |
+| 4. Start — builds the images, then `docker compose up -d --wait` until every healthcheck passes | §4 |
+| 5. Bootstrap — creates the tenant, the administrator and their local password, and mints the first data key through the KEK provider | §5 |
+
+It finishes by exporting Caddy's root certificate to `./helm-root.crt` and
+printing what is left to do.
+
+### What it deliberately will not do
+
+* **Overwrite an existing master key.** That is unrecoverable — every credential
+  in the database becomes ciphertext nobody can read. A second run detects an
+  existing install, skips ahead, and picks up where the first stopped.
+* **Destroy a volume, drop a database, or force anything.** Every destructive
+  operation stays something you type yourself.
+* **Configure TLS trust or SSO.** Those need decisions a script cannot make —
+  §6 and §5.2.
+
+It is safe to re-run. If it stops halfway, fix what it complained about and run
+it again.
+
+### Unattended
+
+Supply any answer as a flag to skip its prompt. With all of them and `--yes`,
+it runs start to finish with no input — suitable for a provisioning tool:
+
+```bash
+sudo ./deploy/setup.sh --yes \
+  --host        helm.internal.example.com \
+  --tenant      "Northwind Managed Services" \
+  --slug        northwind \
+  --admin-email admin@northwind.example.com \
+  --admin-name  "Dana Whitfield"
+```
+
+`sudo ./deploy/setup.sh --help` lists every option.
+
+### Two things left when it finishes
+
+1. **Trust the certificate.** `./helm-root.crt` has been exported for you;
+   install it as a trusted root on each technician's machine, or browsers warn
+   on every visit. Per-OS commands: **§6.1**.
+2. **Make the name resolve** — an internal DNS A record, or a `hosts` entry on
+   each machine. **§6.1**.
+
+Then open `https://<your-host>/sign-in` and use the password the bootstrap
+printed. Helm will make you change it.
+
+### If something fails
+
+The script stops at the first problem and says which one. **§9** maps the
+common symptoms to causes. The reference manual below is the same five steps
+done by hand, so you can pick up from wherever it stopped.
+
+---
+
+# Reference manual
+
+The rest of this document is the long form: each step done manually, and the
+operational material the Quick Start does not cover.
 
 **Contents**
 
@@ -130,6 +221,8 @@ accounts.
 
 ## 2. Generate keys and passwords
 
+*`deploy/setup.sh` does this, and verifies the result. Read on to do it by hand.*
+
 ```bash
 git clone <your-fork> /opt/lake-effect-helm
 cd /opt/lake-effect-helm
@@ -171,6 +264,8 @@ stat -c '%a %u:%g %n' deploy/secrets/master.key
 
 ## 3. Configure `.env`
 
+*`deploy/setup.sh` sets the two variables below for you; the rest is yours.*
+
 Open `.env` and set the address people will actually type:
 
 ```ini
@@ -202,6 +297,8 @@ API-token IP allowlisting, counted from the *right* of `X-Forwarded-For`.
 ---
 
 ## 4. Start the stack
+
+*`deploy/setup.sh` does this and waits for health. §4.2 is worth reading either way — it explains what each healthcheck proves.*
 
 ```bash
 docker compose up -d --build
@@ -312,6 +409,8 @@ liveness probes.
 ---
 
 ## 5. Bootstrap the first tenant and administrator
+
+*`deploy/setup.sh` prompts for these values and runs this for you.*
 
 The migrations leave a schema and nothing in it. Helm is fail-closed, so an
 empty database is not half-working — every policy denies, and there is nobody
@@ -543,10 +642,18 @@ Postgres is running produces a torn, unrestorable directory; a dump is
 transactionally consistent and needs no downtime.
 
 ```bash
-docker compose exec -T postgres \
-  pg_dump -U postgres -d helm -Fc \
+docker compose exec -T postgres sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U postgres -d helm -Fc' \
   > "helm-$(date -u +%Y%m%dT%H%M%SZ).dump"
 ```
+
+> **`PGPASSWORD` is not optional, and leaving it out fails confusingly.** This
+> stack initialises Postgres with `--auth-local=scram-sha-256`, so even a
+> superuser connection over the container's own socket needs a password —
+> without it `pg_dump` prints `Password:` and, under `exec -T`, dies with
+> `fe_sendauth: no password supplied`. Taking the value from the container's own
+> `POSTGRES_PASSWORD` keeps the credential off your command line and out of your
+> shell history. Every `psql` and `pg_dump` in this section does the same.
 
 `-Fc` (custom format) is compressed, restores selectively, and is the format
 `pg_restore` wants. A round trip preserves everything that matters — this was
@@ -622,7 +729,8 @@ VAULT=/backup/helm-keys             # SEPARATE medium — see §7.1
 mkdir -p "$DEST" "$VAULT"
 
 # 1. Database (online, consistent)
-docker compose exec -T postgres pg_dump -U postgres -d helm -Fc > "$DEST/helm.dump"
+docker compose exec -T postgres sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U postgres -d helm -Fc' > "$DEST/helm.dump"
 
 # 2. Volumes, passphrases in their own archive
 for vol in helm-passphrases caddy-data helm-anchors; do
@@ -664,12 +772,13 @@ docker compose up -d --build postgres
 docker compose ps postgres          # wait for (healthy)
 
 # 4. Restore into the database the init created.
-docker compose exec -T postgres \
-  psql -U postgres -c 'DROP DATABASE IF EXISTS helm WITH (FORCE);' postgres
-docker compose exec -T postgres \
-  psql -U postgres -c 'CREATE DATABASE helm;' postgres
-docker compose exec -T postgres \
-  pg_restore -U postgres -d helm --exit-on-error < /backup/helm/<STAMP>/helm.dump
+docker compose exec -T postgres sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" psql -U postgres -d postgres \
+     -c "DROP DATABASE IF EXISTS helm WITH (FORCE);" \
+     -c "CREATE DATABASE helm;"'
+docker compose exec -T postgres sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -U postgres -d helm --exit-on-error' \
+  < /backup/helm/<STAMP>/helm.dump
 
 # 5. Volumes.
 for vol in helm-passphrases caddy-data helm-anchors; do
@@ -699,21 +808,22 @@ silently wrong:
 
 ```bash
 # Row counts and schema objects are all present.
-docker compose exec -T postgres psql -U postgres -d helm -tAc "
+docker compose exec -T postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U postgres -d helm -tAc "$0"' "
 SELECT 'tenants='  || (SELECT count(*) FROM tenant)
     || ' users='   || (SELECT count(*) FROM app_user)
     || ' keys='    || (SELECT count(*) FROM tenant_data_key)
     || ' policies='|| (SELECT count(*) FROM pg_policies WHERE schemaname='public');"
 
 # The privilege boundaries survived. Both MUST print false.
-docker compose exec -T postgres psql -U postgres -d helm -tAc "
+docker compose exec -T postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U postgres -d helm -tAc "$0"' "
 SELECT has_table_privilege('helm_app','secret_version','SELECT'),
        has_column_privilege('helm_app','local_credential','password_phc','SELECT');"
 
 # The audit hash chain is intact. Needs a session context, inside a
 # transaction — verify_audit_chain() refuses to read another tenant's chain.
 # (\o /dev/null hides the context blob set_session_context echoes back.)
-docker compose exec -T postgres psql -U postgres -d helm -tAq <<'SQL'
+docker compose exec -T postgres sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" psql -U postgres -d helm -tAq' <<'SQL'
 BEGIN;
 \o /dev/null
 SELECT helm.set_session_context(t.id, m.user_id)
@@ -797,8 +907,8 @@ it just makes the two disagree, and the service that uses that role starts
 failing to authenticate. Change both:
 
 ```bash
-docker compose exec postgres psql -U postgres -c \
-  "ALTER ROLE helm_app WITH PASSWORD 'new-value';"
+docker compose exec -T postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U postgres \
+  -c "ALTER ROLE helm_app WITH PASSWORD '"'"'new-value'"'"';"'
 sed -i 's/^HELM_DB_PASSWORD_APP=.*/HELM_DB_PASSWORD_APP=new-value/' .env
 docker compose up -d web worker
 ```
@@ -832,8 +942,8 @@ If it errors on the *flag*, replace the `caddy` healthcheck in
 ```bash
 docker compose logs -f web worker          # follow both
 docker compose logs --since 1h caddy       # proxy access log, JSON
-docker compose exec postgres \
-  psql -U postgres -d helm -c "SELECT * FROM pg_stat_activity WHERE state <> 'idle';"
+docker compose exec -T postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" \
+  psql -U postgres -d helm -c "SELECT * FROM pg_stat_activity WHERE state <> '"'"'idle'"'"';"'
 ```
 
 Helm logs JSON at `HELM_LOG_LEVEL` (default `info`). Set `debug` in `.env` and
@@ -847,6 +957,9 @@ plaintext credentials do not appear in any log line at any level, by design.
 ### Commands
 
 ```bash
+sudo ./deploy/setup.sh                             # the whole install, start to finish
+sudo ./deploy/setup.sh --help                      # every non-interactive option
+
 docker compose up -d --build                       # build and start everything
 docker compose up -d --wait --wait-timeout 300     # ...and block until healthy
 docker compose ps                                  # status and health

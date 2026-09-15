@@ -41,3 +41,9 @@ coverage/
 /deploy/tls/*
 !/deploy/tls/.gitkeep
 /deploy/data/
+
+# Exported by deploy/setup.sh so it can be distributed to technicians. Not a
+# secret — it is Caddy's public root certificate — but it is per-deployment
+# output, and committing one deployment's CA into the repository is confusing
+# at best.
+/helm-root.crt
