@@ -84,8 +84,17 @@ EXPOSE 3000
 
 # The health endpoint is public and says almost nothing — "ok" plus a database
 # reachability flag. That is what a health check needs and all it should get.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"
+#
+# It checks the FLAG, not the status code. /api/health answers 200 with
+# {"status":"degraded"} when the database is unreachable, so a check that
+# stopped at `r.ok` would report this container healthy while it could not
+# render a single page.
+#
+# docker-compose.yml overrides this for the `web` service; it stays here so the
+# image behaves sensibly when run outside compose, and so the two do not
+# disagree about what "healthy" means.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>r.json()).then(j=>process.exit(j.status==='ok'?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "server.js"]
 
