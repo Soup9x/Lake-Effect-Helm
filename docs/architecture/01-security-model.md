@@ -268,8 +268,33 @@ one attribute silently disables every policy in the system.
 | `helm_key_admin` | Rotate keys, maintain partitions | Read documentation |
 | `helm_auditor` | Read audit history | Write anything |
 
+The table says five roles' worth of the model; `helm_worker` is a member of
+`helm_app` and adds only the cross-tenant backlog enumerators.
+
 Assertions at the end of `0220_grants.sql` verify each of these negatives at
 migration time rather than leaving them to a penetration test.
+
+### The migrating role is the exception, and it has to be
+
+Everything above is about roles that must NOT bypass RLS. The role that applies
+the migrations must, and that is not a contradiction — it is the hinge the rest
+turns on.
+
+Every sensitive table is `FORCE ROW LEVEL SECURITY`, which subjects the table
+**owner** to its own policies, and every `SECURITY DEFINER` function runs as
+whoever owns it: the role that ran the migrations. So if migrations run as a
+role RLS applies to, those functions match zero rows. `helm.reveal_secret()`
+returns NULL instead of the credential. Nothing raises, nothing logs, and the
+deployment looks healthy until somebody tries to read a password.
+
+`db/migrate.ts` therefore refuses to run as such a role, and proves it
+empirically — it creates a temporary `FORCE RLS` table and checks whether it can
+read its own row — rather than trusting a `rolsuper` lookup that inheritance and
+`BYPASSRLS` can both make wrong. `tests/integration/migrate-guard.test.ts`
+asserts both directions.
+
+None of this widens what the runtime roles can do. The migrating connection is
+used by `pnpm db:migrate` and by nothing at request time.
 
 ---
 

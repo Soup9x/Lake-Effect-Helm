@@ -1,5 +1,7 @@
 # Lake Effect Helm
 
+[![CI](https://github.com/Soup9x/Lake-Effect-Helm/actions/workflows/ci.yml/badge.svg)](https://github.com/Soup9x/Lake-Effect-Helm/actions/workflows/ci.yml)
+
 Multi-tenant documentation and credential platform for IT Managed Service
 Providers.
 
@@ -38,9 +40,11 @@ tests/
   unit/         230 tests — RFC 6238 vectors, envelope semantics, schema guard,
                 on-premises key custody, PDF structure, bundle encryption,
                 Argon2id and password policy, session cookie naming.
-  integration/  215 tests against a real cluster as the real roles.
+  integration/  220 tests against a real cluster as the real roles.
                 The UI was additionally driven end to end in a real browser;
                 see docs/architecture/06-web-interface.md §8.
+.github/
+  workflows/ci.yml      typecheck, build, SQL suite and integration tests on PG16
 docs/
   architecture/01-security-model.md     guarantees, mechanisms, and limitations
   architecture/02-data-model.md         schema shape and rejected alternatives
@@ -230,8 +234,12 @@ Requires PostgreSQL 16+ (`security_invoker` views), Node 22+, pnpm 10+.
 pnpm install
 cp .env.example .env.local     # then fill it in
 
-# Apply the schema as the DDL owner
-DATABASE_URL_MIGRATOR=postgresql://helm_migrator@host/helm pnpm db:migrate
+# Apply the schema. Migrations run as a superuser — every table is FORCE ROW
+# LEVEL SECURITY, which applies to the table owner too, and the schema's
+# SECURITY DEFINER functions run as whoever owns them. A migrating role that
+# RLS applies to owns functions that silently match zero rows. The runner
+# refuses rather than letting that happen.
+DATABASE_URL_MIGRATOR=postgresql://postgres@host/helm pnpm db:migrate
 
 # Verify
 pnpm db:drift                  # TypeScript schema vs. live catalog
