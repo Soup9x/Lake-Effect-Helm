@@ -47,6 +47,7 @@ docs/
   architecture/04-api-layer.md          request flow, auth, untrusted schemas
   architecture/05-workers-and-exports.md  jobs, worker identities, four eyes
   architecture/06-web-interface.md      pages, tenant switching, secret handling
+  deployment/on-premises.md             docker compose, keys, TLS, rotation runbook
 scripts/
   check-drift.ts        Drizzle schema vs. live catalog
   rotate-kek.ts         re-wrap tenant DEKs onto a new master key version
@@ -186,6 +187,30 @@ is a separate audited call rather than a local read of what is already on screen
 plus an empirical cost probe reject patterns that backtrack catastrophically —
 because a length limit does not: `^((a)+)+$` against 31 characters runs for over
 a minute.
+
+---
+
+## Deploying it
+
+```bash
+sudo ./deploy/init-secrets.sh   # master key ring + every password, once
+$EDITOR .env                    # set HELM_PUBLIC_HOST and HELM_PUBLIC_URL
+docker compose up -d
+docker compose --profile bootstrap run --rm bootstrap \
+  --tenant "Your MSP" --slug your-msp --admin-email you@example.com
+```
+
+`docs/deployment/on-premises.md` is the full guide. Three things in it are not
+optional and are the usual causes of a failed first install:
+
+* **TLS.** The session cookie is `__Secure-` prefixed in production, so sign-in
+  cannot work over plain http. Caddy is in the stack for this.
+* **The master key file must be mode 0400 and owned by uid 10001.** Helm
+  refuses to start otherwise — including from the 0444 `docker secret` produces
+  by default. `init-secrets.sh` gets this right for you.
+* **Sign-in needs Microsoft Entra.** There is no local password login; that is
+  a deliberate scope choice, and it means SSO has to be configured before
+  anyone can get in.
 
 ---
 
