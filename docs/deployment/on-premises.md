@@ -5,6 +5,12 @@ holding every client's credentials on a machine you own.
 
 Read §1 and §2 before running anything. The rest can be followed in order.
 
+> Installing for the first time? [`docker-on-prem.md`](docker-on-prem.md), next
+> to this file, is the step-by-step Docker walkthrough — volume permissions,
+> healthchecks, the bootstrap profile, TLS for an internal name, and verified
+> backup and restore procedures. Come back here for the operational decisions:
+> where the master key lives, how to rotate it, and what to back up.
+
 ---
 
 ## 1. What you are signing up for
@@ -580,5 +586,5 @@ Stated plainly so they are decisions rather than surprises.
 | `docs/architecture/05-workers-and-exports.md` | Worker identities, four-eyes exports |
 | `docs/architecture/06-web-interface.md` | Pages, tenant switching, secret handling |
 | `docs/architecture/07-local-authentication.md` | Passwords, lockout, reset, the outage case |
-| `docs/deploy/docker-on-prem.md` | Step-by-step Docker install: volumes, healthchecks, TLS, backup/restore |
+| `docs/deployment/docker-on-prem.md` | Step-by-step Docker install: volumes, healthchecks, TLS, backup/restore |
 | `.env.example` | Every variable, with the reasoning |

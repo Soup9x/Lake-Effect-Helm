@@ -49,8 +49,8 @@ docs/
   architecture/05-workers-and-exports.md  jobs, worker identities, four eyes
   architecture/06-web-interface.md      pages, tenant switching, secret handling
   architecture/07-local-authentication.md  passwords, lockout, reset, the outage case
+  deployment/docker-on-prem.md          step-by-step Docker install and backup/restore
   deployment/on-premises.md             docker compose, keys, TLS, rotation runbook
-  deploy/docker-on-prem.md              step-by-step Docker install and backup/restore
 scripts/
   check-drift.ts        Drizzle schema vs. live catalog
   rotate-kek.ts         re-wrap tenant DEKs onto a new master key version

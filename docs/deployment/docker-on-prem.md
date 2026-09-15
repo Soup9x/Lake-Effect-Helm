@@ -7,11 +7,12 @@ backup you have actually restored from at least once.
 
 **Budget 45 minutes**, most of which is waiting for an image build.
 
-> **Which guide is which.** This document owns *installation*: getting from a
-> bare host to a running stack. [`../deployment/on-premises.md`](../deployment/on-premises.md)
-> owns *operation*: master-key rotation, migrating custody into Vault, storage
-> separation, upgrades. Where they overlap, this one is the more detailed
-> Docker walkthrough and that one is the runbook. Neither replaces the other.
+> **Which guide is which.** These two sit side by side in this directory and
+> do different jobs. This one owns *installation*: getting from a bare host to
+> a running stack. [`on-premises.md`](on-premises.md) owns *operation*:
+> master-key rotation, migrating custody into Vault, storage separation,
+> upgrades. Where they overlap, this is the more detailed Docker walkthrough
+> and that is the runbook. Neither replaces the other.
 
 **Contents**
 
@@ -887,7 +888,7 @@ read the old data.
 
 | Document | |
 | --- | --- |
-| [`../deployment/on-premises.md`](../deployment/on-premises.md) | Operations runbook: key rotation, Vault custody, storage, upgrades |
+| [`on-premises.md`](on-premises.md) | Operations runbook: key rotation, Vault custody, storage, upgrades |
 | [`../architecture/01-security-model.md`](../architecture/01-security-model.md) | Guarantees, mechanisms and stated limitations |
 | [`../architecture/03-crypto-operations.md`](../architecture/03-crypto-operations.md) | Key hierarchy and both on-premises KEK providers |
 | [`../architecture/07-local-authentication.md`](../architecture/07-local-authentication.md) | Local passwords, lockout, reset, the outage case |
