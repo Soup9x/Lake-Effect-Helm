@@ -4,6 +4,8 @@ import { Network } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
+import { RenameAsset } from '@/components/rename-asset';
+import { isClientRole } from '@/lib/ui/roles';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
 import { RevealButton } from '@/components/reveal-button';
@@ -100,12 +102,17 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         title={node.name}
         description={node.description ?? undefined}
         actions={
-          <Link
-            href={`/organizations/${node.organization_id}`}
-            className="text-sm text-brand hover:underline"
-          >
-            {node.organization_name}
-          </Link>
+          <div className="flex items-center gap-3">
+            {!isClientRole(identity.roleKey) && (
+              <RenameAsset nodeId={node.id} currentName={node.name} />
+            )}
+            <Link
+              href={`/organizations/${node.organization_id}`}
+              className="text-sm text-brand hover:underline"
+            >
+              {node.organization_name}
+            </Link>
+          </div>
         }
       />
       <PageBody>
