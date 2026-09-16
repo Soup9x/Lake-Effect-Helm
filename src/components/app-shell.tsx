@@ -10,6 +10,7 @@ import {
   Search,
   Settings,
   ShieldAlert,
+  Users,
 } from 'lucide-react';
 import { TenantSwitcher } from './tenant-switcher';
 import type { ServerIdentity } from '@/lib/auth/server-identity';
@@ -42,10 +43,11 @@ const NAV: NavItem[] = [
   { href: '/search', label: 'Search', icon: Search },
   { href: '/exports', label: 'Exports', icon: FileDown },
   { href: '/audit', label: 'Audit', icon: ScrollText },
+  { href: '/people', label: 'People', icon: Users },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
-const HIDDEN_FROM_CLIENTS = new Set(['/audit', '/settings']);
+const HIDDEN_FROM_CLIENTS = new Set(['/audit', '/settings', '/people']);
 
 export function AppShell({
   identity,

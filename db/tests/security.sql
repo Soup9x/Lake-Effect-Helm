@@ -595,4 +595,35 @@ SELECT helm_test.check('helm_app cannot read auth_session by any path',
 ROLLBACK;
 
 \echo ''
+\echo '== 22. Nobody can grant a role that outranks them =='
+BEGIN;
+-- tier3 holds every permission but three, so it holds user:write, and the
+-- membership policies check only the tenant and that permission. Without the
+-- 0350 trigger a rank-80 technician could mint themselves a rank-100
+-- super_admin membership and be an administrator a moment later.
+--
+-- Claiming a rank in the GUC is precisely what a compromised request role could
+-- do, so that is how this is tested. The tenant context is set too, because the
+-- INSERT policy requires one before the trigger is ever reached.
+SELECT helm_test.ctx(:t1, :u_admin1);
+SET LOCAL helm.role_rank = '80';
+
+SELECT helm_test.check_raises('a rank-80 actor cannot grant super_admin',
+  format($$INSERT INTO membership (tenant_id, user_id, role_key, org_scope_all)
+           VALUES (%L, %L, 'super_admin', true)$$, :t1, :u_tech1));
+
+SELECT helm_test.check_raises('a client-side role cannot hold tenant-wide scope',
+  format($$INSERT INTO membership (tenant_id, user_id, role_key, org_scope_all)
+           VALUES (%L, %L, 'client_admin', true)$$, :t1, :u_tech1));
+
+-- And the same actor may grant at or below its own rank: a guard that refused
+-- everything would pass both assertions above and be useless.
+UPDATE membership SET role_key = 'tier1'
+WHERE tenant_id = :t1 AND user_id = :u_tech1;
+
+SELECT helm_test.check('a rank-80 actor can still grant below its own rank',
+  (SELECT role_key FROM membership WHERE tenant_id = :t1 AND user_id = :u_tech1) = 'tier1');
+ROLLBACK;
+
+\echo ''
 \echo '== All security assertions passed =='
