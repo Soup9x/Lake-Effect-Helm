@@ -46,31 +46,71 @@ Two more things that are true of this deployment regardless:
 
 ## 2. Prerequisites
 
-- Linux host with Docker Engine 24+ and the Compose plugin
-- 4 GB RAM, 2 vCPU and 20 GB disk to start; the audit log is partitioned
-  monthly and retained for seven years by default
-- A DNS name that resolves to the host on your internal network
-- `openssl` on the host, for key generation
-- Root (or sudo) for the first-run script — it chowns the master key to the
-  container's uid
+The bundled Compose stack is the shortest path, not the only one. This section
+separates what Helm needs from *any* environment from what the bundled stack
+happens to provide, so you can run it against managed Postgres, behind your own
+reverse proxy, or under a scheduler that is not Compose.
 
-PostgreSQL 16 is required and is included in the stack. Helm depends on
-`security_invoker` views and on 16's partition-wise behaviour for the audit log;
-15 and earlier will not work.
+### 2.1 What Helm requires, however you run it
+
+- **PostgreSQL 16 or newer.** Not negotiable: Helm depends on
+  `security_invoker` views and on 16's partition-wise behaviour for the audit
+  log. 15 and earlier will not work.
+- **Six database roles** — `helm_app`, `helm_auth`, `helm_key_admin`,
+  `helm_auditor`, `helm_worker`, and a migrating role. None may hold
+  `BYPASSRLS`. `deploy/postgres/10-roles.sh` creates them with passwords and
+  asserts that; run it, or reproduce it, against any cluster you bring.
+- **A migrating role that row-level security does not apply to.** Every
+  sensitive table is `FORCE ROW LEVEL SECURITY`, which subjects the table owner
+  to its own policies, and `SECURITY DEFINER` functions run as whoever owns
+  them. Migrate as a role RLS applies to and `helm.reveal_secret()` returns
+  NULL rather than the credential — silently. `db/migrate.ts` refuses to start
+  in that case rather than letting it happen;
+  [`../architecture/01-security-model.md`](../architecture/01-security-model.md)
+  §6 has the detail.
+- **A master key**, from HashiCorp Vault's transit engine or a key file this
+  host can read and nobody else can. §1 is the decision, §9 is the Vault path.
+- **TLS in front of the application.** In production the session cookie is
+  `__Secure-` prefixed and browsers will not send it over plain http, so
+  without a terminator sign-in appears to succeed and every page then reports
+  you signed out. Caddy is in the bundled stack for this; your own proxy,
+  ingress or load balancer does just as well.
+- **Node 22 or newer** if you are running the application outside the bundled
+  images.
+- **`openssl`**, for key generation.
+
+Sizing: 4 GB RAM, 2 vCPU and 20 GB disk to start. The audit log is partitioned
+monthly and nothing prunes it automatically.
+
+### 2.2 What the bundled stack adds
+
+- Linux host with Docker Engine 24+ and the Compose plugin v2.20+ — earlier
+  Compose does not understand `service_completed_successfully`, which is how
+  the web tier waits for migrations.
+- Root (or sudo) for the first-run script: it chowns the master key to the
+  container's uid.
+- A DNS name that resolves to the host on your internal network. An IP works;
+  §6.3 of the install guide covers what you give up.
+
+[`docker-on-prem.md`](docker-on-prem.md) is the step-by-step walkthrough for
+that path, including `deploy/setup.sh`, which does all of §3, §4 and §6 below
+in one command.
 
 ---
 
 ## 3. Generate keys and passwords
 
 ```bash
-git clone <your fork> /opt/helm && cd /opt/helm
+git clone <your repository> /opt/lake-effect-helm && cd /opt/lake-effect-helm
 sudo ./deploy/init-secrets.sh
 ```
 
-This writes two files and refuses to overwrite either:
+The path is an example; the script operates on the repository it lives in and
+writes nothing outside it. It produces two files and refuses to overwrite
+either:
 
 - **`deploy/secrets/master.key`** — a versioned key ring, mode `0400`, owned by
-  uid 10001.
+  the uid Helm runs as (10001 in the bundled images).
 - **`.env`** — every database password, `AUTH_SECRET`, and the blind-index key,
   mode `0600`.
 
@@ -78,6 +118,12 @@ The permissions are not cosmetic. **Helm refuses to start from a key file that
 is group- or world-readable**, which includes the `0444` that `docker secret`
 produces by default — the script sets the mode and the owner so this is not
 something you have to get right by hand.
+
+Running Helm yourself rather than in the bundled images? The key ring is an
+ordinary file: put it wherever your service account can read it and nobody else
+can, and point `HELM_KEK_FILE` at it. The mode check is on the file, not on any
+particular path — and `chown` it to whatever user your service runs as, not to
+10001.
 
 The key ring is versioned JSON rather than a bare key, so rotating the master
 key later is an operation instead of a data-loss event (§8).
@@ -110,35 +156,50 @@ They must match the certificate and what people type in a browser — an Auth.js
 callback that disagrees with the address bar fails in a way that wastes an
 afternoon.
 
+`HELM_PUBLIC_URL` is what Helm builds absolute links from — password-reset
+links most of all, which are useless as bare paths. `AUTH_URL` alone also
+works; `HELM_PUBLIC_URL` wins when both are set. `HELM_PUBLIC_HOST` is used by
+the bundled Caddy configuration.
+
+### With the bundled stack
+
 ```bash
 docker compose up -d
 docker compose logs -f migrate   # should exit 0
 ```
 
-On first start, in order: Postgres initialises and creates the five runtime
-roles with passwords; the `migrate` service applies every SQL migration and
-exits; the web tier and worker start once it has.
+On first start, in order: Postgres initialises and creates the runtime roles
+with passwords; the `migrate` service applies every SQL migration and exits;
+the web tier and worker start once it has.
+
+### Running it yourself
+
+The same three steps in the same order, with your own supervisor:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build && pnpm build:worker
+
+pnpm db:migrate        # as the migrating role — see §2.1
+pnpm start             # the web tier
+pnpm helm:worker       # the worker, as a separate service
+```
+
+`db:migrate` must run to completion before either process starts, and must run
+as a role row-level security does not apply to. Put your reverse proxy,
+ingress or load balancer in front of the web tier and terminate TLS there;
+Helm reads the client address from `X-Forwarded-For` according to
+`HELM_TRUSTED_PROXY_HOPS`, which must match how many entries your
+infrastructure appends.
 
 ### The certificate
 
-`HELM_TLS_DIRECTIVE` defaults to `tls internal` — Caddy mints a certificate
-from its own CA. No public DNS, no ACME reachability, which is right for an
-internal host. The cost is one step: trust Caddy's root on the machines that
-will use Helm.
-
-```bash
-docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./helm-root.crt
-# Then install helm-root.crt as a trusted root on each technician's machine.
-```
-
-To use your own certificate instead, put the files in `deploy/tls/` and set:
-
-```ini
-HELM_TLS_DIRECTIVE=tls /etc/helm/tls/helm.crt /etc/helm/tls/helm.key
-```
-
-For a publicly resolvable name, set `HELM_TLS_DIRECTIVE=` (empty) and Caddy
-obtains one from Let's Encrypt.
+Whatever terminates TLS has to present a certificate the browsers trust, or
+sign-in fails in the confusing way §2.1 describes. The bundled Caddy covers
+four cases — its own internal CA, your own internal CA, an IP address with no
+DNS at all, and a public name via Let's Encrypt — in
+[`docker-on-prem.md`](docker-on-prem.md) §6. With your own terminator, this is
+whatever you already do for an internal service.
 
 ---
 
@@ -201,9 +262,9 @@ What is enforced, so you do not have to:
   trigger on demand is a denial of service against the break-glass account, and
   attempts made *while* locked do not extend it.
 * **Rate limiting per account and per source address** (ten and thirty failures
-  in fifteen minutes). Both live in PostgreSQL, not Redis — Redis is optional in
-  this stack, and a rate limit that stops limiting when a cache is unavailable is
-  not a rate limit.
+  in fifteen minutes). Both live in PostgreSQL, not a cache — this stack ships
+  no cache tier, and a rate limit that stops limiting when a cache is unavailable
+  is not a rate limit.
 * An administrator holding `user:write` can clear a lockout without changing the
   password, which during an outage is considerably faster than a reset.
 
@@ -278,6 +339,8 @@ The migrations leave a schema and nothing in it. Helm is fail-closed, so an
 empty database is not half-working — every policy denies and there is nobody to
 sign in as.
 
+With the bundled stack:
+
 ```bash
 docker compose --profile bootstrap run --rm bootstrap \
   --tenant "Northwind Managed Services" \
@@ -285,6 +348,20 @@ docker compose --profile bootstrap run --rm bootstrap \
   --admin-email admin@northwind.example.com \
   --admin-name "Dana Whitfield"
 ```
+
+Running it yourself — the same command, the same arguments, one process:
+
+```bash
+pnpm helm:bootstrap \
+  --tenant "Northwind Managed Services" \
+  --slug northwind \
+  --admin-email admin@northwind.example.com \
+  --admin-name "Dana Whitfield"
+```
+
+It holds its own connection rather than going through the pool registry in
+`src/lib/db/client.ts`: that registry is the product's privilege separation,
+and a superuser sitting in it would be reachable from anything calling `db()`.
 
 It creates the MSP root tenant, a `super_admin` user, their membership, and —
 the part that matters — **mints the tenant's first data key through the KEK
@@ -495,11 +572,7 @@ docker compose run --rm worker node dist/worker.mjs --once
 every job takes a Postgres advisory lock, so exactly one replica does the work
 and the others skip that tick. Mutual exclusion is deliberately *not* a Redis
 lock — correctness should not depend on a service nobody on-premises is
-monitoring.
-
-**Redis is optional** and off by default. Start it with
-`docker compose --profile queue up -d` and set `REDIS_URL` only if you need
-queue throughput.
+monitoring. There is no queue broker in the stack and nothing to configure.
 
 ### Backups
 
@@ -568,8 +641,6 @@ Stated plainly so they are decisions rather than surprises.
   a short banned list, but does not consult Have I Been Pwned or an
   equivalent. Front the deployment with one if that matters to you.
 - **The anchor volume is not a witness by default.** §7.
-- **Redis, if enabled, is unauthenticated** on the internal compose network.
-  Fine while it stays there; add `requirepass` before exposing it.
 - **`docker compose` is not an orchestrator.** There is no rolling deploy:
   `up -d` stops and starts the web tier. For a few seconds of downtime per
   upgrade this is fine, and if it is not, the image runs unchanged under

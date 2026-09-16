@@ -202,22 +202,39 @@ a minute.
 
 ## Deploying it
 
+One command, from a clone on the target host. It checks Docker and Compose
+versions and host permissions, generates the master key ring and every
+password, asks for the address people will type, builds and starts the stack,
+and runs the first bootstrap:
+
 ```bash
-sudo ./deploy/init-secrets.sh   # master key ring + every password, once
-$EDITOR .env                    # set HELM_PUBLIC_HOST and HELM_PUBLIC_URL
-docker compose up -d
-docker compose --profile bootstrap run --rm bootstrap \
-  --tenant "Your MSP" --slug your-msp --admin-email you@example.com
+sudo ./deploy/setup.sh
 ```
 
-`docs/deployment/on-premises.md` is the full guide. Three things in it are not
-optional and are the usual causes of a failed first install:
+It is safe to re-run: a second run detects what is already done, skips it, and
+picks up where the first stopped. It never overwrites an existing master key.
+Every prompt can be supplied as a flag (`--host`, `--tenant`, `--slug`,
+`--admin-email`, `--admin-name`, `--yes`) so it runs unattended from a
+provisioning tool.
+
+[`docs/deployment/docker-on-prem.md`](docs/deployment/docker-on-prem.md) is the
+install guide: a Quick Start built on that script, then the same five steps by
+hand, TLS, backup and restore, and troubleshooting.
+[`docs/deployment/on-premises.md`](docs/deployment/on-premises.md) is the
+operational runbook — what Helm needs from *any* environment, where the master
+key lives, how to rotate it, and what to back up. Nothing here requires the
+bundled Compose stack; it is the shortest path, not the only one.
+
+Three things are not optional and are the usual causes of a failed first
+install:
 
 * **TLS.** The session cookie is `__Secure-` prefixed in production, so sign-in
   cannot work over plain http. Caddy is in the stack for this.
-* **The master key file must be mode 0400 and owned by uid 10001.** Helm
-  refuses to start otherwise — including from the 0444 `docker secret` produces
-  by default. `init-secrets.sh` gets this right for you.
+* **The master key file must not be readable by group or other.** Helm refuses
+  to start otherwise — including from the 0444 that `docker secret` produces by
+  default. It must also be owned by whoever Helm runs as: uid 10001 in the
+  bundled images, your service account otherwise. `init-secrets.sh` gets both
+  right for the Compose stack.
 * **Decide your sign-in story before you invite anybody.** Entra and local
   passwords both work, and both produce the same revocable session. Keep a
   local password on at least one administrator — it is what gets you in when
@@ -350,7 +367,24 @@ curl -X POST https://helm.example.com/api/secrets/$ID/reveal \
 
 ## Next steps
 
-The web interface, and the workers the schema is already shaped for: the
-expiry-alert dispatcher reading `alert_rule`/`alert_event`, the RMM/PSA sync
-using `external_identity` correlation, the audit-chain anchoring job, and the
-compliance export engine behind `export_job`'s four-eyes approval.
+The engine, the API, the web interface, the three workers, the export engine
+and the on-premises deployment are all in place; `docs/architecture/` covers
+each in turn.
+
+What is deliberately left open:
+
+* **RMM/PSA adapters are configuration, not hand-written clients.** The sync
+  engine is complete and vendor-independent — `external_identity` correlation,
+  manual-edit protection, payload hashing, backoff. Vendor specifics live in
+  `integration_connection.config` via a configurable REST adapter, with
+  `registerProvider()` for the cases that need a real client. Writing six
+  clients against six APIs with no live tenant of any of them produces six
+  plausible-looking files wrong in six different ways.
+* **Audit anchoring writes a file receipt.** Pointing it at an append-only
+  store — object lock, a WORM share, a timestamping authority — is a
+  deployment decision, and the runbook says what the default does and does not
+  prove.
+* **Self-service password reset needs a delivery channel.** Without
+  `HELM_RESET_DELIVERY_URL` the endpoint refuses rather than accepting the
+  request and dropping the mail. The administrator-issued path works with no
+  mail server at all, which is the one that matters during an outage.

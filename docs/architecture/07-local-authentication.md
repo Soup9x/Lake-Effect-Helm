@@ -53,8 +53,8 @@ statement log, and `pgcrypto`'s `crypt()` offers nothing stronger than bcrypt.
 The database stores an opaque PHC string and never inspects it beyond a shape
 check.
 
-Throttling is **not** in Redis, equally deliberately. Redis is optional in this
-product precisely so correctness never depends on it, and a rate limit that
+Throttling is **not** in a cache, equally deliberately. Helm ships no cache
+tier precisely so correctness never depends on one, and a rate limit that
 silently stops limiting when a cache is unavailable is not a rate limit.
 
 ---

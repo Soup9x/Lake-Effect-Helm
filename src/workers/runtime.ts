@@ -11,7 +11,8 @@
  *    lock costs nothing, is released automatically if the process dies, and —
  *    the real reason — needs no second piece of infrastructure to be correct.
  *    A Redis lock would make Redis a dependency of CORRECTNESS rather than of
- *    throughput, on a deployment where nobody is monitoring Redis.
+ *    throughput, on a deployment where nobody is monitoring Redis. Helm
+ *    therefore ships no broker at all; there is nothing to configure.
  *
  * 2. THE SCHEDULER IS A TICK, NOT A CRON DAEMON.
  *    Each job declares how often it should run; the runtime wakes on a short

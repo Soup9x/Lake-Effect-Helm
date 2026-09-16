@@ -201,7 +201,7 @@ image layer even though `deploy/` is inside the build context.
 
 ### 1.4 Network and firewall
 
-Only Caddy publishes ports. Postgres, the web tier, the worker and Redis are
+Only Caddy publishes ports. Postgres, the web tier and the worker are
 reachable *only* on the internal Compose network.
 
 | Port | Service | Purpose |
@@ -288,7 +288,6 @@ touch:
 | `HELM_KEK_PROVIDER` | `local-keyfile` | You want the key off this host — see the Vault section of the operations runbook |
 | `AUTH_MICROSOFT_ENTRA_ID_*` | empty | You are wiring SSO |
 | `HELM_RESET_DELIVERY_URL` | empty | You want self-service password reset by email |
-| `REDIS_URL` | empty | You need queue throughput — Helm is correct without it |
 
 Leave `HELM_TRUSTED_PROXY_HOPS=1` alone unless you put another proxy in front
 of Caddy. It is how Helm finds the real client address for rate limiting and
@@ -359,7 +358,6 @@ question with a useful answer:
 | `web` | `GET /api/health`, requires `"status":"ok"` | HTTP is serving **and** the app pool reaches the database | That TLS works, or that Entra is configured |
 | `worker` | `SELECT 1` as `helm_worker` | The database is reachable and the worker's own role still authenticates | That jobs are making progress |
 | `caddy` | `wget https://127.0.0.1/api/health` with a `Host:` header | TLS terminates **and** Caddy can reach the web tier — the whole browser path | That clients trust the certificate |
-| `redis` | `redis-cli ping` | Redis is answering | — |
 
 Three details worth knowing, because each one was a bug before it was a
 feature:
@@ -498,7 +496,6 @@ Add further tenants and users through the application, not by re-running this.
 | --- | --- | --- |
 | `bootstrap` | `docker compose --profile bootstrap run --rm bootstrap …` | First tenant and administrator |
 | `maintenance` | `docker compose --profile maintenance run --rm rotate-kek --reason "…"` | Re-wrap every tenant DEK onto a new master key version |
-| `queue` | `docker compose --profile queue up -d` | Add Redis for queue throughput |
 
 ---
 
@@ -969,7 +966,6 @@ docker compose down -v                             # stop and DESTROY every volu
 docker compose pull && docker compose up -d --build # upgrade
 docker compose --profile bootstrap   run --rm bootstrap  --tenant … --slug … --admin-email …
 docker compose --profile maintenance run --rm rotate-kek --reason "quarterly rotation"
-docker compose --profile queue up -d               # add Redis
 ```
 
 `docker compose down -v` deletes the database, the passphrases and Caddy's CA.
@@ -985,7 +981,6 @@ read the old data.
 | 443 | caddy → web:3000 | `HELM_HTTPS_PORT` |
 | 5432 | postgres (internal only) | — |
 | 3000 | web (internal only) | — |
-| 6379 | redis (internal only, `queue` profile) | — |
 
 ### Paths inside containers
 

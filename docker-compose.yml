@@ -92,7 +92,6 @@ x-helm-env: &helm-env
   HELM_AUDIT_ANCHOR_DIR: /var/lib/helm/anchors
   HELM_AUDIT_RETENTION_DAYS: "2555"
 
-  REDIS_URL: ${REDIS_URL:-}
   HELM_SEARCH_BACKEND: postgres
   HELM_LOG_LEVEL: ${HELM_LOG_LEVEL:-info}
 
@@ -392,28 +391,6 @@ services:
       # and reasonably concludes the install failed.
       web:
         condition: service_healthy
-
-  # ---------------------------------------------------------------------------
-  # Redis — optional, `--profile queue`
-  #
-  # Helm does NOT need Redis to be correct. Mutual exclusion between worker
-  # replicas is a Postgres advisory lock, precisely so that correctness does
-  # not depend on a second service nobody on-premises is monitoring. Redis buys
-  # throughput for high-volume queues; start without it.
-  # ---------------------------------------------------------------------------
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    profiles: ["queue"]
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-    expose:
-      - "6379"
 
 volumes:
   postgres-data:

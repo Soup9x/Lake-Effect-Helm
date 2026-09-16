@@ -85,12 +85,11 @@ COPY --from=builder --chown=helm:helm /app/.next/static ./.next/static
 # change.
 COPY --from=builder --chown=helm:helm /app/public ./public
 
-# The worker bundle and the two runtime dependencies deliberately left external
-# to it (postgres.js resolves its own protocol modules at run time; bullmq
-# carries optional native bindings).
+# The worker bundle and the one runtime dependency deliberately left external to
+# it: postgres.js resolves its own protocol modules at run time and does not
+# survive bundling.
 COPY --from=builder --chown=helm:helm /app/dist/worker.mjs ./dist/worker.mjs
 COPY --from=builder --chown=helm:helm /app/node_modules/postgres ./node_modules/postgres
-COPY --from=builder --chown=helm:helm /app/node_modules/bullmq ./node_modules/bullmq
 
 # Writable state. Declared here so the directories exist with the right owner
 # even when an operator forgets to mount a volume — the failure is then "no

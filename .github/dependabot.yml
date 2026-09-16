@@ -1,0 +1,57 @@
+# =============================================================================
+# Dependency updates
+#
+# This repository holds the code that decrypts every client credential an MSP
+# has. "We will notice the next advisory when somebody remembers to run
+# `pnpm audit`" is not a plan, and the CI audit job is deliberately
+# non-blocking, so nothing else raises a hand on its own.
+#
+# Version updates are MONTHLY and grouped, because a credential vault does not
+# benefit from a stream of individual bumps nobody reviews properly. Security
+# updates are not governed by this schedule — Dependabot opens those as soon as
+# an advisory lands, which is the part that matters here.
+# =============================================================================
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the things that move together anyway, so review is a single
+      # pass against a single CI run.
+      react:
+        patterns: ['react', 'react-dom', '@types/react', '@types/react-dom', 'next']
+      radix:
+        patterns: ['@radix-ui/*']
+      tooling:
+        patterns: ['typescript', 'vitest', '@vitest/*', 'esbuild', 'drizzle-kit', 'tailwindcss', '@tailwindcss/*', 'postcss']
+      # Anything that reaches a running server, together.
+      runtime:
+        patterns: ['drizzle-orm', 'postgres', 'next-auth', '@auth/*', '@node-rs/*', 'ajv', 'ajv-formats', 'zod', 'tsx']
+    ignore:
+      # Pinned deliberately: vitest 5 does not honour this suite's
+      # fileParallelism setting, so all nine integration files spawn their own
+      # worker and race to drop the same database. Revisit when that is fixed,
+      # not when a bot asks.
+      - dependency-name: vitest
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ['*']
+
+  # The Dockerfile pins node:22-alpine. A base image that stops receiving
+  # patches is the quietest way to ship a vulnerable runtime.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
