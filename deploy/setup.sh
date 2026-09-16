@@ -140,20 +140,63 @@ confirm() {
   case "$answer" in [yY]|[yY][eE][sS]) return 0 ;; *) return 1 ;; esac
 }
 
-# Set KEY=VALUE in .env, replacing any existing line, preserving file mode.
+# Every secret this deployment has lives in .env, so rewriting it is the most
+# dangerous thing this script does. The write is atomic: a temp file NEXT TO
+# .env (same filesystem, so rename() is atomic), given .env's mode and owner,
+# checked, and only then moved into place.
+#
+# The earlier form was `awk ... > tmp; cat tmp > "$ENV_FILE"`, which truncates
+# .env and then refills it. Anything that interrupts the refill — a full disk,
+# a signal, ^C — leaves a PREFIX of the file. HELM_PUBLIC_HOST and
+# HELM_PUBLIC_URL are its first two lines, so the surviving prefix looks like a
+# valid .env and every database password is gone. On a running deployment that
+# is unrecoverable from the file alone.
+#
 # awk rather than sed: the value is never treated as a pattern or a template,
 # so a URL full of slashes and ampersands cannot corrupt the file.
 set_env() {
   local key=$1 value=$2 tmp
-  tmp=$(mktemp)
-  KEY="$key" VALUE="$value" awk '
+  tmp="${ENV_FILE}.tmp.$$"
+
+  # Inherit .env's permissions BEFORE anything secret is written into it.
+  : > "$tmp"
+  chmod --reference="$ENV_FILE" "$tmp" 2>/dev/null || chmod 0600 "$tmp"
+  chown --reference="$ENV_FILE" "$tmp" 2>/dev/null || true
+
+  if ! KEY="$key" VALUE="$value" awk '
     BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; seen = 0 }
     index($0, k "=") == 1 { if (!seen) { print k "=" v; seen = 1 } ; next }
     { print }
     END { if (!seen) print k "=" v }
-  ' "$ENV_FILE" > "$tmp"
-  cat "$tmp" > "$ENV_FILE"   # >, not mv: keeps the original 0600 and owner
-  rm -f "$tmp"
+  ' "$ENV_FILE" > "$tmp"; then
+    rm -f "$tmp"
+    die "failed to rewrite $ENV_FILE (setting $key). The original is untouched."
+  fi
+
+  # A rewrite that lost lines means the write was short. Refuse it rather than
+  # moving a truncated file over the real one.
+  local before after
+  before=$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" || true)
+  after=$(grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' "$tmp" || true)
+  if [ "$after" -lt "$before" ]; then
+    rm -f "$tmp"
+    die "rewriting $ENV_FILE would have dropped variables ($before -> $after).
+    Refusing, and the original is untouched. Check free disk space."
+  fi
+
+  mv -f "$tmp" "$ENV_FILE"
+}
+
+# The variables without which the stack cannot start. Echoes any that are
+# missing or empty, one per line.
+env_missing_secrets() {
+  local k
+  for k in AUTH_SECRET HELM_BLIND_INDEX_KEY_B64 \
+           HELM_DB_PASSWORD_SUPERUSER HELM_DB_PASSWORD_APP \
+           HELM_DB_PASSWORD_AUTH HELM_DB_PASSWORD_KEY_ADMIN \
+           HELM_DB_PASSWORD_AUDITOR HELM_DB_PASSWORD_WORKER; do
+    [ -n "$(get_env "$k" 2>/dev/null || true)" ] || printf '%s\n' "$k"
+  done
 }
 
 get_env() {
@@ -278,6 +321,31 @@ secrets() {
   step "2/5  Keys and passwords"
 
   if [ -e "$KEY_FILE" ] && [ -e "$ENV_FILE" ]; then
+    # Existence is not provisioning. A .env that exists but has lost its
+    # secrets passes this step happily and then fails in phase 4 with forty
+    # lines of compose interpolation errors that name the symptom and not the
+    # cause. Check the contents here, where the remedy is obvious.
+    local missing
+    missing=$(env_missing_secrets)
+    if [ -n "$missing" ]; then
+      printf '\n'
+      warn "$ENV_FILE exists but is missing values it must have:"
+      printf '%s\n' "$missing" | sed 's/^/        /'
+      printf '\n'
+      die "this .env is incomplete — most likely a rewrite was interrupted.
+
+    If NO database has started yet, nothing is encrypted and it is safe to
+    start over:
+
+        docker compose down -v
+        rm -f '$ENV_FILE' '$KEY_FILE'
+        sudo ./deploy/setup.sh
+
+    If Helm HAS stored anything, do NOT delete the master key: it is the only
+    thing that can read the database. Restore .env from your backup instead,
+    or recover the passwords from the running postgres volume.
+    See docs/deployment/docker-on-prem.md §7."
+    fi
     ok "already provisioned — leaving the master key and .env untouched"
     note "Overwriting the master key would make every stored credential"
     note "permanently unreadable, so this step never runs twice."
@@ -290,6 +358,11 @@ secrets() {
   else
     info "generating the master key ring and every database password..."
     "$REPO_ROOT/deploy/init-secrets.sh" >/dev/null
+    local born_missing
+    born_missing=$(env_missing_secrets)
+    [ -z "$born_missing" ] || die "init-secrets.sh finished but $ENV_FILE is missing:
+$(printf '%s\n' "$born_missing" | sed 's/^/        /')
+    Check free disk space, then remove '$ENV_FILE' and '$KEY_FILE' and re-run."
     ok "wrote deploy/secrets/master.key (0400, uid ${HELM_UID}) and .env (0600)"
   fi
 

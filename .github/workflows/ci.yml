@@ -222,6 +222,74 @@ jobs:
           echo "  ok    resolves; failed on the database as expected"
 
   # ---------------------------------------------------------------------------
+  # The install, actually installed.
+  #
+  # `images` proves the images build. It does not prove the stack comes UP, and
+  # that gap cost a real first install: Caddy's healthcheck requested
+  # https://127.0.0.1/api/health, which sends no SNI (RFC 6066 forbids IP
+  # addresses there), so Caddy could not choose a certificate and killed the
+  # handshake with alert 80. Caddy was serving browsers correctly the whole
+  # time — only the check was wrong — and `up --wait` failed an install that
+  # had succeeded.
+  #
+  # Nothing short of running the real entry point would have caught that. So
+  # this job runs deploy/setup.sh unattended, exactly as the guide tells an
+  # operator to, and then asks a browser's question through Caddy.
+  # ---------------------------------------------------------------------------
+  stack:
+    name: The stack comes up
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: sudo ./deploy/setup.sh
+        run: |
+          sudo ./deploy/setup.sh --yes \
+            --host        helm.ci.internal \
+            --tenant      "CI Managed Services" \
+            --slug        ci-managed \
+            --admin-email admin@ci.internal \
+            --admin-name  "CI Admin"
+
+      - name: Every container reports healthy
+        run: |
+          sudo docker compose ps
+          bad=0
+          for c in $(sudo docker compose ps -q); do
+            name=$(sudo docker inspect --format '{{.Name}}' "$c")
+            health=$(sudo docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$c")
+            printf '  %-40s %s\n' "$name" "$health"
+            case "$health" in
+              healthy|none) ;;
+              *) bad=1; sudo docker inspect --format '{{json .State.Health}}' "$c" ;;
+            esac
+          done
+          [ "$bad" -eq 0 ] || { echo "  FAIL  a container is not healthy"; exit 1; }
+
+      # The question a browser asks: TLS terminates at Caddy with a certificate
+      # it could actually select, and the proxy reaches the web tier behind it.
+      - name: A browser can reach the sign-in page through Caddy
+        run: |
+          code=$(curl -sk -o /dev/null -w '%{http_code}' \
+            --resolve helm.ci.internal:443:127.0.0.1 \
+            https://helm.ci.internal/sign-in)
+          echo "  /sign-in -> $code"
+          [ "$code" = "200" ] || { echo "  FAIL  expected 200"; exit 1; }
+
+          body=$(curl -sk --resolve helm.ci.internal:443:127.0.0.1 \
+            https://helm.ci.internal/api/health)
+          echo "  /api/health -> $body"
+          case "$body" in
+            *'"status":"ok"'*) echo "  ok    database reachable from the web tier" ;;
+            *) echo "  FAIL  health is not ok"; exit 1 ;;
+          esac
+
+      - name: Tear down
+        if: always()
+        run: sudo docker compose down -v --remove-orphans || true
+
+  # ---------------------------------------------------------------------------
   # Advisory. Non-blocking on purpose — see the note below.
   # ---------------------------------------------------------------------------
   audit:
