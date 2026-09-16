@@ -1,9 +1,10 @@
-import { KeyRound, Plug, ShieldCheck, Bot } from 'lucide-react';
+import { KeyRound, Plug, ShieldCheck, Bot, Building } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChangePasswordCard } from '@/components/change-password-card';
+import { RenameTenant } from '@/components/rename-tenant';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime, humanise } from '@/lib/ui/format';
@@ -65,8 +66,8 @@ interface CredentialRow {
 export default async function SettingsPage() {
   const identity = await getServerIdentity();
 
-  const { keys, integrations, workers, credential } = await withTenant(actorOf(identity), async (tx) => {
-    const [keyRows, integrationRows, workerRows, credentialRows] = await Promise.all([
+  const { keys, integrations, workers, credential, tenant } = await withTenant(actorOf(identity), async (tx) => {
+    const [keyRows, integrationRows, workerRows, credentialRows, tenantRows] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -84,12 +85,25 @@ export default async function SettingsPage() {
       tx<CredentialRow[]>`
         SELECT must_change, password_changed_at FROM v_my_local_credential
       `,
+      // tenant_rls_select restricts this to the current tenant, so no
+      // predicate is needed and adding one would imply the policy were
+      // optional. can_rename mirrors the route's permission so the control is
+      // only offered to somebody it would work for.
+      tx<{ name: string; slug: string; can_rename: boolean }[]>`
+        SELECT t.name, t.slug,
+               EXISTS (SELECT 1 FROM membership m
+                       JOIN role_permission rp ON rp.role_key = m.role_key
+                       WHERE m.user_id = ${identity.actorId}::uuid
+                         AND rp.permission_key = 'tenant:write') AS can_rename
+        FROM tenant t
+      `,
     ]);
     return {
       keys: keyRows,
       integrations: integrationRows,
       workers: workerRows,
       credential: credentialRows[0] ?? null,
+      tenant: tenantRows[0] ?? null,
     };
   });
 
@@ -108,6 +122,26 @@ export default async function SettingsPage() {
           mustChange={credential?.must_change ?? false}
           passwordChangedAt={credential ? credential.password_changed_at.toISOString() : null}
         />
+
+        {tenant && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Building className="size-4 text-ink-faint" aria-hidden /> This MSP
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {tenant.can_rename ? (
+                <RenameTenant currentName={tenant.name} slug={tenant.slug} />
+              ) : (
+                <div>
+                  <div className="text-ink">{tenant.name}</div>
+                  <div className="text-xs text-ink-faint">{tenant.slug}</div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         <Card className={developmentKey ? 'border-danger/40' : undefined}>
           <CardHeader>
