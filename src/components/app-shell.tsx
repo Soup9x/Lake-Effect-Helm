@@ -14,7 +14,9 @@ import {
 import { TenantSwitcher } from './tenant-switcher';
 import type { ServerIdentity } from '@/lib/auth/server-identity';
 import { Badge } from './ui/badge';
+import { SignOutButton } from './sign-out-button';
 import { initials } from '@/lib/ui/format';
+import { isClientRole } from '@/lib/ui/roles';
 
 interface NavItem {
   href: string;
@@ -43,9 +45,6 @@ const NAV: NavItem[] = [
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
-/** Roles that are client-side rather than MSP staff. */
-const CLIENT_ROLES = new Set(['client_admin', 'client_read_only']);
-
 const HIDDEN_FROM_CLIENTS = new Set(['/audit', '/settings']);
 
 export function AppShell({
@@ -55,7 +54,7 @@ export function AppShell({
   identity: ServerIdentity;
   children: ReactNode;
 }) {
-  const isClient = CLIENT_ROLES.has(identity.roleKey);
+  const isClient = isClientRole(identity.roleKey);
   const items = NAV.filter((item) => !(isClient && HIDDEN_FROM_CLIENTS.has(item.href)));
 
   return (
@@ -102,6 +101,7 @@ export function AppShell({
               <Badge tone="brand">Co-managed access</Badge>
             </div>
           )}
+          <SignOutButton />
         </div>
       </aside>
 

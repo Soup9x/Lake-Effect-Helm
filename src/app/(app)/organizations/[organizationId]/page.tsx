@@ -4,6 +4,9 @@ import { KeyRound, MapPin, Users } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
+import { NewSecretForm } from '@/components/new-secret-form';
+import { RenameOrganization } from '@/components/rename-organization';
+import { isClientRole } from '@/lib/ui/roles';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -111,6 +114,7 @@ export default async function OrganizationPage({
   if (!data) notFound();
 
   const { organization, sites, contacts, assets, credentials, expiries } = data;
+  const canWrite = !isClientRole(identity.roleKey);
 
   return (
     <>
@@ -122,12 +126,25 @@ export default async function OrganizationPage({
             .join(' · ') || undefined
         }
         actions={
-          <Button asChild variant="secondary" size="sm">
-            <Link href={`/exports?organizationId=${organization.id}`}>Export documentation</Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            {canWrite && (
+              <RenameOrganization
+                organizationId={organization.id}
+                currentName={organization.name}
+              />
+            )}
+            <Button asChild variant="secondary" size="sm">
+              <Link href={`/exports?organizationId=${organization.id}`}>Export documentation</Link>
+            </Button>
+          </div>
         }
       />
       <PageBody>
+        {canWrite && (
+          <div className="mb-4">
+            <NewSecretForm organizationId={organization.id} />
+          </div>
+        )}
         <div className="grid gap-4 lg:grid-cols-3">
           <Card>
             <CardHeader>

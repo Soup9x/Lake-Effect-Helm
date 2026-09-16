@@ -6,6 +6,8 @@ import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { NewOrganizationForm } from '@/components/new-organization-form';
+import { isClientRole } from '@/lib/ui/roles';
 
 interface OrganizationRow {
   id: string;
@@ -30,6 +32,8 @@ interface OrganizationRow {
  */
 export default async function OrganizationsPage() {
   const identity = await getServerIdentity();
+
+  const canWrite = !isClientRole(identity.roleKey);
 
   const organizations = await withTenant(actorOf(identity), async (tx) => {
     return tx<OrganizationRow[]>`
@@ -56,6 +60,7 @@ export default async function OrganizationsPage() {
       <PageHeader
         title="Clients"
         description="Every organisation documented in this tenant, and what is in each."
+        actions={canWrite ? <NewOrganizationForm /> : undefined}
       />
       <PageBody>
         <Card>
