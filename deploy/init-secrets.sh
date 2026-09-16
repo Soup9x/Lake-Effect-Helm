@@ -160,12 +160,6 @@ HELM_DB_PASSWORD_KEY_ADMIN=$(pw)
 HELM_DB_PASSWORD_AUDITOR=$(pw)
 HELM_DB_PASSWORD_WORKER=$(pw)
 
-# --- Optional -------------------------------------------------------------
-# Redis is NOT required. Worker mutual exclusion is a Postgres advisory lock,
-# so correctness does not depend on it. Set this and run with
-# \`--profile queue\` only if you need queue throughput.
-REDIS_URL=
-
 # debug | info | warn | error
 HELM_LOG_LEVEL=info
 

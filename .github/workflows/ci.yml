@@ -28,9 +28,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  PNPM_VERSION: '10'
-
 jobs:
   # ---------------------------------------------------------------------------
   # Fast feedback: no database needed, so this answers in about a minute.
@@ -41,9 +38,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No version input: package.json's `packageManager` is the single source
+      # of truth, so CI cannot install a different pnpm than the Dockerfile.
       - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - uses: actions/setup-node@v4
         with:
@@ -111,9 +108,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No version input: package.json's `packageManager` is the single source
+      # of truth, so CI cannot install a different pnpm than the Dockerfile.
       - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - uses: actions/setup-node@v4
         with:
@@ -156,6 +153,75 @@ jobs:
           pnpm db:drift
 
   # ---------------------------------------------------------------------------
+  # The images, because twice now a green CI has shipped an image that could not
+  # be built. `next build` reading the environment at module scope passed here
+  # and failed in Docker; then corepack resolved a pnpm newer than the one this
+  # workflow pins and `pnpm install` turned an ignored-build warning into a hard
+  # error. Neither was reachable from any test.
+  #
+  # Building the real targets is the only check that answers the question an
+  # operator actually asks: does `docker compose up -d --build` work.
+  # ---------------------------------------------------------------------------
+  images:
+    name: Docker images build and run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the runtime image
+        run: docker build --target runtime -t helm-runtime:ci .
+
+      - name: Build the migrate image
+        run: docker build --target migrate -t helm-migrate:ci .
+
+      # @node-rs/argon2 ships prebuilt native binaries per platform. Every local
+      # password in Helm goes through it, and a musl binary that does not load
+      # would take the break-glass sign-in with it.
+      - name: The argon2 native binary loads on musl
+        run: |
+          docker run --rm helm-runtime:ci node -e '
+            const argon2 = require("@node-rs/argon2");
+            argon2.hash("correct horse battery staple").then((h) => {
+              if (!h.startsWith("$argon2id$")) { console.error("unexpected:", h); process.exit(1); }
+              console.log("  ok  argon2id:", h.slice(0, 32));
+            }).catch((e) => { console.error(e); process.exit(1); });
+          '
+
+      - name: The worker bundle is in the runtime image
+        run: docker run --rm helm-runtime:ci test -f dist/worker.mjs
+
+      # The migrate image holds SUPERUSER credentials. It must not also carry
+      # the test runner and the build toolchain.
+      #
+      # Both the hoisted path and pnpm's store are checked: a top-level lookup
+      # alone would pass for a package that is merely not hoisted, which is not
+      # the same as absent. (esbuild is deliberately not in this list — tsx
+      # depends on it, and tsx is the migrate image's runtime.)
+      - name: The migrate image ships no dev toolchain
+        run: |
+          for pkg in vitest typescript drizzle-kit @vitest/mocker; do
+            found=$(docker run --rm helm-migrate:ci sh -c \
+              "ls -d node_modules/$pkg node_modules/.pnpm/*$pkg@* 2>/dev/null | head -3")
+            if [ -n "$found" ]; then
+              echo "  FAIL  $pkg is present in the migrate image:"; echo "$found"; exit 1
+            fi
+            echo "  ok    $pkg absent"
+          done
+
+      # No database here, so this must fail on the CONNECTION, never on module
+      # resolution — a resolution error means the production-only tree is
+      # missing something the entry points import.
+      - name: The migrate entry point resolves against the production-only tree
+        run: |
+          out=$(docker run --rm -e PGHOST=127.0.0.1 -e PGPORT=1 -e PGCONNECT_TIMEOUT=3 \
+                  helm-migrate:ci node_modules/.bin/tsx db/migrate.ts --status 2>&1 || true)
+          echo "$out"
+          if echo "$out" | grep -qiE "cannot find module|ERR_MODULE_NOT_FOUND|ERR_PACKAGE_PATH_NOT_EXPORTED"; then
+            echo "  FAIL  module resolution broke without the dev tree"; exit 1
+          fi
+          echo "  ok    resolves; failed on the database as expected"
+
+  # ---------------------------------------------------------------------------
   # Advisory. Non-blocking on purpose — see the note below.
   # ---------------------------------------------------------------------------
   audit:
@@ -176,9 +242,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No version input: package.json's `packageManager` is the single source
+      # of truth, so CI cannot install a different pnpm than the Dockerfile.
       - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
 
       - uses: actions/setup-node@v4
         with:

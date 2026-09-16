@@ -99,7 +99,7 @@ duplicate assets get created. An advisory lock costs nothing, is released
 automatically if the process dies, and — the real reason — needs no second piece
 of infrastructure to be *correct*. A Redis lock would make Redis a dependency of
 correctness rather than of throughput, on a deployment where nobody is
-monitoring Redis. `REDIS_URL` and BullMQ remain available for throughput.
+monitoring Redis. Helm therefore ships no broker at all.
 
 The lock is taken on a **reserved** connection held for the whole job. Taking it
 on a pooled connection and releasing it on a different one is a silent no-op

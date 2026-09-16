@@ -25,9 +25,9 @@ await build({
   outfile: resolve(root, 'dist/worker.mjs'),
   sourcemap: true,
   // postgres.js resolves its own protocol modules at runtime and does not
-  // survive bundling; bullmq pulls in optional native bindings. Both stay
-  // external and are installed in the image as real dependencies.
-  external: ['postgres', 'bullmq'],
+  // survive bundling, so it stays external and is installed in the image as a
+  // real dependency.
+  external: ['postgres'],
   // esbuild does not read tsconfig `paths` for aliases used across the tree,
   // so they are declared here. Keep in step with tsconfig.json.
   alias: {

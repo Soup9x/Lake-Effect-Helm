@@ -201,9 +201,9 @@ What is enforced, so you do not have to:
   trigger on demand is a denial of service against the break-glass account, and
   attempts made *while* locked do not extend it.
 * **Rate limiting per account and per source address** (ten and thirty failures
-  in fifteen minutes). Both live in PostgreSQL, not Redis — Redis is optional in
-  this stack, and a rate limit that stops limiting when a cache is unavailable is
-  not a rate limit.
+  in fifteen minutes). Both live in PostgreSQL, not a cache — this stack ships
+  no cache tier, and a rate limit that stops limiting when a cache is unavailable
+  is not a rate limit.
 * An administrator holding `user:write` can clear a lockout without changing the
   password, which during an outage is considerably faster than a reset.
 
@@ -495,11 +495,7 @@ docker compose run --rm worker node dist/worker.mjs --once
 every job takes a Postgres advisory lock, so exactly one replica does the work
 and the others skip that tick. Mutual exclusion is deliberately *not* a Redis
 lock — correctness should not depend on a service nobody on-premises is
-monitoring.
-
-**Redis is optional** and off by default. Start it with
-`docker compose --profile queue up -d` and set `REDIS_URL` only if you need
-queue throughput.
+monitoring. There is no queue broker in the stack and nothing to configure.
 
 ### Backups
 
@@ -568,8 +564,6 @@ Stated plainly so they are decisions rather than surprises.
   a short banned list, but does not consult Have I Been Pwned or an
   equivalent. Front the deployment with one if that matters to you.
 - **The anchor volume is not a witness by default.** §7.
-- **Redis, if enabled, is unauthenticated** on the internal compose network.
-  Fine while it stays there; add `requirepass` before exposing it.
 - **`docker compose` is not an orchestrator.** There is no rolling deploy:
   `up -d` stops and starts the web tier. For a few seconds of downtime per
   upgrade this is fine, and if it is not, the image runs unchanged under

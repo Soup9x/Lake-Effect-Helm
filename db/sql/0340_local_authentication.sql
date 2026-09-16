@@ -19,8 +19,8 @@
 --     exists for, the mail path is probably down too. Self-service email reset
 --     is available on top, not underneath.
 --
---   * Throttling lives in PostgreSQL, not Redis. Redis is optional in this
---     product precisely so that correctness never depends on it, and a rate
+--   * Throttling lives in PostgreSQL, not Redis. Helm ships no cache tier at
+--     all, precisely so that correctness never depends on one, and a rate
 --     limit that silently stops limiting when a cache is unavailable is not a
 --     rate limit.
 --
