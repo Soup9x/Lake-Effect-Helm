@@ -86,9 +86,53 @@ export function registerPool(role: DbRole, pool: HelmSql): void {
   pools.set(role, pool);
 }
 
+/** Dedicated clients handed out by dedicatedClient(), tracked so they close too. */
+const dedicated: HelmSql[] = [];
+
+/**
+ * A SEPARATE connection for a role, not the shared pool.
+ *
+ * Exists for exactly one caller, and the reason is not stylistic. Drizzle's
+ * postgres-js driver installs its own type handling on whichever connection it
+ * initialises, and postgres.js settles that per connection on first use. Share
+ * one client between Drizzle and the tagged-template queries in this codebase
+ * and whichever runs FIRST decides how the other one reads its data.
+ *
+ * When Drizzle won that race, `timestamptz` came back to raw queries as a
+ * string. Sign-in then returned 500 on `expires.toISOString()`, and — much
+ * worse, because nothing raised — the account lockout compared a string against
+ * a Date in `attemptLocalLogin`, which is always false. The lockout failed
+ * open, silently, and only in a deployment where something had touched the
+ * Auth.js adapter first.
+ *
+ * So the adapter gets its own connection and nothing else shares it.
+ */
+export function dedicatedClient(role: DbRole): HelmSql {
+  const url = process.env[ROLE_ENV[role]];
+
+  // Small on purpose: this serves the Auth.js adapter, not the request path.
+  const options = { ...baseOptions(), max: 5 };
+
+  // A URL wins; otherwise fall back to the standard PG* variables, which
+  // postgres.js reads natively. Same fallback db/migrate.ts uses, and it is
+  // what makes this work on a managed platform that injects PGHOST/PGUSER
+  // rather than a URL — and in tests, which register pools directly.
+  if (!url && !process.env.PGHOST && !process.env.PGDATABASE) {
+    throw new Error(
+      `${ROLE_ENV[role]} is not set. Helm uses a separate database role per ` +
+      `subsystem; see .env.example.`,
+    );
+  }
+
+  const client = url ? postgres(url, options) : postgres(options);
+  dedicated.push(client);
+  return client;
+}
+
 export async function closeAllPools(): Promise<void> {
-  const closing = [...pools.values()].map((p) => p.end({ timeout: 5 }));
+  const closing = [...pools.values(), ...dedicated].map((p) => p.end({ timeout: 5 }));
   pools.clear();
+  dedicated.length = 0;
   await Promise.all(closing);
 }
 
