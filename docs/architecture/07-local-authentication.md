@@ -293,7 +293,7 @@ produce an administrator who cannot sign in, discovered at the worst moment.
 
 ```bash
 pnpm test:sql      # §20-21: privilege separation, one session type
-pnpm test          # tests/integration/local-auth.test.ts, 38 assertions
+pnpm test          # local-auth.test.ts (service) + local-auth-routes.test.ts (HTTP)
 ```
 
 The integration suite runs against a live PostgreSQL 16 cluster and covers, among

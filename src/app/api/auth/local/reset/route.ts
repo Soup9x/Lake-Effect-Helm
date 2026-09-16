@@ -14,7 +14,7 @@
  *              usually down too, so the code is read down the phone. This
  *              branch requires user:write and is audited.
  */
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { publicRoute } from '@/lib/api/handler';
 import { issuePasswordReset } from '@/lib/auth/local';
 import { getResetDelivery, ResetDeliveryUnavailable } from '@/lib/auth/reset-delivery';
@@ -47,7 +47,7 @@ export const POST = publicRoute(async (request) => {
   const ip = clientIp(request);
 
   if (body.outOfBand === true) {
-    return issueOutOfBand(body.email, ip);
+    return issueOutOfBand(body.email, ip, request);
   }
 
   const issued = await issuePasswordReset({ email: body.email, origin: 'self', ip });
@@ -64,7 +64,7 @@ export const POST = publicRoute(async (request) => {
     await getResetDelivery().send({
       email: body.email,
       name: null,
-      resetUrl: resetUrl(issued.token),
+      resetUrl: resetUrl(issued.token, request),
       expiresAt: issued.expiresAt,
       origin: 'self',
     });
@@ -98,7 +98,11 @@ export const POST = publicRoute(async (request) => {
  * share the administrator's current tenant — an MSP administrator must not be
  * able to mint a reset for a rival MSP's account.
  */
-async function issueOutOfBand(email: string, ip: string | undefined): Promise<NextResponse> {
+async function issueOutOfBand(
+  email: string,
+  ip: string | undefined,
+  request: NextRequest,
+): Promise<NextResponse> {
   let identity;
   try {
     identity = await getServerIdentity();
@@ -167,7 +171,7 @@ async function issueOutOfBand(email: string, ip: string | undefined): Promise<Ne
     ok: true,
     // Shown once, never stored, never logged. Read it to the person; do not
     // paste it into a ticket.
-    resetUrl: resetUrl(issued.token),
+    resetUrl: resetUrl(issued.token, request),
     expiresAt: issued.expiresAt.toISOString(),
     warning:
       'This code works once and is shown once. Read it to the person directly — ' +
@@ -175,8 +179,19 @@ async function issueOutOfBand(email: string, ip: string | undefined): Promise<Ne
   });
 }
 
-function resetUrl(token: string): string {
-  const base = process.env.HELM_PUBLIC_URL ?? process.env.AUTH_URL ?? '';
+/**
+ * The absolute URL the person opens.
+ *
+ * HELM_PUBLIC_URL is authoritative, and the compose stack always has it —
+ * AUTH_URL is derived from it and marked required. The request's own origin is
+ * the fallback for a deployment that set neither, because the alternative was a
+ * bare path: an administrator reading a reset link down the phone can do
+ * nothing with "/sign-in/reset?token=...", which would quietly break the one
+ * flow this path exists for.
+ */
+function resetUrl(token: string, request: NextRequest): string {
+  const configured = process.env.HELM_PUBLIC_URL ?? process.env.AUTH_URL ?? '';
+  const base = configured || new URL(request.url).origin;
   return `${base.replace(/\/$/, '')}/sign-in/reset?token=${encodeURIComponent(token)}`;
 }
 

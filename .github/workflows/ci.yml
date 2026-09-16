@@ -29,7 +29,6 @@ permissions:
   contents: read
 
 env:
-  NODE_VERSION: '22'
   PNPM_VERSION: '10'
 
 jobs:
@@ -48,7 +47,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          # .nvmrc is the single source of truth, so CI cannot drift from what
+          # a contributor's `nvm use` picks.
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install
@@ -116,7 +117,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          # .nvmrc is the single source of truth, so CI cannot drift from what
+          # a contributor's `nvm use` picks.
+          node-version-file: .nvmrc
           cache: pnpm
 
       # The runner's bundled client is older than the server. Everything here
@@ -179,7 +182,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          # .nvmrc is the single source of truth, so CI cannot drift from what
+          # a contributor's `nvm use` picks.
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install

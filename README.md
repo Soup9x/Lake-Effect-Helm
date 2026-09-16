@@ -40,7 +40,7 @@ tests/
   unit/         230 tests — RFC 6238 vectors, envelope semantics, schema guard,
                 on-premises key custody, PDF structure, bundle encryption,
                 Argon2id and password policy, session cookie naming.
-  integration/  220 tests against a real cluster as the real roles.
+  integration/  245 tests against a real cluster as the real roles.
                 The UI was additionally driven end to end in a real browser;
                 see docs/architecture/06-web-interface.md §8.
 .github/
