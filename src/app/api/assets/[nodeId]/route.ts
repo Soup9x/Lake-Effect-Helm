@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { tenantRoute } from '@/lib/api/handler';
+import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 
 interface NodeRow {
@@ -89,6 +89,81 @@ export const GET = tenantRoute(
     };
   },
   { permissions: ['asset:read'] },
+);
+
+const patchSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    description: z.string().trim().max(2000).nullable().optional(),
+    siteId: z.guid().nullable().optional(),
+    status: z
+      .enum(['planned', 'active', 'maintenance', 'retired', 'decommissioned'])
+      .optional(),
+    criticality: z.number().int().min(1).max(5).optional(),
+    isInternalOnly: z.boolean().optional(),
+    tags: z.array(z.string().trim().min(1).max(60)).max(30).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
+
+/**
+ * PATCH /api/assets/[nodeId] — rename or re-describe an asset.
+ *
+ * `node_type` is not settable. It is half of the composite key the subtype row
+ * hangs off (`asset_node (id, node_type)`), so changing it would orphan that
+ * row rather than convert it — a device that is suddenly a domain, with device
+ * columns nothing can reach. Documenting the same thing as a different kind is
+ * a new asset and a link, not an edit.
+ *
+ * `organization_id` is not settable either: moving an asset between clients
+ * would move its credentials, its links and its audit history with it, and
+ * "which client was this under when it was revealed" would stop having one
+ * answer.
+ */
+export const PATCH = tenantRoute(
+  async ({ tx, request, identity, params }) => {
+    const nodeId = z.guid().safeParse(params.nodeId);
+    if (!nodeId.success) throw ApiError.invalid('not an asset id');
+
+    const body = await readJson(request, (raw) => {
+      const result = patchSchema.safeParse(raw);
+      if (!result.success) {
+        throw ApiError.invalid('invalid changes', {
+          issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        });
+      }
+      return result.data;
+    });
+
+    let updated: { id: string; name: string; node_type: string } | undefined;
+    try {
+      [updated] = await tx<{ id: string; name: string; node_type: string }[]>`
+        UPDATE asset_node SET
+          name             = COALESCE(${body.name ?? null}, name),
+          description      = ${body.description === undefined ? tx`description` : body.description},
+          site_id          = ${body.siteId === undefined ? tx`site_id` : body.siteId}::uuid,
+          status           = COALESCE(${body.status ?? null}::node_status, status),
+          criticality      = COALESCE(${body.criticality ?? null}, criticality),
+          is_internal_only = COALESCE(${body.isInternalOnly ?? null}, is_internal_only),
+          tags             = COALESCE(${body.tags ?? null}, tags),
+          updated_at       = now(),
+          updated_by       = ${identity.actorId}::uuid
+        WHERE id = ${nodeId.data}::uuid AND archived_at IS NULL
+        RETURNING id, name, node_type::text AS node_type
+      `;
+    } catch (error) {
+      if ((error as { code?: string }).code === '23503') {
+        throw ApiError.invalid('no such site');
+      }
+      throw error;
+    }
+
+    if (!updated) throw ApiError.invalid('no such asset');
+
+    return {
+      asset: { id: updated.id, name: updated.name, nodeType: updated.node_type },
+    };
+  },
+  { permissions: ['asset:write'] },
 );
 
 export const dynamic = 'force-dynamic';

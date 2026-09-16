@@ -5,6 +5,8 @@ import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { NewSecretForm } from '@/components/new-secret-form';
+import { NewSiteForm } from '@/components/new-site-form';
+import { NewAssetForm } from '@/components/new-asset-form';
 import { RenameOrganization } from '@/components/rename-organization';
 import { isClientRole } from '@/lib/ui/roles';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -141,8 +143,13 @@ export default async function OrganizationPage({
       />
       <PageBody>
         {canWrite && (
-          <div className="mb-4">
+          <div className="mb-4 flex flex-wrap gap-2">
             <NewSecretForm organizationId={organization.id} />
+            <NewSiteForm organizationId={organization.id} />
+            <NewAssetForm
+              organizationId={organization.id}
+              sites={sites.map((s) => ({ id: s.id, name: s.name }))}
+            />
           </div>
         )}
         <div className="grid gap-4 lg:grid-cols-3">
