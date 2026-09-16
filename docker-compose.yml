@@ -1,0 +1,435 @@
+# =============================================================================
+# Lake Effect Helm — on-premises deployment
+#
+#   docker compose up -d
+#
+# Read docs/deployment/on-premises.md before the first run. Three things in
+# this file will stop the stack dead if they are skipped, and each is called
+# out where it appears:
+#
+#   1. TLS is not optional. Helm's session cookie is `__Secure-` prefixed in
+#      production, and browsers refuse to send those over plain http. Without
+#      the proxy, sign-in silently fails.
+#   2. The master key file must be mode 0400 and owned by uid 10001. Helm
+#      refuses to start from a key file anyone else on the host can read.
+#   3. Exports and their passphrases live on separate volumes, deliberately.
+#      The whole scheme rests on the two not travelling together.
+#
+# Run `./deploy/init-secrets.sh` once and it handles all three.
+# =============================================================================
+
+name: lake-effect-helm
+
+x-helm-image: &helm-image
+  build:
+    context: .
+    target: runtime
+  image: lake-effect-helm:local
+  restart: unless-stopped
+
+x-helm-env: &helm-env
+  # --- Database -------------------------------------------------------------
+  # Five roles, five connection strings. The separation is the product's
+  # security model, not deployment ceremony: a bug in the request path cannot
+  # reach the auth token store, nothing in the request path can write a key,
+  # and nothing in the request path can enumerate tenants.
+  DATABASE_URL: postgresql://helm_app:${HELM_DB_PASSWORD_APP:?set in .env}@postgres:5432/helm
+  DATABASE_URL_AUTH: postgresql://helm_auth:${HELM_DB_PASSWORD_AUTH:?set in .env}@postgres:5432/helm
+  DATABASE_URL_KEY_ADMIN: postgresql://helm_key_admin:${HELM_DB_PASSWORD_KEY_ADMIN:?set in .env}@postgres:5432/helm
+  DATABASE_URL_AUDITOR: postgresql://helm_auditor:${HELM_DB_PASSWORD_AUDITOR:?set in .env}@postgres:5432/helm
+  DATABASE_URL_WORKER: postgresql://helm_worker:${HELM_DB_PASSWORD_WORKER:?set in .env}@postgres:5432/helm
+
+  # Every request holds a connection for the duration of its transaction,
+  # because the RLS context is set with SET LOCAL. Keep this modest and keep
+  # the sum across services below the server's max_connections (200 below).
+  DATABASE_POOL_MAX: "15"
+  DATABASE_STATEMENT_TIMEOUT_MS: "15000"
+
+  # --- Master key -----------------------------------------------------------
+  # local-keyfile is the simpler of the two on-premises providers: the key is
+  # held by this host, so a stolen database dump is useless, but root on this
+  # box can decrypt everything offline with no record and no revocation point.
+  # To keep the key off this host entirely, switch to vault-transit and point
+  # at an EXTERNAL Vault — see the setup guide. A Vault running in this same
+  # compose stack would defeat the purpose.
+  HELM_KEK_PROVIDER: ${HELM_KEK_PROVIDER:-local-keyfile}
+  HELM_KEK_FILE: /run/helm/master.key
+  HELM_KEK_ID: ${HELM_KEK_ID:-helm-master}
+
+  # Used only when HELM_KEK_PROVIDER=vault-transit. The transit key must have
+  # been created with derived=true; Helm refuses to run without it, because
+  # Vault otherwise accepts and silently ignores the per-tenant context.
+  VAULT_ADDR: ${VAULT_ADDR:-}
+  VAULT_NAMESPACE: ${VAULT_NAMESPACE:-}
+  HELM_VAULT_TRANSIT_MOUNT: ${HELM_VAULT_TRANSIT_MOUNT:-transit}
+  HELM_VAULT_TRANSIT_KEY: ${HELM_VAULT_TRANSIT_KEY:-helm-tenant-kek}
+  VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+  VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+
+  # How long an unwrapped DEK may sit in process memory. Under vault-transit
+  # this is what bounds how long a compromised Helm process yields plaintext
+  # keys after the Vault token is revoked.
+  HELM_DEK_CACHE_TTL_SECONDS: "300"
+  HELM_BLIND_INDEX_KEY_B64: ${HELM_BLIND_INDEX_KEY_B64:?run ./deploy/init-secrets.sh}
+
+  # --- Auth -----------------------------------------------------------------
+  AUTH_SECRET: ${AUTH_SECRET:?run ./deploy/init-secrets.sh}
+  AUTH_URL: ${HELM_PUBLIC_URL:?set in .env}
+  AUTH_TRUST_HOST: "true"
+  # Caddy appends exactly one entry to X-Forwarded-For. The client address is
+  # read that many places from the RIGHT; the leftmost entry is entirely
+  # client-controlled, and trusting it defeats API token IP allowlisting.
+  HELM_TRUSTED_PROXY_HOPS: "1"
+  HELM_STEP_UP_TTL_MINUTES: "15"
+
+  AUTH_MICROSOFT_ENTRA_ID_ID: ${AUTH_MICROSOFT_ENTRA_ID_ID:-}
+  AUTH_MICROSOFT_ENTRA_ID_SECRET: ${AUTH_MICROSOFT_ENTRA_ID_SECRET:-}
+  AUTH_MICROSOFT_ENTRA_ID_ISSUER: ${AUTH_MICROSOFT_ENTRA_ID_ISSUER:-}
+
+  # --- Storage --------------------------------------------------------------
+  HELM_EXPORT_DIR: /var/lib/helm/exports
+  HELM_EXPORT_PASSPHRASE_DIR: /var/lib/helm/passphrases
+  HELM_AUDIT_ANCHOR_DIR: /var/lib/helm/anchors
+  HELM_AUDIT_RETENTION_DAYS: "2555"
+
+  REDIS_URL: ${REDIS_URL:-}
+  HELM_SEARCH_BACKEND: postgres
+  HELM_LOG_LEVEL: ${HELM_LOG_LEVEL:-info}
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16
+  #
+  # 16+ is required: Helm relies on security_invoker views and on 16's
+  # partition-wise behaviour for the audit log.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: helm
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${HELM_DB_PASSWORD_SUPERUSER:?run ./deploy/init-secrets.sh}
+      # Scram over md5, and the roles below are created with it.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+      # Consumed by 10-roles.sh on first initialisation only.
+      HELM_DB_PASSWORD_APP: ${HELM_DB_PASSWORD_APP:?}
+      HELM_DB_PASSWORD_AUTH: ${HELM_DB_PASSWORD_AUTH:?}
+      HELM_DB_PASSWORD_KEY_ADMIN: ${HELM_DB_PASSWORD_KEY_ADMIN:?}
+      HELM_DB_PASSWORD_AUDITOR: ${HELM_DB_PASSWORD_AUDITOR:?}
+      HELM_DB_PASSWORD_WORKER: ${HELM_DB_PASSWORD_WORKER:?}
+    command:
+      - postgres
+      # Five roles across two services, each holding a connection per in-flight
+      # transaction. The default 100 is tight; 200 leaves headroom for psql and
+      # for a migration running alongside live traffic.
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      # Audit rows are never updated, so autovacuum's job here is mostly the
+      # expiration projection and the session tables.
+      - -c
+      - log_min_duration_statement=2000
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs once, on an empty data directory: creates the five runtime roles
+      # WITH passwords, before the migrations run. 0000_bootstrap.sql creates
+      # them without passwords if they are absent, which is correct for a
+      # managed-Postgres deployment and wrong for this one.
+      - ./deploy/postgres/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d helm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    # Not published. Nothing outside this stack has any business reaching the
+    # database directly; use `docker compose exec postgres psql` instead.
+    expose:
+      - "5432"
+
+  # ---------------------------------------------------------------------------
+  # Migrations — one shot, then exit
+  #
+  # Runs as the SUPERUSER, and that is deliberate rather than lazy:
+  # 0000_bootstrap.sql sets per-role and per-database search_path, which needs
+  # privileges no sensible DDL role should hold. It runs once per deploy and
+  # nothing at runtime ever uses this connection string.
+  #
+  # The runner takes an advisory lock and records a sha256 of every applied
+  # file, so two replicas cannot race and an edited migration is refused rather
+  # than silently diverging.
+  # ---------------------------------------------------------------------------
+  migrate:
+    build:
+      context: .
+      target: migrate
+    image: lake-effect-helm-migrate:local
+    restart: "no"
+    environment:
+      DATABASE_URL_MIGRATOR: postgresql://postgres:${HELM_DB_PASSWORD_SUPERUSER:?}@postgres:5432/helm
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # First-run bootstrap — `docker compose run --rm bootstrap ...`
+  #
+  # Under a profile, so it never runs on `up`. After the migrations there is a
+  # schema and nothing in it: Helm is fail-closed, so an empty database is not
+  # half-working, it is inert — every policy denies and there is nobody to sign
+  # in as.
+  #
+  # Built from the migrate target because it needs tsx and the source tree,
+  # which the runtime image deliberately does not carry. It gets the master key
+  # because it mints the tenant's first data key through the KEK provider; a
+  # tenant_data_key row inserted by hand is a wrapped key nothing can unwrap.
+  # ---------------------------------------------------------------------------
+  bootstrap:
+    build:
+      context: .
+      target: migrate
+    image: lake-effect-helm-migrate:local
+    profiles: ["bootstrap"]
+    restart: "no"
+    entrypoint: ["node_modules/.bin/tsx", "scripts/bootstrap.ts"]
+    environment:
+      <<: *helm-env
+      # The root tenant has no INSERT policy for any runtime role, by design —
+      # creating an MSP is a deployment act, not something the application does.
+      DATABASE_URL_MIGRATOR: postgresql://postgres:${HELM_DB_PASSWORD_SUPERUSER:?}@postgres:5432/helm
+    volumes:
+      - ./deploy/secrets/master.key:/run/helm/master.key:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # Key rotation — `docker compose run --rm rotate-kek --reason "..."`
+  #
+  # Also under a profile. Re-wraps every tenant DEK onto the current master key
+  # version; see docs/deployment/on-premises.md §8 for the order, which matters.
+  # ---------------------------------------------------------------------------
+  rotate-kek:
+    build:
+      context: .
+      target: migrate
+    image: lake-effect-helm-migrate:local
+    profiles: ["maintenance"]
+    restart: "no"
+    entrypoint: ["node_modules/.bin/tsx", "scripts/rotate-kek.ts"]
+    environment:
+      <<: *helm-env
+      HELM_MAINTENANCE_ACTOR_ID: ${HELM_MAINTENANCE_ACTOR_ID:-}
+    volumes:
+      - ./deploy/secrets/master.key:/run/helm/master.key:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Web tier
+  # ---------------------------------------------------------------------------
+  web:
+    <<: *helm-image
+    environment:
+      <<: *helm-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # Requires "status":"ok", not merely a 200.
+      #
+      # /api/health answers 200 with {"status":"degraded"} when the database is
+      # unreachable — deliberately, so a load balancer can tell the difference
+      # between "this process is wedged" and "this process is fine but its
+      # dependency is not". A check that only looked at the status code would
+      # therefore report a web tier as healthy while it could not render a
+      # single page, which is worse than no check at all.
+      #
+      # CMD rather than CMD-SHELL: no shell means no quoting to get wrong, and
+      # nothing for the check to accidentally match against itself.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>r.json()).then(j=>process.exit(j.status==='ok'?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      # Next's standalone server is quick, but the first request also opens the
+      # connection pools. 30s is comfortable on a slow disk.
+      start_period: 30s
+    volumes:
+      # A PLAIN BIND MOUNT, not a compose `secret:`. Outside swarm, compose
+      # ignores the uid/gid/mode fields on secrets and the container sees the
+      # host file's permissions — so writing `mode: 0400` there would look like
+      # a control and be none. Helm enforces the mode itself at start-up; the
+      # host file must be 0400 and owned by uid 10001.
+      - ./deploy/secrets/master.key:/run/helm/master.key:ro
+      - helm-exports:/var/lib/helm/exports
+      - helm-anchors:/var/lib/helm/anchors
+    expose:
+      - "3000"
+
+  # ---------------------------------------------------------------------------
+  # Background worker
+  #
+  # Same image, different entry point, so the worker can never be running a
+  # different commit than the web tier. Safe to scale: every job takes a
+  # Postgres advisory lock, so exactly one replica does the work and the others
+  # skip that tick.
+  # ---------------------------------------------------------------------------
+  worker:
+    <<: *helm-image
+    command: ["node", "dist/worker.mjs"]
+    environment:
+      <<: *helm-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./deploy/secrets/master.key:/run/helm/master.key:ro
+      - helm-exports:/var/lib/helm/exports
+      - helm-anchors:/var/lib/helm/anchors
+      # The passphrase volume is mounted ONLY here. The web tier never needs
+      # it: a credential bundle's passphrase is generated at render time, never
+      # stored in the database, and handed over out of band. Mounting it into
+      # the tier that serves downloads would put the file and its key on the
+      # same side of every boundary.
+      - helm-passphrases:/var/lib/helm/passphrases
+    healthcheck:
+      # The worker serves no HTTP, so this asks the only question that has a
+      # useful answer: can it still reach the database as its own role?
+      #
+      # It deliberately does NOT check that the process is alive. The worker is
+      # PID 1 here, so if it dies the container dies and Docker restarts it —
+      # a process check would be answering a question the container lifecycle
+      # already answers. (An earlier version ran `pgrep -f dist/worker.mjs`
+      # under CMD-SHELL, which matched the healthcheck's own `sh -c` command
+      # line and therefore passed unconditionally, including when no worker was
+      # running at all.)
+      #
+      # `postgres` is in the runtime image: the worker bundle leaves it
+      # external because postgres.js resolves its protocol modules at run time.
+      test:
+        - CMD
+        - node
+        - -e
+        - "const p=require('postgres');const s=p(process.env.DATABASE_URL_WORKER,{max:1,connect_timeout:5,onnotice:()=>{}});s`SELECT 1`.then(()=>s.end()).then(()=>process.exit(0)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # TLS terminator — REQUIRED
+  #
+  # Not a convenience. In production Helm sets `useSecureCookies`, so the
+  # session cookie is `__Secure-` prefixed and browsers will not send it over
+  # plain http: without TLS, sign-in appears to work and then every page says
+  # you are signed out.
+  #
+  # Defaults to Caddy's internal CA, which needs no public DNS and no ACME —
+  # right for an on-premises box on an internal network. Its root certificate
+  # has to be trusted on the technicians' machines (see the setup guide), or
+  # swap in your own certificate.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      HELM_PUBLIC_HOST: ${HELM_PUBLIC_HOST:?set in .env, e.g. helm.internal.example.com}
+      HELM_TLS_DIRECTIVE: ${HELM_TLS_DIRECTIVE:-tls internal}
+    ports:
+      - "${HELM_HTTP_PORT:-80}:80"
+      - "${HELM_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      # Only used when HELM_TLS_DIRECTIVE points at your own certificate.
+      - ./deploy/tls:/etc/helm/tls:ro
+    healthcheck:
+      # End to end: TLS terminates here AND the proxy can reach the web tier.
+      # That is the whole request path a browser takes, which is what makes it
+      # worth checking; Caddy's own admin API is off (deploy/Caddyfile) and
+      # would only have proved the process was up.
+      #
+      # --no-check-certificate because `tls internal` mints a certificate from
+      # Caddy's own CA that nothing inside this container trusts. The check is
+      # asking "does the path work", not "is the certificate trusted" — that
+      # second question is answered from a technician's browser, not from here.
+      #
+      # The Host header is what selects the site block; the connection itself
+      # goes to the loopback address.
+      test:
+        - CMD
+        - wget
+        - --no-check-certificate
+        - -q
+        - -O
+        - /dev/null
+        # Quoted: an unquoted "key: value" here is parsed as a YAML mapping,
+        # not a string, and compose rejects the file.
+        - "--header=Host: ${HELM_PUBLIC_HOST:?}"
+        - https://127.0.0.1/api/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Caddy generates its internal CA and leaf certificate on first boot.
+      start_period: 30s
+    depends_on:
+      # service_healthy, not just service_started. Caddy coming up before the
+      # web tier can answer means the first person to load the page gets a 502
+      # and reasonably concludes the install failed.
+      web:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Redis — optional, `--profile queue`
+  #
+  # Helm does NOT need Redis to be correct. Mutual exclusion between worker
+  # replicas is a Postgres advisory lock, precisely so that correctness does
+  # not depend on a second service nobody on-premises is monitoring. Redis buys
+  # throughput for high-volume queues; start without it.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    profiles: ["queue"]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    expose:
+      - "6379"
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
+
+  # Rendered export bundles. Encrypted at rest when they contain credentials.
+  helm-exports:
+
+  # The passphrases for those bundles. A SEPARATE volume, and it must be on a
+  # separate backup set from helm-exports — the entire scheme rests on the
+  # bundle and its passphrase not travelling together. If your backup tool
+  # sweeps every named volume into one archive, exclude one of these two.
+  helm-passphrases:
+
+  # Witnessed audit chain heads. Only as good as the storage behind it: a
+  # volume Helm can rewrite is not a witness. Point this at a WORM mount or an
+  # append-only share for the anchoring to mean anything (setup guide §7).
+  helm-anchors:

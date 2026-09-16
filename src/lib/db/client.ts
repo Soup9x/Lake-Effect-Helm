@@ -1,9 +1,10 @@
 /**
  * Database access.
  *
- * Four roles, four pools. The separation is the point: a bug in the request
- * path cannot reach the auth token store, and nothing in the request path can
- * write a key. See docs/architecture/01-security-model.md §6.
+ * Five roles, five pools. The separation is the point: a bug in the request
+ * path cannot reach the auth token store, nothing in the request path can write
+ * a key, and nothing in the request path can enumerate tenants.
+ * See docs/architecture/01-security-model.md §6.
  *
  * The only supported way to touch tenant data is withTenant(), which opens a
  * transaction, establishes the RLS session context inside it, and guarantees
@@ -28,13 +29,20 @@ type NoCustomTypes = {};
 export type HelmSql = postgres.Sql<NoCustomTypes>;
 export type HelmTx = postgres.TransactionSql<NoCustomTypes>;
 
-export type DbRole = 'app' | 'auth' | 'keyAdmin' | 'auditor';
+/**
+ * `worker` is a member of `app`, so it inherits exactly the request path's table
+ * privileges and RLS policies. What it adds is EXECUTE on the cross-tenant
+ * backlog enumerators in db/sql/0300, which `app` must never hold: anything the
+ * request role can execute is reachable from an HTTP request.
+ */
+export type DbRole = 'app' | 'auth' | 'keyAdmin' | 'auditor' | 'worker';
 
 const ROLE_ENV: Record<DbRole, string> = {
   app: 'DATABASE_URL',
   auth: 'DATABASE_URL_AUTH',
   keyAdmin: 'DATABASE_URL_KEY_ADMIN',
   auditor: 'DATABASE_URL_AUDITOR',
+  worker: 'DATABASE_URL_WORKER',
 };
 
 const pools = new Map<DbRole, HelmSql>();
@@ -78,9 +86,53 @@ export function registerPool(role: DbRole, pool: HelmSql): void {
   pools.set(role, pool);
 }
 
+/** Dedicated clients handed out by dedicatedClient(), tracked so they close too. */
+const dedicated: HelmSql[] = [];
+
+/**
+ * A SEPARATE connection for a role, not the shared pool.
+ *
+ * Exists for exactly one caller, and the reason is not stylistic. Drizzle's
+ * postgres-js driver installs its own type handling on whichever connection it
+ * initialises, and postgres.js settles that per connection on first use. Share
+ * one client between Drizzle and the tagged-template queries in this codebase
+ * and whichever runs FIRST decides how the other one reads its data.
+ *
+ * When Drizzle won that race, `timestamptz` came back to raw queries as a
+ * string. Sign-in then returned 500 on `expires.toISOString()`, and — much
+ * worse, because nothing raised — the account lockout compared a string against
+ * a Date in `attemptLocalLogin`, which is always false. The lockout failed
+ * open, silently, and only in a deployment where something had touched the
+ * Auth.js adapter first.
+ *
+ * So the adapter gets its own connection and nothing else shares it.
+ */
+export function dedicatedClient(role: DbRole): HelmSql {
+  const url = process.env[ROLE_ENV[role]];
+
+  // Small on purpose: this serves the Auth.js adapter, not the request path.
+  const options = { ...baseOptions(), max: 5 };
+
+  // A URL wins; otherwise fall back to the standard PG* variables, which
+  // postgres.js reads natively. Same fallback db/migrate.ts uses, and it is
+  // what makes this work on a managed platform that injects PGHOST/PGUSER
+  // rather than a URL — and in tests, which register pools directly.
+  if (!url && !process.env.PGHOST && !process.env.PGDATABASE) {
+    throw new Error(
+      `${ROLE_ENV[role]} is not set. Helm uses a separate database role per ` +
+      `subsystem; see .env.example.`,
+    );
+  }
+
+  const client = url ? postgres(url, options) : postgres(options);
+  dedicated.push(client);
+  return client;
+}
+
 export async function closeAllPools(): Promise<void> {
-  const closing = [...pools.values()].map((p) => p.end({ timeout: 5 }));
+  const closing = [...pools.values(), ...dedicated].map((p) => p.end({ timeout: 5 }));
   pools.clear();
+  dedicated.length = 0;
   await Promise.all(closing);
 }
 

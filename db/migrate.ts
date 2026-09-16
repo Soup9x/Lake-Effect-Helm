@@ -53,8 +53,69 @@ function connectionTarget(): string | undefined {
   if (process.env.PGHOST || process.env.PGDATABASE) return undefined;
   throw new Error(
     'No connection configured. Set DATABASE_URL_MIGRATOR (or the standard PG* ' +
-    'variables). Migrations must run as the DDL owner (helm_migrator), never as ' +
+    'variables). Migrations must run as a role that is not subject to row-level ' +
+    'security — see assertNotSubjectToForcedRls() below for why — and never as ' +
     'the application role.',
+  );
+}
+
+/**
+ * Refuse to migrate as a role that row-level security applies to.
+ *
+ * This is the guard for a failure with no error message. Every sensitive table
+ * in Helm is FORCE ROW LEVEL SECURITY, which subjects the table OWNER to its
+ * policies too, and the schema's SECURITY DEFINER functions run as whoever
+ * owns them — which is whoever ran the migrations.
+ *
+ * So if migrations run as a role that RLS applies to, every one of those
+ * functions matches zero rows. helm.reveal_secret() returns NULL instead of the
+ * credential. Nothing raises, nothing logs, and the deployment looks fine until
+ * somebody tries to read a password. Verified: a non-superuser owner of a
+ * FORCE-RLS table cannot see its own rows.
+ *
+ * The check is empirical rather than a `rolsuper` lookup, because the property
+ * that matters is "can this role read a FORCE-RLS table", and that can also
+ * come from BYPASSRLS or from an inherited role. A temporary table is enough to
+ * ask the question directly, and it disappears with the session.
+ */
+async function assertNotSubjectToForcedRls(sql: postgres.Sql<Record<string, never>>): Promise<void> {
+  let visible: boolean;
+
+  try {
+    await sql.unsafe(`
+      CREATE TEMP TABLE helm_rls_probe (id integer) ON COMMIT DROP;
+      INSERT INTO helm_rls_probe VALUES (1);
+      ALTER TABLE helm_rls_probe ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE helm_rls_probe FORCE ROW LEVEL SECURITY;
+    `);
+    const [row] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM helm_rls_probe`;
+    visible = (row?.n ?? 0) === 1;
+    await sql.unsafe('DROP TABLE IF EXISTS helm_rls_probe');
+  } catch {
+    // The probe needs TEMP on this database. If it is unavailable the guard
+    // must not become its own failure mode, so fall back to asking the catalog
+    // and only refuse on a clear answer.
+    const [role] = await sql<{ exempt: boolean }[]>`
+      SELECT rolsuper OR rolbypassrls AS exempt FROM pg_roles WHERE rolname = current_user
+    `;
+    if (role?.exempt !== false) return;
+    visible = false;
+  }
+
+  if (visible) return;
+
+  const [who] = await sql<{ current_user: string }[]>`SELECT current_user`;
+  throw new Error(
+    `migrations are running as "${who?.current_user ?? 'unknown'}", which row-level ` +
+    'security applies to.\n\n' +
+    "Helm's tables are FORCE ROW LEVEL SECURITY, and its SECURITY DEFINER " +
+    'functions run as whoever owns them — the role that ran the migrations. A ' +
+    'role that RLS applies to owns functions that match zero rows, so ' +
+    'helm.reveal_secret() would return NULL instead of the credential, with no ' +
+    'error anywhere. The deployment would look healthy and decrypt nothing.\n\n' +
+    'Run migrations as a superuser (what docker-compose.yml does), or as a role ' +
+    'with BYPASSRLS. No RUNTIME role may hold either — that separation is ' +
+    'asserted in db/sql/0220_grants.sql and is unaffected by this.',
   );
 }
 
@@ -81,6 +142,10 @@ async function main(): Promise<void> {
   const sql = target ? postgres(target, options) : postgres(options);
 
   try {
+    // Before any DDL: a schema created by the wrong role is worse than no
+    // schema, because it works until the first secret read.
+    await assertNotSubjectToForcedRls(sql);
+
     await sql.unsafe(`
       CREATE TABLE IF NOT EXISTS helm_migration (
         filename    text PRIMARY KEY,

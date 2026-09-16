@@ -5,6 +5,7 @@
  * them, but they are reachable only from the `helm_auth` connection — see
  * db/sql/0220_grants.sql. Do not import them into request-path code.
  */
+import { sql } from 'drizzle-orm';
 import { bigint, boolean, index, integer, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { bytea, citext, inet, inetArray, textArray, tstz, uuidArray } from './_types';
 import { apiTokenType, membershipStatus } from './enums';
@@ -138,6 +139,15 @@ export const serviceAccount = pgTable('service_account', {
   createdAt: tstz('created_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
   disabledAt: tstz('disabled_at'),
+
+  /**
+   * Reveal purposes this machine identity may use; null means unrestricted.
+   * Enforced inside helm.reveal_secret(), which is what makes it a boundary
+   * rather than a hint. See db/sql/0290_worker_identities.sql.
+   */
+  allowedRevealPurposes: textArray('allowed_reveal_purposes'),
+  /** A Helm-managed worker identity. Its authorisation is fixed by trigger. */
+  isSystem: boolean('is_system').notNull().default(false),
 }, (t) => [uniqueIndex('service_account_name_uk').on(t.tenantId, t.name)]);
 
 export const apiToken = pgTable('api_token', {
@@ -210,3 +220,62 @@ export const ROLE_RANK = {
 } as const satisfies Record<string, number>;
 
 export type RoleKey = keyof typeof ROLE_RANK;
+
+// -----------------------------------------------------------------------------
+// Local authentication (db/sql/0340_local_authentication.sql).
+//
+// Reachable only from the `helm_auth` connection. helm_app holds column grants
+// that exclude password_phc and previous_phc, so a query built from this schema
+// on the app pool will be refused by the database if it selects either — which
+// is the intended outcome, not a bug to work around.
+// -----------------------------------------------------------------------------
+
+export const localCredential = pgTable('local_credential', {
+  userId: uuid('user_id').primaryKey().references(() => appUser.id, { onDelete: 'cascade' }),
+  passwordPhc: text('password_phc').notNull(),
+  algorithm: text('algorithm').notNull().default('argon2id'),
+  passwordChangedAt: tstz('password_changed_at').notNull().defaultNow(),
+  mustChange: boolean('must_change').notNull().default(false),
+  previousPhc: textArray('previous_phc').notNull().default(sql`'{}'`),
+  failedAttempts: integer('failed_attempts').notNull().default(0),
+  lockedUntil: tstz('locked_until'),
+  lastSuccessAt: tstz('last_success_at'),
+  lastFailureAt: tstz('last_failure_at'),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+}, (t) => [index('local_credential_locked_idx').on(t.lockedUntil)]);
+
+export const authAttempt = pgTable('auth_attempt', {
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+  occurredAt: tstz('occurred_at').notNull().defaultNow(),
+  email: citext('email'),
+  userId: uuid('user_id').references(() => appUser.id, { onDelete: 'set null' }),
+  ip: inet('ip'),
+  outcome: text('outcome').notNull(),
+  userAgent: text('user_agent'),
+}, (t) => [
+  index('auth_attempt_email_idx').on(t.email, t.occurredAt),
+  index('auth_attempt_ip_idx').on(t.ip, t.occurredAt),
+  index('auth_attempt_pruning_idx').on(t.occurredAt),
+]);
+
+export const passwordReset = pgTable('password_reset', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => appUser.id, { onDelete: 'cascade' }),
+  tokenSha256: bytea('token_sha256').notNull().unique(),
+  origin: text('origin').notNull(),
+  issuedBy: uuid('issued_by').references(() => appUser.id, { onDelete: 'set null' }),
+  expiresAt: tstz('expires_at').notNull(),
+  usedAt: tstz('used_at'),
+  invalidatedAt: tstz('invalidated_at'),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  createdIp: inet('created_ip'),
+}, (t) => [
+  index('password_reset_user_idx').on(t.userId, t.createdAt),
+  index('password_reset_live_idx').on(t.expiresAt),
+]);
+
+export type LocalCredential = typeof localCredential.$inferSelect;
+export type AuthAttempt = typeof authAttempt.$inferSelect;
+export type PasswordReset = typeof passwordReset.$inferSelect;

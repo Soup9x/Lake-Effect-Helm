@@ -114,14 +114,39 @@ Organisation scope uses an explicit sentinel rather than NULL:
 ### 4.1 Key hierarchy
 
 ```
-KEK — in KMS/Vault, never leaves the HSM boundary
+KEK — the master key. On-premises: HashiCorp Vault, or a key file on this host.
  └─ DEK — one per tenant per generation, stored only wrapped (tenant_data_key)
      └─ AES-256-GCM ciphertext — one row per secret version
 ```
 
 Postgres never sees a plaintext secret or an unwrapped DEK. The database stores
-an opaque envelope; the application asks KMS to unwrap the DEK and decrypts
-in-process.
+an opaque envelope; the application unwraps the DEK and decrypts in-process.
+
+Helm is deployed **on-premises with no cloud KMS**, so the master key comes from
+one of two places, and the difference between them is worth stating plainly
+because it is the difference in what a breach costs:
+
+| Provider | Where the master key lives | Root on the Helm host can… |
+| --- | --- | --- |
+| `vault-transit` | HashiCorp Vault's transit engine, on another host | …use Helm's Vault token until it is revoked. Every unwrap is a Vault audit entry. |
+| `local-keyfile` | A mode-0400 file on the Helm host | …read the master key and decrypt the entire database offline, leaving no trace. |
+
+Both defeat the threat the envelope scheme is really aimed at — a stolen
+database dump, replica or backup tape yields wrapped DEKs and ciphertext and
+nothing else. They differ on host compromise, and `vault-transit` is preferred
+precisely because it gives you a revocation point and a record.
+
+`tenant_data_key.host_held_kek` is a generated column recording which case each
+key falls under, so "could someone with root on the app server have read this"
+is a query rather than an exercise in reconstructing deployment history.
+
+`local-dev` is refused when `NODE_ENV=production`. It is not a third production
+option: its key is unversioned, so the master key could never be rotated without
+stranding every tenant DEK.
+
+**Master key rotation** is a distinct, much cheaper operation than data key
+rotation: the DEK does not change, so no field ciphertext is touched. See
+`docs/architecture/03-crypto-operations.md` §4.
 
 pgcrypto is deliberately **not** used for field encryption. Passing a key as a
 SQL literal puts it in `pg_stat_activity`, in `log_statement` output, and in any
@@ -243,8 +268,33 @@ one attribute silently disables every policy in the system.
 | `helm_key_admin` | Rotate keys, maintain partitions | Read documentation |
 | `helm_auditor` | Read audit history | Write anything |
 
+The table says five roles' worth of the model; `helm_worker` is a member of
+`helm_app` and adds only the cross-tenant backlog enumerators.
+
 Assertions at the end of `0220_grants.sql` verify each of these negatives at
 migration time rather than leaving them to a penetration test.
+
+### The migrating role is the exception, and it has to be
+
+Everything above is about roles that must NOT bypass RLS. The role that applies
+the migrations must, and that is not a contradiction — it is the hinge the rest
+turns on.
+
+Every sensitive table is `FORCE ROW LEVEL SECURITY`, which subjects the table
+**owner** to its own policies, and every `SECURITY DEFINER` function runs as
+whoever owns it: the role that ran the migrations. So if migrations run as a
+role RLS applies to, those functions match zero rows. `helm.reveal_secret()`
+returns NULL instead of the credential. Nothing raises, nothing logs, and the
+deployment looks healthy until somebody tries to read a password.
+
+`db/migrate.ts` therefore refuses to run as such a role, and proves it
+empirically — it creates a temporary `FORCE RLS` table and checks whether it can
+read its own row — rather than trusting a `rolsuper` lookup that inheritance and
+`BYPASSRLS` can both make wrong. `tests/integration/migrate-guard.test.ts`
+asserts both directions.
+
+None of this widens what the runtime roles can do. The migrating connection is
+used by `pnpm db:migrate` and by nothing at request time.
 
 ---
 

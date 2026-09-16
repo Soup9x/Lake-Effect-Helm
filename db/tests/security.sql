@@ -383,18 +383,56 @@ SELECT helm_test.check_raises('a secret-bearing export cannot be self-approved',
            VALUES (%L, %L, 'client_offboarding', 'zip', true,
                    'offboarding handover for Acme', %L, %L, now(), now() + interval '7 days')$$,
          :t1, :t1_acme, :u_admin1, :u_admin1));
-SELECT helm_test.check_raises('a secret-bearing export cannot skip approval entirely',
-  format($$INSERT INTO export_job (tenant_id, organization_id, kind, format,
-                                   include_secrets, reason, requested_by, expires_at)
-           VALUES (%L, %L, 'client_offboarding', 'zip', true,
-                   'offboarding handover for Acme', %L, now() + interval '7 days')$$,
-         :t1, :t1_acme, :u_admin1));
-INSERT INTO export_job (tenant_id, organization_id, kind, format, include_secrets,
-                        reason, requested_by, approved_by, approved_at, expires_at)
-  VALUES (:t1, :t1_acme, 'client_offboarding', 'zip', true,
-          'offboarding handover for Acme', :u_admin1, :u_tech1, now(), now() + interval '7 days');
+-- An unapproved credential-bearing export CAN exist, parked in `queued`. That
+-- is the state a reviewer looks at, and making it unrepresentable would force
+-- the approver's name into the creation call — one person typing two names,
+-- which is not four eyes. The guarantee is about what it may DO, below.
+INSERT INTO export_job (id, tenant_id, organization_id, kind, format,
+                        include_secrets, reason, requested_by, expires_at)
+  VALUES ('e0000000-0000-0000-0000-000000000001', :t1, :t1_acme,
+          'client_offboarding', 'zip', true,
+          'offboarding handover for Acme', :u_admin1, now() + interval '7 days');
+SELECT helm_test.check('an unapproved secret-bearing export may await review',
+  EXISTS (SELECT 1 FROM export_job
+          WHERE id = 'e0000000-0000-0000-0000-000000000001' AND status = 'queued'));
+
+-- THE guarantee: it cannot start. begin_export_render is the transition into
+-- `running`, and running is where credentials get decrypted.
+SELECT helm_test.check_raises('an unapproved secret-bearing export cannot start rendering',
+  $$SELECT helm.begin_export_render('e0000000-0000-0000-0000-000000000001')$$);
+
+SELECT helm_test.check('an unapproved secret-bearing export is not offered to the render worker',
+  NOT EXISTS (SELECT 1 FROM export_job j
+              WHERE j.id = 'e0000000-0000-0000-0000-000000000001'
+                AND j.include_secrets
+                AND j.approved_by IS NOT NULL));
+
+DELETE FROM export_job WHERE id = 'e0000000-0000-0000-0000-000000000001';
+-- The supported path: someone else requested it, this session approves it.
+-- Going through the function rather than an INSERT is the point — approve_export
+-- is what records the scope digest, and a direct INSERT setting approved_by is
+-- refused by export_job_approved_scope_recorded precisely so that an approval
+-- always says what was approved.
+INSERT INTO export_job (id, tenant_id, organization_id, kind, format, include_secrets,
+                        reason, requested_by, expires_at)
+  VALUES ('e0000000-0000-0000-0000-000000000002', :t1, :t1_acme,
+          'client_offboarding', 'zip', true,
+          'offboarding handover for Acme', :u_tech1, now() + interval '7 days');
+
+SELECT helm_test.check_raises('an approval must record what was approved',
+  format($$UPDATE export_job SET approved_by = %L, approved_at = now()
+           WHERE id = 'e0000000-0000-0000-0000-000000000002'$$, :u_admin1));
+
+SELECT helm.approve_export('e0000000-0000-0000-0000-000000000002',
+                           'reviewed the scope; handover is contractually due');
 SELECT helm_test.check('an export approved by a second person is accepted',
-  EXISTS (SELECT 1 FROM export_job WHERE include_secrets));
+  EXISTS (SELECT 1 FROM export_job
+          WHERE id = 'e0000000-0000-0000-0000-000000000002'
+            AND approved_by = :u_admin1
+            AND approved_scope_sha256 IS NOT NULL));
+
+SELECT helm_test.check_raises('an approved export cannot be approved again',
+  $$SELECT helm.approve_export('e0000000-0000-0000-0000-000000000002')$$);
 ROLLBACK;
 
 \echo ''
@@ -496,6 +534,64 @@ ROLLBACK;
 BEGIN;
 SELECT helm_test.check_raises('a user with no membership in a tenant cannot enter it',
   format('SELECT helm.set_session_context(%L, %L)', :t2, :u_tech1));
+ROLLBACK;
+
+\echo ''
+\echo '== 20. Local authentication is unreachable from the request role =='
+BEGIN;
+-- The whole point of putting local passwords behind helm_auth: a bug anywhere
+-- in the request path must not be able to read a hash, mint a reset token, or
+-- forge a session.
+SELECT helm_test.check('helm_app cannot read a password hash',
+  NOT has_column_privilege('helm_app', 'local_credential', 'password_phc', 'SELECT'));
+SELECT helm_test.check('helm_app cannot read the password history either',
+  NOT has_column_privilege('helm_app', 'local_credential', 'previous_phc', 'SELECT'));
+SELECT helm_test.check('no runtime role but helm_auth can read a password hash',
+  NOT (has_column_privilege('helm_auditor', 'local_credential', 'password_phc', 'SELECT')
+    OR has_column_privilege('helm_worker',  'local_credential', 'password_phc', 'SELECT')
+    OR has_column_privilege('helm_key_admin','local_credential','password_phc', 'SELECT')));
+
+SELECT helm_test.check('the throttling ledger is helm_auth''s alone',
+  NOT has_table_privilege('helm_app', 'auth_attempt', 'SELECT'));
+SELECT helm_test.check('reset tokens are helm_auth''s alone',
+  NOT has_table_privilege('helm_app', 'password_reset', 'SELECT'));
+
+SELECT helm_test.check('helm_app cannot run the pre-context login challenge',
+  NOT has_function_privilege('helm_app', 'helm.local_login_challenge(text, inet)', 'EXECUTE'));
+SELECT helm_test.check('helm_app cannot forge a session',
+  NOT has_function_privilege('helm_app', 'helm.create_local_session(uuid, text, integer)', 'EXECUTE'));
+SELECT helm_test.check('helm_app cannot mint or redeem a reset token',
+  NOT (has_function_privilege('helm_app', 'helm.issue_password_reset(uuid, bytea, text, integer, uuid, inet)', 'EXECUTE')
+    OR has_function_privilege('helm_app', 'helm.redeem_password_reset(bytea)', 'EXECUTE')));
+
+-- ...and the column grants helm_app DOES hold are the ones its two views need.
+-- A security_invoker view over a table the invoker cannot read creates cleanly,
+-- grants cleanly, and fails only when somebody opens the page.
+SELECT helm_test.check('helm_app can read the columns v_my_local_credential selects',
+  has_column_privilege('helm_app', 'local_credential', 'must_change', 'SELECT')
+  AND has_column_privilege('helm_app', 'local_credential', 'locked_until', 'SELECT')
+  AND has_column_privilege('helm_app', 'local_credential', 'password_changed_at', 'SELECT'));
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+-- Selecting the hash must be refused even for one's own row: the policy scopes
+-- which rows are visible, the column grant scopes which columns are.
+SELECT helm_test.check_raises('even your own hash is not selectable',
+  'SELECT password_phc FROM local_credential');
+SELECT helm_test.check('but your own credential state is',
+  (SELECT count(*) FROM v_my_local_credential) >= 0);
+ROLLBACK;
+
+\echo ''
+\echo '== 21. A local session is the same object an SSO session is =='
+BEGIN;
+-- If these ever diverge, "cut this technician's access now" starts meaning two
+-- different things depending on which door they came through.
+SELECT helm_test.check('local sign-in writes into auth_session, not a table of its own',
+  to_regclass('public.local_session') IS NULL);
+SELECT helm_test.check('helm_app cannot read auth_session by any path',
+  NOT has_table_privilege('helm_app', 'auth_session', 'SELECT'));
 ROLLBACK;
 
 \echo ''

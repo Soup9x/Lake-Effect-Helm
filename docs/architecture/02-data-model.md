@@ -207,7 +207,63 @@ control into one file.
 
 ---
 
-## 9. Where things live
+## 9. Local authentication
+
+Three tables from `0340_local_authentication.sql`, and the shape of each one is
+an argument about what it is for.
+
+| Table | Grain | Lifetime |
+| --- | --- | --- |
+| `local_credential` | One optional row per `app_user` | As long as the account |
+| `auth_attempt` | One row per sign-in attempt | 30 days, pruned hourly |
+| `password_reset` | One row per issued token | Until redeemed or expired |
+
+**None of them has a `tenant_id`.** Whether a person has a local password is a
+deployment-level fact about that person, not a tenant-level one — the same
+account can hold memberships in several tenants and there is exactly one
+password behind all of them.
+
+**`local_credential` is a separate table, not columns on `app_user`.** Most
+users will never have one, since SSO is the primary path; the table's grants can
+be far narrower than `app_user`'s; and "does this account have a local password"
+becomes a row's existence rather than a NULL check some query eventually gets
+backwards.
+
+**`previous_phc` is a bounded `text[]`, not a history table.** Reuse detection
+has to verify a candidate against each stored hash in turn — the salts differ,
+so no SQL comparison could do it — which makes every entry an Argon2
+verification. Five is the cap, in a CHECK constraint, because an unbounded
+history turns each password change into an unbounded amount of work for the
+server doing the checking.
+
+**`auth_attempt` is deliberately not partitioned, and deliberately not the audit
+log.** The audit log is immutable, hash-chained and partitioned so it can be kept
+for years. This is a rolling counter with a fifteen-minute read window and a
+thirty-day life. Conflating them would produce either an unprunable table of
+sign-in noise or a mutable audit log, and both are worse. It also stores the
+email as presented rather than resolving it to a `user_id`, because the
+interesting attempts are the ones against addresses that do not exist — a
+counter that only counts real accounts cannot see an enumeration sweep.
+
+**`password_reset` stores `sha256(token)`, not the token and not an Argon2
+hash.** Not the token, because a readable reset table in a database dump is a
+list of working account takeovers. Not Argon2, because the token is 32 bytes of
+CSPRNG output with no dictionary to attack, and a slow hash on the redeem path
+would only be a lever for exhausting the server. Same reasoning as API tokens,
+and the exact opposite of the reasoning for passwords — for the opposite reason.
+
+Single use is a database guarantee rather than a check-then-act:
+`UPDATE … SET used_at = now() WHERE token_sha256 = $1 AND used_at IS NULL`, so
+two simultaneous redemptions produce one winner. `helm.peek_password_reset()`
+exists alongside it so the application can validate the new password *before*
+spending the token — see `07-local-authentication.md` §6 for why that ordering
+is load-bearing.
+
+Full treatment: [`07-local-authentication.md`](07-local-authentication.md).
+
+---
+
+## 10. Where things live
 
 | Concern | Location |
 | --- | --- |

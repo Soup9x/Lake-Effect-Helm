@@ -21,7 +21,10 @@ import { TenantKeyService } from '../../src/lib/secrets/keys';
 import { LinkEngine } from '../../src/lib/graph/links';
 
 export const PG = {
-  host: process.env.PGSOCK ?? '/run/pgt',
+  // PGHOST first: it is the standard libpq name, it is what scripts/check-drift.ts
+  // reads, and CI sets it to a host address rather than a socket directory.
+  // PGSOCK remains as a fallback so existing local setups keep working.
+  host: process.env.PGHOST ?? process.env.PGSOCK ?? '/run/pgt',
   port: Number(process.env.PGPORT ?? 5433),
   database: process.env.PGDATABASE ?? 'helm',
   superuser: process.env.PGSUPERUSER ?? 'postgres',
@@ -89,6 +92,7 @@ const ROLE_USERS: Record<DbRole, string> = {
   auth: 'helm_auth',
   keyAdmin: 'helm_key_admin',
   auditor: 'helm_auditor',
+  worker: 'helm_worker',
 };
 
 export function connectPools(): void {

@@ -1,0 +1,29 @@
+# Everything the build does not need. Without this, `COPY . .` drags the local
+# node_modules, a stale .next, and the entire git history into the build
+# context — which is slow, and which is how a .env.local that was never meant
+# to leave a laptop ends up in an image layer.
+
+.git
+.gitignore
+node_modules
+.next
+dist
+coverage
+*.log
+
+# Never. These are the files an operator fills in with real credentials.
+.env
+.env.*
+!.env.example
+
+# Deployment state: generated keys, TLS material, database volumes.
+deploy/secrets
+deploy/data
+
+# Test and tooling surface the image has no use for.
+tests
+.vscode
+.idea
+*.tsbuildinfo
+AGENTS.md
+CLAUDE.md

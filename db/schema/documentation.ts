@@ -375,6 +375,16 @@ export const exportJob = pgTable('export_job', {
   lastDownloadedAt: tstz('last_downloaded_at'),
   revokedAt: tstz('revoked_at'),
   createdAt: tstz('created_at').notNull().defaultNow(),
+
+  /**
+   * Digest of the scope at the moment of approval. helm.export_backlog()
+   * recomputes it and refuses to render when it no longer matches, so a job
+   * widened after review cannot ride that review.
+   */
+  approvedScopeSha256: bytea('approved_scope_sha256'),
+  /** Secrets the render could not include, and why. Never silently dropped. */
+  omittedSecretCount: integer('omitted_secret_count').notNull().default(0),
+  omissions: jsonb('omissions').notNull().default([]),
 });
 
 export const exportDownload = pgTable('export_download', {

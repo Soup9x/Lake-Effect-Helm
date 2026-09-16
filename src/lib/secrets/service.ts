@@ -15,7 +15,7 @@
  * reach another tenant's material. Those properties live in Postgres.
  */
 import type { RevealDenialReason } from '@db/schema/secrets';
-import type { HelmTx } from '../db/client';
+import type { DbRole, HelmTx } from '../db/client';
 import { withTenant } from '../db/client';
 import type { DekCache } from '../crypto/dek-cache';
 import { openField, sealField, wipe, type SecretBinding } from '../crypto/envelope';
@@ -57,6 +57,13 @@ export interface RevealOptions {
   purpose?: RevealPurpose;
   /** Omit for the current version. */
   version?: number;
+  /**
+   * Which connection pool to use. Defaults to the request pool; background
+   * workers pass 'worker' so a long sync cannot starve HTTP traffic of
+   * connections. It does not widen access — the tenant context, and therefore
+   * every policy, comes from the actor either way.
+   */
+  role?: DbRole;
 }
 
 export interface RevealedSecret {
@@ -334,8 +341,10 @@ export class SecretService {
     secretId: string,
     options: RevealOptions = {},
   ): Promise<RevealedSecret> {
-    const outcome = await withTenant(actor, async (tx) =>
-      this.#revealInTx(tx, actor, secretId, options),
+    const outcome = await withTenant(
+      actor,
+      async (tx) => this.#revealInTx(tx, actor, secretId, options),
+      options.role ? { role: options.role } : {},
     );
 
     // THROW OUTSIDE THE TRANSACTION. This is the whole reason reveal_secret

@@ -28,10 +28,6 @@ import {
 } from '@db/schema/identity';
 import { useSessionResolver } from './session';
 
-const entraConfigured =
-  Boolean(process.env.AUTH_MICROSOFT_ENTRA_ID_ID) &&
-  Boolean(process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET);
-
 /**
  * The adapter's table types are narrower than Helm's schema on three columns,
  * and in each case Helm is deliberately right and the adapter's constraint is
@@ -64,71 +60,123 @@ const adapterTables = {
   authenticatorsTable: authAuthenticator,
 };
 
-const authDb = authDrizzle();
+/**
+ * Everything below is built LAZILY, on the first request that needs it.
+ *
+ * It used to run at module scope, and that quietly broke the Docker image
+ * build. `next build` imports every route module to collect its configuration,
+ * which imports this file, which called authDrizzle() — and that calls db('auth'),
+ * which throws when DATABASE_URL_AUTH is unset. It is unset during an image
+ * build, deliberately: .dockerignore excludes every .env file so no credential
+ * can reach an image layer.
+ *
+ * It passed on a developer's machine only because Next loads .env.local at
+ * build time and that file happens to exist there. So the failure appeared
+ * exclusively in CI and in `docker compose build` — which is to say, only where
+ * it mattered.
+ *
+ * Reading the environment lazily is also simply more correct for a container:
+ * the values are supplied at run time, not at build time.
+ */
+function buildConfig(): NextAuthConfig {
+  const entraConfigured =
+    Boolean(process.env.AUTH_MICROSOFT_ENTRA_ID_ID) &&
+    Boolean(process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET);
 
-export const authConfig: NextAuthConfig = {
-  // The instantiation expression pins the adapter's generic to the Postgres
-  // flavour; without it `Parameters<typeof DrizzleAdapter>` is a union across
-  // every dialect the package supports and resolves to none of them.
-  adapter: DrizzleAdapter(
-    authDb,
-    adapterTables as unknown as Parameters<typeof DrizzleAdapter<typeof authDb>>[1],
-  ),
+  const authDb = authDrizzle();
 
-  session: {
-    // Database sessions, not JWTs. A JWT cannot be revoked before it expires,
-    // and "this technician left, cut their access now" is a routine MSP event
-    // that has to take effect immediately.
-    strategy: 'database',
-    maxAge: 60 * 60 * 8,
-    updateAge: 60 * 15,
-  },
+  return {
+    // The instantiation expression pins the adapter's generic to the Postgres
+    // flavour; without it `Parameters<typeof DrizzleAdapter>` is a union across
+    // every dialect the package supports and resolves to none of them.
+    adapter: DrizzleAdapter(
+      authDb,
+      adapterTables as unknown as Parameters<typeof DrizzleAdapter<typeof authDb>>[1],
+    ),
 
-  providers: entraConfigured
-    ? [
-        MicrosoftEntraID({
-          clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID!,
-          clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET!,
-          // Spread rather than pass undefined: under exactOptionalPropertyTypes
-          // an absent issuer and an explicit `undefined` are different things.
-          ...(process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER
-            ? { issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER }
-            : {}),
-        }),
-      ]
-    : [],
-
-  callbacks: {
-    /**
-     * Refuse a disabled account at the door.
-     *
-     * The membership check happens later (identity.ts), because a user can hold
-     * memberships in several tenants and login is not yet scoped to one. But a
-     * disabled *account* should never get a session at all.
-     */
-    async signIn({ user }) {
-      return Boolean(user.id);
+    session: {
+      // Database sessions, not JWTs. A JWT cannot be revoked before it expires,
+      // and "this technician left, cut their access now" is a routine MSP event
+      // that has to take effect immediately.
+      strategy: 'database',
+      maxAge: 60 * 60 * 8,
+      updateAge: 60 * 15,
     },
 
-    async session({ session, user }) {
-      if (session.user) session.user.id = user.id;
-      return session;
+    providers: entraConfigured
+      ? [
+          MicrosoftEntraID({
+            clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID!,
+            clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET!,
+            // Spread rather than pass undefined: under exactOptionalPropertyTypes
+            // an absent issuer and an explicit `undefined` are different things.
+            ...(process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER
+              ? { issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER }
+              : {}),
+          }),
+        ]
+      : [],
+
+    callbacks: {
+      /**
+       * Refuse a disabled account at the door.
+       *
+       * The membership check happens later (identity.ts), because a user can hold
+       * memberships in several tenants and login is not yet scoped to one. But a
+       * disabled *account* should never get a session at all.
+       */
+      async signIn({ user }) {
+        return Boolean(user.id);
+      },
+
+      async session({ session, user }) {
+        if (session.user) session.user.id = user.id;
+        return session;
+      },
     },
-  },
 
-  pages: {
-    signIn: '/sign-in',
-    error: '/sign-in',
-  },
+    pages: {
+      signIn: '/sign-in',
+      error: '/sign-in',
+    },
 
-  // Cookies carry a session for a credential vault. Nothing less than the
-  // strictest settings the flow tolerates.
-  useSecureCookies: process.env.NODE_ENV === 'production',
+    // Cookies carry a session for a credential vault. Nothing less than the
+    // strictest settings the flow tolerates.
+    useSecureCookies: process.env.NODE_ENV === 'production',
 
-  trustHost: process.env.AUTH_TRUST_HOST === 'true',
+    trustHost: process.env.AUTH_TRUST_HOST === 'true',
+  };
+}
+
+type NextAuthResult = ReturnType<typeof NextAuth>;
+
+let instance: NextAuthResult | undefined;
+
+/** Construct once, on first use. Never at import. */
+function nextAuth(): NextAuthResult {
+  instance ??= NextAuth(buildConfig());
+  return instance;
+}
+
+/**
+ * Thin wrappers, so that importing this module stays free of side effects.
+ *
+ * Destructuring `NextAuth(...)` here would put the construction back at module
+ * scope and reintroduce the build failure described above.
+ */
+export const handlers: NextAuthResult['handlers'] = {
+  GET: (request) => nextAuth().handlers.GET(request),
+  POST: (request) => nextAuth().handlers.POST(request),
 };
 
-export const { handlers, auth, signIn, signOut } = NextAuth(authConfig);
+export const auth: NextAuthResult['auth'] = ((...args: unknown[]) =>
+  (nextAuth().auth as (...a: unknown[]) => unknown)(...args)) as NextAuthResult['auth'];
+
+export const signIn: NextAuthResult['signIn'] = ((...args: unknown[]) =>
+  (nextAuth().signIn as (...a: unknown[]) => unknown)(...args)) as NextAuthResult['signIn'];
+
+export const signOut: NextAuthResult['signOut'] = ((...args: unknown[]) =>
+  (nextAuth().signOut as (...a: unknown[]) => unknown)(...args)) as NextAuthResult['signOut'];
 
 /**
  * Bind the session resolver.

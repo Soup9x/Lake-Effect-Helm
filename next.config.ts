@@ -10,6 +10,13 @@ const config: NextConfig = {
   // at build — better than succeeding and shipping a broken polyfill.
   serverExternalPackages: ['postgres'],
 
+  // Emit .next/standalone so the container image carries a traced server and
+  // its runtime dependencies instead of the whole node_modules tree. On a
+  // product that holds decrypted client credentials, the build toolchain,
+  // test runner and type definitions have no business being in the image that
+  // runs in production.
+  output: 'standalone',
+
   async headers() {
     return [
       {

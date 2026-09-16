@@ -1,0 +1,194 @@
+# =============================================================================
+# CI
+#
+# Helm's guarantees are assertions, not intentions: RLS policies, column-level
+# grants, SECURITY DEFINER boundaries, an append-only hash-chained audit log.
+# Most of them are only true if something checks, and most of them cannot be
+# checked without a real PostgreSQL cluster and the real non-superuser roles.
+#
+# So the database job is the one that matters. It applies every migration to a
+# live Postgres 16, runs the SQL security suite as `helm_app`, runs the
+# integration tests as each of the five runtime roles, and diffs the Drizzle
+# schema against the live catalog. A mock would pass while the product was
+# broken.
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: '10'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Fast feedback: no database needed, so this answers in about a minute.
+  # ---------------------------------------------------------------------------
+  checks:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          # .nvmrc is the single source of truth, so CI cannot drift from what
+          # a contributor's `nvm use` picks.
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Every route is force-dynamic, so nothing is prerendered and the build
+      # needs no database connection.
+      - name: Build the web tier and the worker bundle
+        run: pnpm build && pnpm build:worker
+
+      - name: Shell scripts parse
+        run: |
+          for f in deploy/*.sh scripts/*.sh deploy/postgres/*.sh; do
+            [ -e "$f" ] || continue
+            bash -n "$f" && echo "  ok  $f"
+          done
+
+  # ---------------------------------------------------------------------------
+  # The real one.
+  # ---------------------------------------------------------------------------
+  database:
+    name: Tests against PostgreSQL 16
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Matches docker-compose.yml, so CI and production disagree about as
+        # little as possible.
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: helm
+          POSTGRES_USER: postgres
+          # Trust, because the suites connect as five different runtime roles
+          # that 0000_bootstrap creates WITHOUT passwords. This is an ephemeral
+          # container on a private network inside a single job; the production
+          # stack uses scram-sha-256 everywhere (deploy/postgres/10-roles.sh).
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The standard libpq names, honoured by the harness, both shell scripts
+      # and scripts/check-drift.ts. A local dev cluster uses a unix socket
+      # directory here instead; CI uses the service container's address.
+      PGHOST: 127.0.0.1
+      PGPORT: '5432'
+      PGDATABASE: helm
+      PGUSER: postgres
+      PGSUPERUSER: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          # .nvmrc is the single source of truth, so CI cannot drift from what
+          # a contributor's `nvm use` picks.
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # The runner's bundled client is older than the server. Everything here
+      # would probably work anyway, but "probably" is not a property worth
+      # having in the job that verifies tenant isolation.
+      - name: Install PostgreSQL 16 client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client-16
+          psql --version
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # First, because it rebuilds the database from db/sql/*.sql and that is
+      # what creates the five runtime roles the other suites connect as.
+      - name: SQL security suite
+        run: pnpm test:sql
+
+      - name: Unit and integration tests
+        run: pnpm test
+
+      # From a known state: the integration suites leave the database wherever
+      # the last one finished.
+      - name: Schema drift
+        run: |
+          ./scripts/rebuild-test-db.sh > /dev/null
+          pnpm db:drift
+
+  # ---------------------------------------------------------------------------
+  # Advisory. Non-blocking on purpose — see the note below.
+  # ---------------------------------------------------------------------------
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    # Non-blocking, and the reason is specific rather than habitual. The
+    # remaining findings are all in DEV tooling — vitest and the esbuild that
+    # drizzle-kit pulls in — and neither ships: the runtime image carries only
+    # the traced server output, and the migrate image installs with --prod.
+    # Neither has a fix inside its pinned major, and vitest 5 does not honour
+    # this suite's fileParallelism setting, so every integration file races for
+    # the same database.
+    #
+    # Anything that reaches a shipped artifact is a different matter and should
+    # be fixed rather than annotated. When the dev-only findings clear, drop
+    # continue-on-error and this becomes a gate.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          # .nvmrc is the single source of truth, so CI cannot drift from what
+          # a contributor's `nvm use` picks.
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit
+        run: pnpm audit --audit-level moderate

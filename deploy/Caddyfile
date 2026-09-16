@@ -1,0 +1,59 @@
+# =============================================================================
+# TLS in front of Helm.
+#
+# Required, not decorative. Helm sets `useSecureCookies` in production, so its
+# session cookie carries the `__Secure-` prefix and browsers will not send it
+# over plain http — without TLS, sign-in appears to succeed and every
+# subsequent page reports you as signed out.
+#
+# HELM_TLS_DIRECTIVE defaults to `tls internal`: Caddy mints a certificate from
+# its own CA, which needs no public DNS and no ACME reachability. That is the
+# right default for a box on an internal network, and it costs one step —
+# trusting Caddy's root on the technicians' machines (setup guide §4).
+#
+# To use your own certificate instead, put the files in deploy/tls/ and set:
+#   HELM_TLS_DIRECTIVE="tls /etc/helm/tls/helm.crt /etc/helm/tls/helm.key"
+# For a publicly resolvable hostname with ACME, set it to the empty string and
+# Caddy will obtain one from Let's Encrypt automatically.
+# =============================================================================
+
+{
+	# Helm renders its own error pages; Caddy should not add another layer of
+	# them, and its access log is the one place a request id can be correlated
+	# with the application log.
+	admin off
+	log {
+		format json
+	}
+}
+
+{$HELM_PUBLIC_HOST} {
+	{$HELM_TLS_DIRECTIVE}
+
+	encode gzip
+
+	reverse_proxy web:3000 {
+		# Exactly one X-Forwarded-For entry is appended here, which is why the
+		# application runs with HELM_TRUSTED_PROXY_HOPS=1. Change one and you
+		# must change the other: Helm reads the client address that many places
+		# from the right, because the leftmost entry is client-controlled and
+		# trusting it would defeat API token IP allowlisting.
+		header_up X-Real-IP {remote_host}
+	}
+
+	# No response timeout is configured, and that is deliberate: an export
+	# bundle for a large client takes a while to render and a while to stream.
+	# Caddy's default is no timeout — do not "tidy that up" to 30s, or handovers
+	# for the biggest clients will be the ones that fail.
+
+	# Helm already sets HSTS, X-Frame-Options, Referrer-Policy and a no-store
+	# Cache-Control on every response (next.config.ts). Caddy must not strip or
+	# duplicate them, so nothing is added here.
+
+	log {
+		format json
+	}
+}
+
+# Plain http exists only to redirect. Caddy does this by default for a site
+# with TLS, and it is spelled out so the behaviour is not a surprise.

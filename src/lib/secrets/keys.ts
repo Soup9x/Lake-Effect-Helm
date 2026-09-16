@@ -19,9 +19,14 @@
  * actually converges.
  */
 import type { HelmTx } from '../db/client';
-import { withTenant } from '../db/client';
+import { withTenant, withoutTenantContext } from '../db/client';
 import { HelmCryptoError } from '../crypto/errors';
-import { tenantKeyContext, type EncryptionContext, type KekProvider } from '../crypto/kek';
+import {
+  supportsRewrap,
+  tenantKeyContext,
+  type EncryptionContext,
+  type KekProvider,
+} from '../crypto/kek';
 import { wipe } from '../crypto/envelope';
 import { NoActiveDataKeyError } from './errors';
 
@@ -293,6 +298,138 @@ export class TenantKeyService {
   }
 
   /**
+   * Move every one of a tenant's DEKs onto the current KEK version.
+   *
+   * This is MASTER key rotation, which is not the same operation as data key
+   * rotation and is much cheaper: the DEK does not change, so no field
+   * ciphertext is touched. One UPDATE per tenant key, and the secrets are
+   * untouched and readable throughout.
+   *
+   * Idempotent by construction — a key already on the current version is
+   * skipped — so a rotation interrupted halfway is resumed by running it again.
+   *
+   * Destroyed keys are excluded: their material is gone at the KEK and
+   * re-wrapping is neither possible nor meaningful. Retired and retiring keys
+   * ARE included, because history must stay readable, and because an old KEK
+   * version cannot be retired from the key ring until nothing references it.
+   */
+  async rewrapUnderCurrentKek(
+    tenantId: string,
+    actorId: string,
+    reason: string,
+  ): Promise<KekRewrapResult> {
+    const kek = this.kek;
+    if (!supportsRewrap(kek)) {
+      throw new HelmCryptoError(
+        'kek_unavailable',
+        `the ${kek.provider} provider cannot re-wrap an existing DEK, so the master key ` +
+          'cannot be rotated without re-encrypting every secret',
+      );
+    }
+
+    return withTenant(
+      { tenantId, actorId },
+      async (tx) => {
+        const rows = await tx<RawDataKeyRow[]>`
+          SELECT id, generation, status, wrapped_dek, kek_id, wrap_provider, wrap_context
+          FROM tenant_data_key
+          WHERE status <> 'destroyed'
+          ORDER BY generation
+          FOR UPDATE
+        `;
+
+        const result: KekRewrapResult = { tenantId, rewrapped: 0, unchanged: 0, failed: [] };
+
+        for (const row of rows) {
+          // Re-derive the context rather than trusting the stored copy: it is
+          // the AAD the original wrap used, and a row whose stored context had
+          // drifted would fail to unwrap here rather than being silently
+          // re-wrapped under the wrong binding.
+          const context = tenantKeyContext(tenantId, row.generation);
+
+          let next;
+          try {
+            next = await kek.rewrapDek(row.wrapped_dek, row.kek_id, context);
+          } catch (error) {
+            result.failed.push({
+              generation: row.generation,
+              kekId: row.kek_id,
+              reason: error instanceof Error ? error.message : 'unknown failure',
+            });
+            continue;
+          }
+
+          if (next.kekId === row.kek_id) {
+            result.unchanged += 1;
+            continue;
+          }
+
+          await tx`
+            UPDATE tenant_data_key
+            SET wrapped_dek = ${next.wrapped}, kek_id = ${next.kekId}
+            WHERE id = ${row.id}::uuid
+          `;
+
+          await tx`
+            SELECT helm.audit(
+              'key.kek_rewrapped', 'tenant_data_key', ${row.id}::uuid, 'success',
+              NULL, NULL, ${reason},
+              ${tx.json({
+                generation: row.generation,
+                from_kek_id: row.kek_id,
+                to_kek_id: next.kekId,
+                provider: kek.provider,
+              })}::jsonb
+            )
+          `;
+          result.rewrapped += 1;
+        }
+
+        // A partial failure is recorded too. The operator needs to know a key
+        // was left behind BEFORE they delete the old master key version, and a
+        // log line on a machine nobody reads is not that record.
+        if (result.failed.length > 0) {
+          await tx`
+            SELECT helm.audit(
+              'key.kek_rewrap_incomplete', 'tenant', ${tenantId}::uuid, 'error',
+              NULL, NULL, ${reason},
+              ${tx.json({ failed: result.failed, rewrapped: result.rewrapped })}::jsonb
+            )
+          `;
+        }
+
+        return result;
+      },
+      { role: 'keyAdmin' },
+    );
+  }
+
+  /**
+   * Tenants this key admin is responsible for, with their key custody.
+   *
+   * Goes through helm.tenants_with_keys(), the one narrowly-granted bypass that
+   * exists so the rotation job can enumerate tenants without holding BYPASSRLS.
+   */
+  async tenantsWithKeys(): Promise<TenantKeyCustody[]> {
+    return withoutTenantContext(
+      async (sql) => {
+        const rows = await sql<
+          { tenant_id: string; name: string; status: string; key_count: string; host_held: string }[]
+        >`SELECT * FROM helm.tenants_with_keys()`;
+
+        return rows.map((r) => ({
+          tenantId: r.tenant_id,
+          name: r.name,
+          status: r.status,
+          keyCount: Number(r.key_count),
+          hostHeldKeys: Number(r.host_held),
+        }));
+      },
+      { role: 'keyAdmin' },
+    );
+  }
+
+  /**
    * Finish a rotation. Refused by the database while live ciphertext still
    * depends on the key, so a worker running stale code cannot strand data.
    */
@@ -310,6 +447,16 @@ export class TenantKeyService {
   }
 }
 
+export interface KekRewrapResult {
+  tenantId: string;
+  /** Keys that moved onto the current KEK version. */
+  rewrapped: number;
+  /** Keys already on it — a re-run of a completed rotation moves nothing. */
+  unchanged: number;
+  /** Keys whose old KEK version this process no longer holds. */
+  failed: { generation: number; kekId: string; reason: string }[];
+}
+
 export interface RotationBacklogEntry {
   dataKeyId: string;
   generation: number;
@@ -324,4 +471,12 @@ export interface PendingReEncryption {
   dataKeyId: string;
   sensitivity: 'standard' | 'elevated' | 'critical';
   requiresStepUp: boolean;
+}
+
+export interface TenantKeyCustody {
+  tenantId: string;
+  name: string;
+  status: string;
+  keyCount: number;
+  hostHeldKeys: number;
 }

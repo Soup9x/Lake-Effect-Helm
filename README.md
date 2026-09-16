@@ -1,12 +1,13 @@
 # Lake Effect Helm
 
+[![CI](https://github.com/Soup9x/Lake-Effect-Helm/actions/workflows/ci.yml/badge.svg)](https://github.com/Soup9x/Lake-Effect-Helm/actions/workflows/ci.yml)
+
 Multi-tenant documentation and credential platform for IT Managed Service
 Providers.
 
-> **All three milestones complete.** PostgreSQL schema and security kernel
-> (Step 1), secret and relationship engine (Step 2), Next.js API layer with the
-> flexible-asset validator and global search (Step 3). The web interface is the
-> natural next piece; the API it would consume is here and tested.
+> **On-premises deployment.** The master key comes from HashiCorp Vault's
+> transit engine or a versioned key file on the Helm host — no cloud KMS. See
+> `docs/architecture/03-crypto-operations.md` §4.
 
 ---
 
@@ -19,26 +20,47 @@ db/
   tests/        SQL security suite (105 assertions) and fixtures.
   migrate.ts    Migration runner: transactional, locked, checksum-guarded.
 src/
-  app/          Next.js App Router — 14 API routes, all force-dynamic.
+  app/          Next.js App Router — 9 pages and 18 API routes, all dynamic.
+  components/   App shell, tenant switcher, reveal and export controls, and a
+                shadcn/ui-shaped primitive layer.
   lib/
     api/        Route wrapper, typed HTTP errors. The tenant-context choke point.
     auth/       API tokens, identity resolution, Auth.js config.
     db/         Per-role pools; withTenant() opens the RLS session context.
-    crypto/     KEK providers, DEK cache, AES-256-GCM envelope, TOTP, blind index.
+    crypto/     KEK providers (Vault transit, on-prem key file), DEK cache,
+                AES-256-GCM envelope, TOTP, blind index.
     secrets/    SecretService and key lifecycle over the audited SQL API.
     graph/      Relation vocabulary, canonicalisation, the link engine.
     flexible/   JSON Schema guard and record validator.
     search/     Global search over helm.search().
+    exports/    Collection, JSON and PDF renderers, bundle format, storage.
+  workers/      Job runtime, expiry alerts, RMM/PSA sync, audit anchoring,
+                export rendering and expiry.
 tests/
-  unit/         129 tests — RFC 6238 vectors, envelope semantics, schema guard.
-  integration/  115 tests against a real cluster as the real roles.
+  unit/         230 tests — RFC 6238 vectors, envelope semantics, schema guard,
+                on-premises key custody, PDF structure, bundle encryption,
+                Argon2id and password policy, session cookie naming.
+  integration/  249 tests against a real cluster as the real roles.
+                The UI was additionally driven end to end in a real browser;
+                see docs/architecture/06-web-interface.md §8.
+.github/
+  workflows/ci.yml      typecheck, build, SQL suite and integration tests on PG16
 docs/
   architecture/01-security-model.md     guarantees, mechanisms, and limitations
   architecture/02-data-model.md         schema shape and rejected alternatives
   architecture/03-crypto-operations.md  how reads, writes and rotation work
   architecture/04-api-layer.md          request flow, auth, untrusted schemas
+  architecture/05-workers-and-exports.md  jobs, worker identities, four eyes
+  architecture/06-web-interface.md      pages, tenant switching, secret handling
+  architecture/07-local-authentication.md  passwords, lockout, reset, the outage case
+  deployment/docker-on-prem.md          step-by-step Docker install and backup/restore
+  deployment/on-premises.md             docker compose, keys, TLS, rotation runbook
+deploy/
+  setup.sh              turnkey on-prem install: preflight, secrets, up, bootstrap
+  init-secrets.sh       generate the master key ring and every password
 scripts/
   check-drift.ts        Drizzle schema vs. live catalog
+  rotate-kek.ts         re-wrap tenant DEKs onto a new master key version
   run-tests.sh          rebuild + fixtures + SQL security suite
   rebuild-test-db.sh    drop and reapply every migration
 ```
@@ -71,7 +93,14 @@ scripts/
 | `0250_graph_walk_fix` | One row per reachable node; parallel-edge regression guard |
 | `0260_secret_write_handshake` | Version allocation under lock, without granting UPDATE |
 | `0270_authentication` | The three pre-context authentication functions, and a guard fixing their number |
+| `0280_onprem_kek` | On-premises KEK custody, `host_held_kek`, key-custody reporting |
+| `0290_worker_identities` | `helm_worker`, per-tenant worker service accounts, reveal-purpose pinning |
+| `0300_worker_queues` | Backlog enumerators, alert evaluation, sync lifecycle, chain anchoring |
+| `0310_export_engine` | Export request/approve/render/download, four-eyes and scope binding |
+| `0320_export_approval_window` | The parked-approval window; `v_secret_metadata` without a join |
+| `0330_export_render_context` | Requester and approver names, without granting the worker `user:read` |
 | `0900_seed_system_data` | Roles and permissions |
+| `0910_worker_seed` | Worker roles, their permissions, and per-tenant identities |
 
 ---
 
@@ -113,10 +142,87 @@ write and the worker skips.
 handler a transaction that already has one and no way to reach a pool. Declared
 permissions produce a clear error; RLS is what actually enforces them.
 
+**The master key never has to be a cloud service.** Helm runs on-premises.
+`vault-transit` keeps the KEK inside HashiCorp Vault — Helm holds a token, not a
+key, so revoking it stops decryption and every unwrap is in Vault's audit log.
+`local-keyfile` holds a mode-0400 versioned key ring on the host instead, which
+is simpler and honestly weaker: root on that box can decrypt the database
+offline. `tenant_data_key.host_held_kek` records which case each key is, so a
+breach assessment is a query.
+
+**Rotating the master key is not an outage.** The key ring is versioned, so old
+DEKs stay openable while `pnpm helm:rotate-kek` moves them onto the new version.
+The DEK does not change, so no field ciphertext is touched. The job is
+idempotent, reports what it could not re-wrap rather than skipping it, and exits
+non-zero — because the next thing the operator does is delete a key.
+
+**No background worker holds a general reveal capability.** Each job runs as its
+own per-tenant service account, pinned to the reveal purposes that job actually
+has. For `integration` and `export` the scope is re-derived from the database on
+every call — the secret must be a live integration credential, or inside a live
+approved export. A compromised sync worker gets the RMM keys it was always going
+to need; it does not get the vault.
+
+**The request role cannot enumerate tenants.** Background jobs connect as
+`helm_worker`, a member of `helm_app` with the same tables and the same RLS,
+plus EXECUTE on the cross-tenant backlog functions. The membership runs one way,
+and a migration guard asserts it: nothing reachable from an HTTP request can ask
+which tenants exist.
+
+**Worker mutual exclusion is a Postgres advisory lock.** Two app servers both
+run the job runtime, and two concurrent syncs against one connection is how
+duplicate assets get created. Making that correctness depend on Redis — on a
+deployment where nobody is monitoring Redis — would be the wrong trade.
+
+**One alert per expiry, not four.** Of the lead-day thresholds an expiry has
+crossed and not yet fired, only the most urgent is delivered; the rest are
+recorded as suppressed so they can never fire later. A team that gets four
+alerts for one certificate stops reading alerts.
+
+**A credential export needs two people, and the approval is bound to what they
+read.** Approving records a digest of the scope; the render refuses if the scope
+changed since. Every credential in the bundle is decrypted through the audited
+path individually, and anything the worker could not decrypt is named on the
+cover page rather than quietly missing.
+
+**An export bundle's passphrase is stored nowhere.** Not in the database, not in
+the audit log. The file at rest is useless to anyone who has only the file.
+
+**Secret material never reaches a server component.** Revealing a credential is
+a client-side fetch, because server-rendering it would put the plaintext in the
+RSC payload, the data cache and any proxy in between. It auto-hides, and copying
+is a separate audited call rather than a local read of what is already on screen.
+
 **Technician-authored schemas are treated as untrusted code.** A structural scan
 plus an empirical cost probe reject patterns that backtrack catastrophically —
 because a length limit does not: `^((a)+)+$` against 31 characters runs for over
 a minute.
+
+---
+
+## Deploying it
+
+```bash
+sudo ./deploy/init-secrets.sh   # master key ring + every password, once
+$EDITOR .env                    # set HELM_PUBLIC_HOST and HELM_PUBLIC_URL
+docker compose up -d
+docker compose --profile bootstrap run --rm bootstrap \
+  --tenant "Your MSP" --slug your-msp --admin-email you@example.com
+```
+
+`docs/deployment/on-premises.md` is the full guide. Three things in it are not
+optional and are the usual causes of a failed first install:
+
+* **TLS.** The session cookie is `__Secure-` prefixed in production, so sign-in
+  cannot work over plain http. Caddy is in the stack for this.
+* **The master key file must be mode 0400 and owned by uid 10001.** Helm
+  refuses to start otherwise — including from the 0444 `docker secret` produces
+  by default. `init-secrets.sh` gets this right for you.
+* **Decide your sign-in story before you invite anybody.** Entra and local
+  passwords both work, and both produce the same revocable session. Keep a
+  local password on at least one administrator — it is what gets you in when
+  Entra cannot be reached, which is the outage where you most need a client's
+  credentials.
 
 ---
 
@@ -128,8 +234,12 @@ Requires PostgreSQL 16+ (`security_invoker` views), Node 22+, pnpm 10+.
 pnpm install
 cp .env.example .env.local     # then fill it in
 
-# Apply the schema as the DDL owner
-DATABASE_URL_MIGRATOR=postgresql://helm_migrator@host/helm pnpm db:migrate
+# Apply the schema. Migrations run as a superuser — every table is FORCE ROW
+# LEVEL SECURITY, which applies to the table owner too, and the schema's
+# SECURITY DEFINER functions run as whoever owns them. A migrating role that
+# RLS applies to owns functions that silently match zero rows. The runner
+# refuses rather than letting that happen.
+DATABASE_URL_MIGRATOR=postgresql://postgres@host/helm pnpm db:migrate
 
 # Verify
 pnpm db:drift                  # TypeScript schema vs. live catalog

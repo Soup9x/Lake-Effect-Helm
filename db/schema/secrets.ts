@@ -9,6 +9,7 @@
  * db/sql/0210_secret_access_api.sql, which writes the audit event in the same
  * transaction as the read.
  */
+import { sql } from 'drizzle-orm';
 import { bigint, boolean, index, integer, jsonb, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { bytea, tstz } from './_types';
 import { actorType, dataKeyStatus, secretKind, secretSensitivity } from './enums';
@@ -35,6 +36,16 @@ export const tenantDataKey = pgTable('tenant_data_key', {
   createdAt: tstz('created_at').notNull().defaultNow(),
   createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
   rotationReason: text('rotation_reason'),
+
+  /**
+   * Database-generated. True when the KEK that wrapped this DEK was readable
+   * from the application host — the on-premises master key providers — and
+   * false for a KMS or Vault KEK. Generated rather than supplied so a worker
+   * cannot mislabel its own key custody. See db/sql/0280_onprem_kek.sql.
+   */
+  hostHeldKek: boolean('host_held_kek').generatedAlwaysAs(
+    sql`wrap_provider = ANY (ARRAY['local-keyfile'::text, 'local-dev'::text])`,
+  ),
 }, (t) => [
   uniqueIndex('tenant_data_key_generation_uk').on(t.tenantId, t.generation),
   index('tenant_data_key_status_idx').on(t.tenantId, t.status),
@@ -59,6 +70,19 @@ export const secret = pgTable('secret', {
   lastRotatedAt: tstz('last_rotated_at'),
   lastAccessedAt: tstz('last_accessed_at'),
   accessCount: bigint('access_count', { mode: 'number' }).notNull().default(0),
+
+  /**
+   * The current version's strength, length and write time, denormalised from
+   * secret_version by helm.write_secret_version().
+   *
+   * Here rather than joined because NO ROLE may read secret_version — not one
+   * column, not for a count — and v_secret_metadata would otherwise have to be
+   * the exception that quietly reintroduces one.
+   * See db/sql/0320_export_approval_window.sql.
+   */
+  currentStrengthScore: smallint('current_strength_score'),
+  currentPlaintextLength: smallint('current_plaintext_length'),
+  currentVersionCreatedAt: tstz('current_version_created_at'),
 
   createdAt: tstz('created_at').notNull().defaultNow(),
   createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
@@ -137,6 +161,9 @@ export type RevealDenialReason =
   | 'step_up_required'
   | 'reason_required'
   | 'export_not_permitted'
+  | 'not_in_an_approved_export'
+  | 'not_an_integration_credential'
+  | 'purpose_not_permitted_for_actor'
   | 'autofill_not_permitted_for_sensitivity'
   | 'no_such_version'
   | 'key_destroyed';

@@ -21,7 +21,22 @@ const WRAP_TAG_BYTES = 16;
 /** Separator for canonical context serialisation: ASCII unit separator. */
 const FIELD_SEPARATOR = String.fromCharCode(0x1f);
 
-export type WrapProvider = 'aws-kms' | 'gcp-kms' | 'azure-keyvault' | 'vault-transit' | 'local-dev';
+/**
+ * What wrapped a given DEK, recorded per row in `tenant_data_key.wrap_provider`.
+ *
+ * `local-keyfile` and `local-dev` are deliberately distinct values even though
+ * both are AES-256-GCM under a key this process holds. An auditor reading the
+ * table needs to tell "the on-premises master key this deployment is built
+ * around" from "a throwaway key someone's laptop generated"; collapsing them
+ * would erase exactly the distinction they are looking for.
+ */
+export type WrapProvider =
+  | 'aws-kms'
+  | 'gcp-kms'
+  | 'azure-keyvault'
+  | 'vault-transit'
+  | 'local-keyfile'
+  | 'local-dev';
 
 export interface EncryptionContext {
   readonly [key: string]: string;
@@ -40,6 +55,35 @@ export interface KekProvider {
   readonly provider: WrapProvider;
   generateDek(context: EncryptionContext): Promise<GeneratedDek>;
   unwrapDek(wrapped: Buffer, kekId: string, context: EncryptionContext): Promise<Buffer>;
+}
+
+/** What a re-wrap produced: the same DEK, sealed under a newer KEK version. */
+export interface RewrappedDek {
+  readonly wrapped: Buffer;
+  readonly kekId: string;
+}
+
+/**
+ * A provider that can move an existing DEK onto the current KEK version.
+ *
+ * This is what makes rotating the MASTER key an operation rather than an
+ * outage. The DEK itself does not change, so no field ciphertext is touched:
+ * rotating the KEK is an UPDATE of one column per tenant, where rotating a DEK
+ * means re-encrypting every secret.
+ *
+ * Optional because not every provider can do it without being handed a
+ * capability we would rather it did not have. Vault exposes `transit/rewrap`,
+ * which never reveals the plaintext DEK to Helm at all; the local providers
+ * unwrap and re-wrap in memory, which they can do because they hold the master
+ * key anyway. A KMS provider using Encrypt would need a plaintext round-trip,
+ * which is why this is not on the base interface.
+ */
+export interface RewrappingKekProvider extends KekProvider {
+  rewrapDek(wrapped: Buffer, kekId: string, context: EncryptionContext): Promise<RewrappedDek>;
+}
+
+export function supportsRewrap(provider: KekProvider): provider is RewrappingKekProvider {
+  return typeof (provider as Partial<RewrappingKekProvider>).rewrapDek === 'function';
 }
 
 /**

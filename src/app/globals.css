@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+/**
+ * Design tokens.
+ *
+ * Helm is looked at for eight hours a day by technicians who are usually also
+ * running a terminal and a remote session, so the palette is deliberately low
+ * contrast in the chrome and high contrast where it matters: severity, secret
+ * state, and anything that says a credential is about to be shown.
+ *
+ * Colours are declared once here and referenced by name. A severity that is
+ * "red" in one place and "rose" in another is how a dashboard stops being
+ * scannable.
+ */
+@theme {
+  --color-surface: oklch(99% 0.002 250);
+  --color-surface-raised: oklch(100% 0 0);
+  --color-surface-sunken: oklch(97% 0.004 250);
+  --color-border: oklch(91% 0.005 250);
+  --color-border-strong: oklch(84% 0.008 250);
+
+  --color-ink: oklch(24% 0.012 250);
+  --color-ink-muted: oklch(50% 0.012 250);
+  --color-ink-faint: oklch(63% 0.010 250);
+
+  /* Lake Effect: a cold, deep blue. */
+  --color-brand: oklch(48% 0.13 235);
+  --color-brand-strong: oklch(40% 0.14 235);
+  --color-brand-tint: oklch(96% 0.02 235);
+
+  /* Severity, shared by expirations, alerts and audit outcomes. */
+  --color-sev-info: oklch(58% 0.03 250);
+  --color-sev-notice: oklch(62% 0.12 230);
+  --color-sev-warning: oklch(70% 0.14 75);
+  --color-sev-critical: oklch(58% 0.19 30);
+  --color-sev-expired: oklch(45% 0.20 20);
+
+  --color-ok: oklch(55% 0.13 155);
+  --color-danger: oklch(55% 0.20 27);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --radius-card: 0.625rem;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background: var(--color-surface);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /*
+   * A visible focus ring, everywhere, non-negotiable. Technicians drive this
+   * with a keyboard while their hands are on a remote session, and the
+   * browser default gets removed by half the resets in existence.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+
+  /*
+   * Anything carrying secret material is excluded from print and from the
+   * screenshot-friendly high-contrast media. A revealed password on a printed
+   * page is a filing-cabinet problem the vault was supposed to remove.
+   */
+  @media print {
+    [data-secret] {
+      visibility: hidden;
+    }
+  }
+}

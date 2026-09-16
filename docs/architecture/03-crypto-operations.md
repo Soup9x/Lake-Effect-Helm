@@ -113,7 +113,7 @@ key error is a far better outcome than a quiet compromise.
 ## 4. Key hierarchy and rotation
 
 ```
-KEK — in KMS/Vault, bound to an encryption context, never leaves
+KEK — Vault transit, or a master key file on this host
  └─ DEK — one per tenant per generation, stored only wrapped
      └─ AES-256-GCM ciphertext, one row per secret version
 ```
@@ -121,7 +121,91 @@ KEK — in KMS/Vault, bound to an encryption context, never leaves
 The encryption context (`helm:purpose`, `helm:tenant`, `helm:generation`) is
 passed on both wrap and unwrap and enforced by the provider. A `wrapped_dek`
 lifted from tenant A's row cannot be unwrapped as tenant B's — not because
-application code checks, but because KMS refuses.
+application code checks, but because the provider refuses.
+
+### On-premises KEK providers
+
+Helm runs on the customer's own server and does not use a cloud KMS.
+
+**`vault-transit`** (`src/lib/crypto/kek-vault.ts`). The master key never enters
+the Helm process. Wraps go to `transit/datakey/plaintext/<key>`, unwraps to
+`transit/decrypt/<key>`, and a master key rotation to `transit/rewrap/<key>` —
+which re-seals a DEK under the new key version *inside Vault*, so rotation never
+exposes a tenant key to the application host at all.
+
+The transit key **must** be created with `derived=true`:
+
+```
+vault write -f transit/keys/helm-tenant-kek type=aes256-gcm96 derived=true
+```
+
+Without derivation Vault accepts the per-call `context` and silently ignores it.
+Every wrap and unwrap would still succeed and the tenant binding the rest of
+Helm depends on would simply not exist — a failure invisible until someone
+tested whether tenant A's DEK opens as tenant B's. The provider reads the key's
+configuration on first use and refuses to run against a non-derived key, rather
+than trusting this paragraph to have been read.
+
+Helm's Vault policy needs `update` on `datakey/plaintext` and `decrypt`, and
+`read` on the key. Note what is absent: no `encrypt`, and no writes to
+`transit/keys/*`. Helm cannot re-seal an arbitrary DEK of its own accord and
+cannot rotate or delete the KEK. `rewrap` belongs to the rotation job's role,
+not the web tier.
+
+**`local-keyfile`** (`src/lib/crypto/kek-local.ts`). The master key is held by
+this host. A file is strongly preferred over `HELM_KEK_B64`: an environment
+variable is copied into crash dumps, `docker inspect`, the unit file that set
+it, the CI system that rendered that file, and `/proc/<pid>/environ`. Helm
+refuses a key file that is readable by group or other — note that `docker
+secret` mounts at 0444 by default, which is exactly the case the check exists
+for. With systemd, `LoadCredential=` puts it in a per-service tmpfs that is
+unmounted when the service stops.
+
+The wrapped layout is `format(1) || nonce(12) || tag(16) || ciphertext(32)`; the
+leading byte exists so a future change of wrapping algorithm is *detectable*
+rather than presenting as a corrupt key during an incident. The AAD is the
+tenant context plus the KEK version, so a row whose `kek_id` was edited fails
+authentication by construction rather than by coincidence.
+
+### Rotating the MASTER key
+
+This is not the same operation as rotating a data key, and conflating them is
+expensive. Rotating the DEK re-encrypts every secret. Rotating the KEK re-wraps
+one column per tenant key and touches no ciphertext at all.
+
+A single-key local file has no equivalent of a KMS key version: overwriting it
+would make every existing tenant DEK permanently unopenable. So the key ring is
+versioned:
+
+```json
+{ "current": "v2", "keys": { "v1": "<base64>", "v2": "<base64>" } }
+```
+
+`kek_id` records `<label>/<version>` per row, wraps use `current`, and unwraps
+look up whichever version actually sealed that row. The procedure:
+
+1. Add the new version, point `current` at it, **keep the old version**, restart.
+2. `pnpm helm:rotate-kek` — re-wraps every non-destroyed DEK onto the new version.
+3. Confirm `0 left on an older KEK version`.
+4. Only now remove the old version from the key ring.
+
+Step 4 before step 3 is unrecoverable. `rewrapUnderCurrentKek()` is therefore
+idempotent (a resumed rotation re-runs safely), reports what it could *not*
+re-wrap rather than skipping it, writes a `key.kek_rewrap_incomplete` audit row
+on partial failure, and exits non-zero — because the operator is about to delete
+a key based on that answer.
+
+Retired and retiring keys are re-wrapped too: history must stay readable, and an
+old KEK version cannot be dropped while anything still references it. Destroyed
+keys are skipped — their material is gone at the KEK and re-wrapping is neither
+possible nor meaningful.
+
+The rotation job needs to enumerate tenants, which is the one thing that cannot
+happen inside a tenant context. `helm.tenants_with_keys()` is a deliberate,
+minimal RLS bypass: `EXECUTE` to `helm_key_admin` only (so it is unreachable
+from a request), returning names and key counts and nothing else. The
+alternative — `BYPASSRLS` on the rotation role — would have handed it the whole
+database instead of a list of names.
 
 ### Rotation is a state machine, not a swap
 
