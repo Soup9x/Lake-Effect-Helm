@@ -90,9 +90,7 @@ x-helm-env: &helm-env
   HELM_EXPORT_DIR: /var/lib/helm/exports
   HELM_EXPORT_PASSPHRASE_DIR: /var/lib/helm/passphrases
   HELM_AUDIT_ANCHOR_DIR: /var/lib/helm/anchors
-  HELM_AUDIT_RETENTION_DAYS: "2555"
 
-  HELM_SEARCH_BACKEND: postgres
   HELM_LOG_LEVEL: ${HELM_LOG_LEVEL:-info}
 
 services:

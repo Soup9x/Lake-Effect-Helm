@@ -348,7 +348,7 @@ linear chain.
 ### 7.4 Search index
 
 `search_document` is the least protected copy of the data: denormalised, widely
-read, cached, and a candidate for mirroring into Meilisearch. Secret material
+read, and cached. Secret material
 never enters it — credentials contribute label, username, type and URL only, and
 flexible-asset fields are indexed **only** when explicitly allow-listed at schema
 publish time, with `CHECK (NOT (secret_fields && searchable_fields))` preventing
