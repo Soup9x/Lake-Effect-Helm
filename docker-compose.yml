@@ -354,19 +354,37 @@ services:
       - caddy-config:/config
       # Only used when HELM_TLS_DIRECTIVE points at your own certificate.
       - ./deploy/tls:/etc/helm/tls:ro
+    # The healthcheck below connects to Helm's own public name. This resolves it
+    # to the loopback address inside this container, so the request never leaves
+    # the box and needs no DNS.
+    extra_hosts:
+      - "${HELM_PUBLIC_HOST:?}:127.0.0.1"
     healthcheck:
       # End to end: TLS terminates here AND the proxy can reach the web tier.
       # That is the whole request path a browser takes, which is what makes it
       # worth checking; Caddy's own admin API is off (deploy/Caddyfile) and
       # would only have proved the process was up.
       #
-      # --no-check-certificate because `tls internal` mints a certificate from
-      # Caddy's own CA that nothing inside this container trusts. The check is
-      # asking "does the path work", not "is the certificate trusted" — that
-      # second question is answered from a technician's browser, not from here.
+      # THE URL MUST USE THE HOSTNAME, NOT 127.0.0.1. This check used to request
+      # https://127.0.0.1/api/health and pass the name in a Host header. The
+      # Host header selects the site for HTTP routing, but the TLS handshake
+      # happens first and never got that far: RFC 6066 forbids IP addresses in
+      # SNI, so connecting to a bare address sends NO server name, Caddy has no
+      # name to match against its one site, it cannot choose a certificate, and
+      # it aborts the handshake:
       #
-      # The Host header is what selects the site block; the connection itself
-      # goes to the loopback address.
+      #   SSL routines:ssl3_read_bytes:tlsv1 alert internal error (alert 80)
+      #
+      # Caddy served browsers perfectly the whole time; only the check was
+      # wrong, which is the worst kind of wrong — it made `up --wait` fail an
+      # install that had actually succeeded.
+      #
+      # --no-check-certificate because `tls internal` mints a certificate from
+      # Caddy's own CA. Caddy does install that root into this container's trust
+      # store, but relying on that would break the moment HELM_TLS_DIRECTIVE
+      # points at a certificate from your own CA. The check asks "does the path
+      # work", not "is the certificate trusted" — the second question is
+      # answered from a technician's browser, not from here.
       test:
         - CMD
         - wget
@@ -374,10 +392,7 @@ services:
         - -q
         - -O
         - /dev/null
-        # Quoted: an unquoted "key: value" here is parsed as a YAML mapping,
-        # not a string, and compose rejects the file.
-        - "--header=Host: ${HELM_PUBLIC_HOST:?}"
-        - https://127.0.0.1/api/health
+        - "https://${HELM_PUBLIC_HOST:?}/api/health"
       interval: 30s
       timeout: 10s
       retries: 3
