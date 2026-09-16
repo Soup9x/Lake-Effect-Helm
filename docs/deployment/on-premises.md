@@ -619,12 +619,31 @@ After signing in:
   an external witness. If "externally anchored" stays at 0 after an hour, the
   anchor directory is not writable or is not configured (§7).
 
-From a shell, against a checkout:
+### Do not run the test suite against this deployment
+
+> **`pnpm test` and `./scripts/run-tests.sh` DROP the database they run
+> against**, and the name they default to is `helm` — the same name this
+> deployment uses. `scripts/rebuild-test-db.sh` opens with
+> `DROP DATABASE IF EXISTS helm WITH (FORCE)`, and the integration harness
+> takes its database from `PGDATABASE` with `helm` as the fallback. Run them on
+> a development machine against a throwaway cluster, never on a host whose
+> `PG*` variables or network can reach production.
+
+`pnpm db:drift` is read-only and safe to point at a live database — it compares
+the TypeScript schema against the catalog and writes nothing:
 
 ```bash
-pnpm db:drift      # the TypeScript schema matches the live catalog
-pnpm test          # 383 tests; the integration suite needs a throwaway database
-./scripts/run-tests.sh   # 109 SQL assertions on RLS, grants and the audit chain
+pnpm db:drift      # ✓ no drift: 63 tables match the database
+```
+
+Everything else worth checking after an install is in the interface above, or
+in the health endpoint:
+
+```bash
+# From the host. "ok" means the web tier is up AND the database is reachable;
+# "degraded" means it answered but cannot reach Postgres.
+curl -sk https://127.0.0.1/api/health --resolve "$(grep '^HELM_PUBLIC_HOST=' .env | cut -d= -f2):443:127.0.0.1" \
+  https://"$(grep '^HELM_PUBLIC_HOST=' .env | cut -d= -f2)"/api/health
 ```
 
 ---
