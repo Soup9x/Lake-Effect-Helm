@@ -36,8 +36,19 @@ beforeAll(async () => {
   // dedicatedClient() to read. Give it a real one pointing at the same cluster
   // as helm_auth, so this exercises the production code path rather than a
   // substitute. A socket-based dev cluster cannot be expressed as a URL, and
-  // there dedicatedClient() falls back to the PG* variables the harness uses.
-  if (!PG.host.startsWith('/')) {
+  // there dedicatedClient() takes its other branch: the PG* variables.
+  //
+  // Those have to be SET, not merely defaulted. `PG` reads them with fallbacks,
+  // so on a machine where nobody exported them the harness still connects and
+  // dedicatedClient() still has nothing to read — which is how this file came
+  // to fail locally while passing in CI, where PGHOST is a host address and the
+  // URL branch is taken.
+  if (PG.host.startsWith('/')) {
+    process.env.PGHOST = PG.host;
+    process.env.PGPORT = String(PG.port);
+    process.env.PGDATABASE = PG.database;
+    process.env.PGUSER = 'helm_auth';
+  } else {
     process.env.DATABASE_URL_AUTH = `postgresql://helm_auth@${PG.host}:${PG.port}/${PG.database}`;
   }
 
