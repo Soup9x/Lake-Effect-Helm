@@ -158,7 +158,7 @@ function FilterLink({
       className={cn(
         'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
         active
-          ? 'border-brand bg-brand text-white'
+          ? 'border-brand bg-brand text-on-brand'
           : 'border-border bg-surface-raised text-ink-muted hover:border-border-strong hover:text-ink',
       )}
     >

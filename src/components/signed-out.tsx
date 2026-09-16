@@ -14,7 +14,7 @@ export function SignedOut({ reason }: { reason: 'unauthenticated' | 'no-membersh
   return (
     <div className="grid min-h-screen place-items-center bg-surface px-6">
       <div className="w-full max-w-sm text-center">
-        <div className="mx-auto grid size-11 place-items-center rounded-xl bg-brand text-sm font-bold text-white">
+        <div className="mx-auto grid size-11 place-items-center rounded-xl bg-brand text-sm font-bold text-on-brand">
           LE
         </div>
         <h1 className="mt-4 text-lg font-semibold tracking-tight text-ink">Lake Effect Helm</h1>

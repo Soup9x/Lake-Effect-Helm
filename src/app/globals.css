@@ -28,6 +28,16 @@
   --color-brand-strong: oklch(40% 0.14 235);
   --color-brand-tint: oklch(96% 0.02 235);
 
+  /*
+   * The text that sits ON a filled brand or danger surface, as opposed to the
+   * ink that sits on a page surface. It is a token rather than a literal white
+   * because the fill underneath it is not the same lightness in both themes: a
+   * dark theme has to lighten that fill to keep it visible against a dark page,
+   * and white on a light blue is the kind of button nobody can read.
+   */
+  --color-on-brand: oklch(100% 0 0);
+  --color-on-danger: oklch(100% 0 0);
+
   /* Severity, shared by expirations, alerts and audit outcomes. */
   --color-sev-info: oklch(58% 0.03 250);
   --color-sev-notice: oklch(62% 0.12 230);
@@ -76,4 +86,101 @@
       visibility: hidden;
     }
   }
+}
+
+/**
+ * Dark.
+ *
+ * The tokens above are redefined rather than a second palette being introduced,
+ * so every component follows without knowing a theme exists. Three things were
+ * decided deliberately:
+ *
+ * The surfaces are near-black rather than black — oklch 18-24% — because a
+ * technician reading this beside a white terminal all day gets less eye strain
+ * from a soft dark than from maximum contrast, and because pure black makes the
+ * borders that separate a credential row from its neighbour disappear.
+ *
+ * Severity keeps its HUES and gains lightness. A warning that reads amber on
+ * white and brown on black is a dashboard that means different things depending
+ * on the time of day. Chroma comes down slightly: fully saturated red on a dark
+ * surface vibrates.
+ *
+ * The brand blue gets considerably lighter. At 48% it is legible on white and
+ * nearly invisible on a dark surface, and it is what marks the one link on the
+ * page that goes to a client.
+ *
+ * Two selectors, in this order: an explicit choice always wins, and the system
+ * preference applies only when no explicit choice has been made. `:root:not([data-theme])`
+ * rather than a bare media query, or a person who chose light would be
+ * overridden by their operating system at sunset.
+ */
+
+@layer base {
+  /* An explicit choice, and the system preference only when none was made. */
+  :root[data-theme='dark'] {
+    --color-surface: oklch(18% 0.008 250);
+    --color-surface-raised: oklch(22% 0.009 250);
+    --color-surface-sunken: oklch(15% 0.007 250);
+    --color-border: oklch(30% 0.010 250);
+    --color-border-strong: oklch(38% 0.012 250);
+
+    --color-ink: oklch(93% 0.006 250);
+    --color-ink-muted: oklch(72% 0.010 250);
+    --color-ink-faint: oklch(58% 0.010 250);
+
+    --color-brand: oklch(70% 0.12 235);
+    --color-brand-strong: oklch(78% 0.13 235);
+    --color-brand-tint: oklch(28% 0.045 235);
+
+    /* The fills got lighter, so what sits on them has to get darker. */
+    --color-on-brand: oklch(17% 0.03 235);
+    --color-on-danger: oklch(17% 0.04 27);
+
+    --color-sev-info: oklch(70% 0.03 250);
+    --color-sev-notice: oklch(72% 0.11 230);
+    --color-sev-warning: oklch(78% 0.13 75);
+    --color-sev-critical: oklch(68% 0.17 30);
+    --color-sev-expired: oklch(62% 0.18 20);
+
+    --color-ok: oklch(70% 0.13 155);
+    --color-danger: oklch(68% 0.18 27);
+  }
+
+  /* Mirror of the block above. The two must stay in step: an explicit choice
+     and an unstated one should not render differently. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      --color-surface: oklch(18% 0.008 250);
+      --color-surface-raised: oklch(22% 0.009 250);
+      --color-surface-sunken: oklch(15% 0.007 250);
+      --color-border: oklch(30% 0.010 250);
+      --color-border-strong: oklch(38% 0.012 250);
+
+      --color-ink: oklch(93% 0.006 250);
+      --color-ink-muted: oklch(72% 0.010 250);
+      --color-ink-faint: oklch(58% 0.010 250);
+
+      --color-brand: oklch(70% 0.12 235);
+      --color-brand-strong: oklch(78% 0.13 235);
+      --color-brand-tint: oklch(28% 0.045 235);
+
+      /* The fills got lighter, so what sits on them has to get darker. */
+      --color-on-brand: oklch(17% 0.03 235);
+      --color-on-danger: oklch(17% 0.04 27);
+
+      --color-sev-info: oklch(70% 0.03 250);
+      --color-sev-notice: oklch(72% 0.11 230);
+      --color-sev-warning: oklch(78% 0.13 75);
+      --color-sev-critical: oklch(68% 0.17 30);
+      --color-sev-expired: oklch(62% 0.18 20);
+
+      --color-ok: oklch(70% 0.13 155);
+      --color-danger: oklch(68% 0.18 27);
+    }
+  }
+
+  /* Tell the browser, so form controls and scrollbars follow. */
+  :root[data-theme='dark'] { color-scheme: dark; }
+  :root[data-theme='light'] { color-scheme: light; }
+  :root:not([data-theme]) { color-scheme: light dark; }
 }

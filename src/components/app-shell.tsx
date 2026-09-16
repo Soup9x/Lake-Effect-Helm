@@ -16,6 +16,7 @@ import { TenantSwitcher } from './tenant-switcher';
 import type { ServerIdentity } from '@/lib/auth/server-identity';
 import { Badge } from './ui/badge';
 import { SignOutButton } from './sign-out-button';
+import { ThemeToggle } from './theme-toggle';
 import { initials } from '@/lib/ui/format';
 import { isClientRole } from '@/lib/ui/roles';
 
@@ -63,7 +64,7 @@ export function AppShell({
     <div className="flex min-h-screen bg-surface">
       <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface-raised">
         <div className="flex items-center gap-2 px-4 py-4">
-          <div className="grid size-7 place-items-center rounded-md bg-brand text-xs font-bold text-white">
+          <div className="grid size-7 place-items-center rounded-md bg-brand text-xs font-bold text-on-brand">
             LE
           </div>
           <span className="text-sm font-semibold tracking-tight">Helm</span>
@@ -103,6 +104,9 @@ export function AppShell({
               <Badge tone="brand">Co-managed access</Badge>
             </div>
           )}
+          <div className="mt-2">
+            <ThemeToggle />
+          </div>
           <SignOutButton />
         </div>
       </aside>
