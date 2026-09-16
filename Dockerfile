@@ -26,6 +26,26 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # -----------------------------------------------------------------------------
+# deps-prod — dependencies only, for the migrate stage
+#
+# The migrate image holds SUPERUSER database credentials, so what it carries is
+# a security question rather than a size one. A full install puts vitest,
+# drizzle-kit, typescript, esbuild and every @types package next to those
+# credentials — 105 packages that exist to build and test the product, not to
+# run it, and two of which currently carry advisories.
+#
+# `tsx` is a production dependency for exactly this reason: the migrate, bootstrap
+# and key-rotation entry points are TypeScript executed directly, so tsx is not
+# build tooling here, it is the runtime.
+# -----------------------------------------------------------------------------
+FROM node:22-alpine AS deps-prod
+WORKDIR /app
+
+RUN corepack enable
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile --prod
+
+# -----------------------------------------------------------------------------
 # builder — Next standalone output plus the bundled worker
 # -----------------------------------------------------------------------------
 FROM node:22-alpine AS builder
@@ -102,16 +122,18 @@ CMD ["node", "server.js"]
 # migrate — one-shot, used only by the migrate service
 #
 # Separate from the runtime stage because it needs tsx and the SQL files, and
-# the web tier and worker must not carry either. It runs as the migrator role
-# (a superuser on first deploy — see the setup guide for why) and exits.
+# the web tier and worker must not carry either. It runs as a superuser — see
+# db/migrate.ts for why that is required rather than lax — and exits.
+#
+# Dependencies come from deps-prod, NOT deps: this image must not carry the test
+# runner and the build toolchain alongside superuser credentials.
 # -----------------------------------------------------------------------------
 FROM node:22-alpine AS migrate
 WORKDIR /app
 
-RUN corepack enable
 RUN addgroup -g 10001 -S helm && adduser -u 10001 -S helm -G helm
 
-COPY --from=deps --chown=helm:helm /app/node_modules ./node_modules
+COPY --from=deps-prod --chown=helm:helm /app/node_modules ./node_modules
 COPY --chown=helm:helm package.json pnpm-lock.yaml tsconfig.json ./
 COPY --chown=helm:helm db ./db
 COPY --chown=helm:helm scripts ./scripts

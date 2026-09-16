@@ -98,13 +98,13 @@ jobs:
           --health-retries 20
 
     env:
-      # Both the harness (tests/integration/harness.ts) and
-      # scripts/rebuild-test-db.sh read these. PGSOCK is named for the unix
-      # socket a local dev cluster uses; it is passed straight to psql's -h,
-      # which is equally happy with a host address.
-      PGSOCK: 127.0.0.1
+      # The standard libpq names, honoured by the harness, both shell scripts
+      # and scripts/check-drift.ts. A local dev cluster uses a unix socket
+      # directory here instead; CI uses the service container's address.
+      PGHOST: 127.0.0.1
       PGPORT: '5432'
       PGDATABASE: helm
+      PGUSER: postgres
       PGSUPERUSER: postgres
 
     steps:
@@ -158,10 +158,17 @@ jobs:
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
-    # There are known findings today (drizzle-orm below 0.45.2 among them), so
-    # gating merges on this would block every PR on unrelated work. It reports,
-    # visibly, until those are cleared; then drop continue-on-error and it
-    # becomes a gate.
+    # Non-blocking, and the reason is specific rather than habitual. The
+    # remaining findings are all in DEV tooling — vitest and the esbuild that
+    # drizzle-kit pulls in — and neither ships: the runtime image carries only
+    # the traced server output, and the migrate image installs with --prod.
+    # Neither has a fix inside its pinned major, and vitest 5 does not honour
+    # this suite's fileParallelism setting, so every integration file races for
+    # the same database.
+    #
+    # Anything that reaches a shipped artifact is a different matter and should
+    # be fixed rather than annotated. When the dev-only findings clear, drop
+    # continue-on-error and this becomes a gate.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
