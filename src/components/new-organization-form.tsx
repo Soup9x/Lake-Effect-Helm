@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Building2, Loader2, Plus, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
-import { FieldHint, Input, Label, Select } from './ui/field';
+import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 
 /**
  * Adding a client.
@@ -46,6 +46,7 @@ export function NewOrganizationForm() {
   const [slugTouched, setSlugTouched] = useState(false);
   const [status, setStatus] = useState('active');
   const [industry, setIndustry] = useState('');
+  const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,6 +56,7 @@ export function NewOrganizationForm() {
     setSlugTouched(false);
     setStatus('active');
     setIndustry('');
+    setNotes('');
     setError(null);
   }
 
@@ -72,6 +74,7 @@ export function NewOrganizationForm() {
           slug: slugTouched ? slug.trim() : slugify(name),
           status,
           ...(industry.trim() ? { industry: industry.trim() } : {}),
+          ...(notes.trim() ? { notes: notes.trim() } : {}),
         }),
       });
 
@@ -178,6 +181,18 @@ export function NewOrganizationForm() {
                 maxLength={120}
               />
             </div>
+          </div>
+
+          <div>
+            <Label htmlFor="org-notes">Notes</Label>
+            <Textarea
+              id="org-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              maxLength={4000}
+              placeholder="Optional. Anything the next person opening this would want to know."
+            />
           </div>
 
           {error && (

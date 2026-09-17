@@ -16,6 +16,8 @@ const patchSchema = z
     timezone: z.string().trim().max(64).nullable().optional(),
     mainPhone: z.string().trim().max(40).nullable().optional(),
     afterHoursPhone: z.string().trim().max(40).nullable().optional(),
+    /** Informal context, bounded at 4000 characters by a CHECK in 0370. */
+    notes: z.string().trim().max(4000).nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
 
@@ -70,6 +72,7 @@ export const PATCH = tenantRoute(
         timezone          = ${body.timezone === undefined ? tx`timezone` : body.timezone},
         main_phone        = ${body.mainPhone === undefined ? tx`main_phone` : body.mainPhone},
         after_hours_phone = ${body.afterHoursPhone === undefined ? tx`after_hours_phone` : body.afterHoursPhone},
+        notes             = ${body.notes === undefined ? tx`notes` : body.notes},
         updated_at        = now(),
         updated_by        = ${identity.actorId}::uuid
       WHERE id = ${siteId.data}::uuid AND deleted_at IS NULL

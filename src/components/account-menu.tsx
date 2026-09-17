@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import Link from 'next/link';
 import { LogOut, UserCog } from 'lucide-react';
 import { cn } from '@/lib/ui/cn';
 import { Badge } from './ui/badge';
 import { ThemeToggle } from './theme-toggle';
 import { initials } from '@/lib/ui/format';
+import { useDismissable } from '@/lib/ui/use-dismissable';
 
 /**
  * The signed-in account, top right, where every other tool in an MSP's day puts
@@ -18,9 +19,10 @@ import { initials } from '@/lib/ui/format';
  * cramming password changes and session management into a 240px popover, is how
  * an account menu becomes a place people cannot find anything.
  *
- * Closes on outside click and on Escape, and returns focus to the trigger. The
- * tenant switcher in the sidebar predates this and does neither; this is the
- * pattern to copy, not that one.
+ * Closes on outside click and on Escape, and returns focus to the trigger —
+ * useDismissable(), shared with the recently-viewed popover beside it. The
+ * tenant switcher in the sidebar predates both and does neither; the hook is
+ * the pattern to copy, not that one.
  */
 export function AccountMenu({
   name,
@@ -39,26 +41,7 @@ export function AccountMenu({
   const container = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-
-    const onPointerDown = (event: PointerEvent) => {
-      if (!container.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpen(false);
-        trigger.current?.focus();
-      }
-    };
-
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
+  useDismissable(open, useCallback(() => setOpen(false), []), container, trigger);
 
   /**
    * One button for both doors. Entra and local sign-in produce the same

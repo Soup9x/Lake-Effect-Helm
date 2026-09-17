@@ -32,6 +32,12 @@ const createSchema = z.object({
   nodeType: z.enum(CREATABLE),
   name: z.string().trim().min(1).max(200),
   description: z.string().trim().max(2000).optional(),
+  /**
+   * Informal context. Distinct from `description`, which is what this asset
+   * IS; notes are what somebody needs to know about it. Bounded at 4000
+   * characters by a CHECK in 0370.
+   */
+  notes: z.string().trim().max(4000).optional(),
   criticality: z.number().int().min(1).max(5).default(3),
   isInternalOnly: z.boolean().default(false),
   tags: z.array(z.string().trim().min(1).max(60)).max(30).default([]),
@@ -113,13 +119,14 @@ export const POST = tenantRoute(
     try {
       [node] = await tx<{ id: string }[]>`
         INSERT INTO asset_node (
-          tenant_id, organization_id, site_id, node_type, name, description,
+          tenant_id, organization_id, site_id, node_type, name, description, notes,
           criticality, is_internal_only, tags, created_by, updated_by
         )
         VALUES (
           ${identity.tenantId}::uuid, ${body.organizationId}::uuid,
           ${body.siteId ?? null}, ${body.nodeType}::node_type, ${body.name},
-          ${body.description ?? null}, ${body.criticality}, ${body.isInternalOnly},
+          ${body.description ?? null}, ${body.notes ?? null},
+          ${body.criticality}, ${body.isInternalOnly},
           ${body.tags}, ${identity.actorId}::uuid, ${identity.actorId}::uuid
         )
         RETURNING id

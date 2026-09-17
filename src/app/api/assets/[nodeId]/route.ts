@@ -95,6 +95,8 @@ const patchSchema = z
   .object({
     name: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(2000).nullable().optional(),
+    /** Informal context, bounded at 4000 characters by a CHECK in 0370. */
+    notes: z.string().trim().max(4000).nullable().optional(),
     siteId: z.guid().nullable().optional(),
     status: z
       .enum(['planned', 'active', 'maintenance', 'retired', 'decommissioned'])
@@ -140,6 +142,7 @@ export const PATCH = tenantRoute(
         UPDATE asset_node SET
           name             = COALESCE(${body.name ?? null}, name),
           description      = ${body.description === undefined ? tx`description` : body.description},
+          notes            = ${body.notes === undefined ? tx`notes` : body.notes},
           site_id          = ${body.siteId === undefined ? tx`site_id` : body.siteId}::uuid,
           status           = COALESCE(${body.status ?? null}::node_status, status),
           criticality      = COALESCE(${body.criticality ?? null}, criticality),

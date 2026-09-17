@@ -10,9 +10,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
 import { RevealButton } from '@/components/reveal-button';
 import { formatDate, formatDateTime, humanise } from '@/lib/ui/format';
+import { recordView } from '@/lib/workspace/queries';
+import { NotesCard } from '@/components/notes-card';
 
 interface NodeRow {
   id: string; node_type: string; name: string; description: string | null;
+  notes: string | null;
   status: string; tags: string[]; criticality: number;
   organization_id: string; organization_name: string;
   site_name: string | null; updated_at: Date;
@@ -48,8 +51,8 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   const data = await withTenant(actorOf(identity), async (tx) => {
     const [node] = await tx<NodeRow[]>`
-      SELECT n.id, n.node_type::text, n.name, n.description, n.status::text, n.tags,
-             n.criticality, n.organization_id, o.name AS organization_name,
+      SELECT n.id, n.node_type::text, n.name, n.description, n.notes, n.status::text,
+             n.tags, n.criticality, n.organization_id, o.name AS organization_name,
              s.name AS site_name, n.updated_at
       FROM asset_node n
       JOIN organization o ON o.id = n.organization_id
@@ -57,6 +60,10 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       WHERE n.id = ${nodeId}::uuid AND n.archived_at IS NULL
     `;
     if (!node) return null;
+
+    // After the node has been proven readable, so an id RLS refuses never
+    // appears in somebody's recent list.
+    await recordView(tx, { nodeId });
 
     const [detailRows, edges, secrets, expiries] = await Promise.all([
       // The subtype row, as a flat object. The table name is derived from the
@@ -101,18 +108,17 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       <PageHeader
         title={node.name}
         description={node.description ?? undefined}
+        // The site is a crumb without a link: it is genuinely where this asset
+        // sits, and it has no page of its own to go to.
+        trail={[
+          { label: 'Clients', href: '/organizations' },
+          { label: node.organization_name, href: `/organizations/${node.organization_id}` },
+          ...(node.site_name ? [{ label: node.site_name }] : []),
+        ]}
         actions={
-          <div className="flex items-center gap-3">
-            {!isClientRole(identity.roleKey) && (
-              <RenameAsset nodeId={node.id} currentName={node.name} />
-            )}
-            <Link
-              href={`/organizations/${node.organization_id}`}
-              className="text-sm text-brand hover:underline"
-            >
-              {node.organization_name}
-            </Link>
-          </div>
+          !isClientRole(identity.roleKey) ? (
+            <RenameAsset nodeId={node.id} currentName={node.name} />
+          ) : undefined
         }
       />
       <PageBody>
@@ -134,6 +140,14 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             </Badge>
           ))}
         </div>
+
+        {/* A credential's notes land here too: a credential IS an asset_node,
+            and 0370 made that the one place notes live for any of them. */}
+        <NotesCard
+          endpoint={`/api/assets/${node.id}`}
+          notes={node.notes}
+          canEdit={!isClientRole(identity.roleKey)}
+        />
 
         <div className="grid gap-4 lg:grid-cols-2">
           <Card>

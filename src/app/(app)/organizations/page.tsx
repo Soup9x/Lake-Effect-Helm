@@ -4,10 +4,13 @@ import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent } from '@/components/ui/card';
-import { Badge, severityTone } from '@/components/ui/badge';
+import { Badge } from '@/components/ui/badge';
+import { HealthDot } from '@/components/ui/health-dot';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { NewOrganizationForm } from '@/components/new-organization-form';
+import { FavoriteStar } from '@/components/favorite-star';
 import { isClientRole } from '@/lib/ui/roles';
+import { favoriteIds } from '@/lib/workspace/queries';
 
 interface OrganizationRow {
   id: string;
@@ -18,8 +21,11 @@ interface OrganizationRow {
   site_count: string;
   asset_count: string;
   secret_count: string;
-  worst_severity: string | null;
-  soonest_expiry: Date | null;
+  health: string;
+  expired_count: number;
+  critical_count: number;
+  warning_count: number;
+  reasons: string[] | null;
 }
 
 /**
@@ -29,14 +35,19 @@ interface OrganizationRow {
  * each subquery is independently RLS-scoped, so an organisation a client user
  * cannot see contributes nothing anywhere, and there is no join fan-out to get
  * the asset count wrong.
+ *
+ * Health comes from v_client_health, which aggregates v_expiration_dashboard.
+ * The old "next expiry" column showed the severity of the SOONEST row, which is
+ * not the same thing and was quietly wrong: a client with a certificate that
+ * expired last month and a warranty due next year reported the warranty.
  */
 export default async function OrganizationsPage() {
   const identity = await getServerIdentity();
 
   const canWrite = !isClientRole(identity.roleKey);
 
-  const organizations = await withTenant(actorOf(identity), async (tx) => {
-    return tx<OrganizationRow[]>`
+  const { organizations, pinned } = await withTenant(actorOf(identity), async (tx) => {
+    const rows = await tx<OrganizationRow[]>`
       SELECT
         o.id, o.name, o.status::text, o.is_msp_internal, o.industry,
         (SELECT count(*) FROM site s
@@ -45,15 +56,27 @@ export default async function OrganizationsPage() {
           WHERE n.organization_id = o.id AND n.archived_at IS NULL) AS asset_count,
         (SELECT count(*) FROM v_secret_metadata m
           WHERE m.organization_id = o.id) AS secret_count,
-        (SELECT e.severity::text FROM v_expiration_dashboard e
-          WHERE e.organization_id = o.id ORDER BY e.expires_at LIMIT 1) AS worst_severity,
-        (SELECT min(e.expires_at) FROM v_expiration_dashboard e
-          WHERE e.organization_id = o.id) AS soonest_expiry
+        coalesce(h.health, 'green') AS health,
+        coalesce(h.expired_count, 0) AS expired_count,
+        coalesce(h.critical_count, 0) AS critical_count,
+        coalesce(h.warning_count, 0) AS warning_count,
+        h.reasons
       FROM organization o
+      LEFT JOIN v_client_health h ON h.organization_id = o.id
       WHERE o.deleted_at IS NULL
       ORDER BY o.is_msp_internal, o.name
     `;
+    return { organizations: rows, pinned: await favoriteIds(tx) };
   });
+
+  // Pinned clients float to the top of the same table rather than into a
+  // separate card. A technician scanning for a client should find it in one
+  // place whether or not they starred it; two lists means checking both.
+  const ordered = [
+    ...organizations.filter((o) => pinned.has(o.id)),
+    ...organizations.filter((o) => !pinned.has(o.id)),
+  ];
+  const firstUnpinned = organizations.filter((o) => pinned.has(o.id)).length;
 
   return (
     <>
@@ -75,16 +98,35 @@ export default async function OrganizationsPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-8">
+                      <span className="sr-only">Pinned</span>
+                    </TableHead>
                     <TableHead>Client</TableHead>
+                    <TableHead>Health</TableHead>
                     <TableHead>Sites</TableHead>
                     <TableHead>Assets</TableHead>
                     <TableHead>Credentials</TableHead>
-                    <TableHead>Next expiry</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {organizations.map((org) => (
-                    <TableRow key={org.id}>
+                  {ordered.map((org, index) => (
+                    <TableRow
+                      key={org.id}
+                      // A hairline under the last pinned row. Enough to say
+                      // "these are yours" without a second heading.
+                      className={
+                        firstUnpinned > 0 && index === firstUnpinned - 1
+                          ? 'border-b-2 border-b-border'
+                          : undefined
+                      }
+                    >
+                      <TableCell className="pr-0">
+                        <FavoriteStar
+                          organizationId={org.id}
+                          pinned={pinned.has(org.id)}
+                          label={org.name}
+                        />
+                      </TableCell>
                       <TableCell>
                         <Link
                           href={`/organizations/${org.id}`}
@@ -100,16 +142,22 @@ export default async function OrganizationsPage() {
                           )}
                         </div>
                       </TableCell>
+                      <TableCell>
+                        <HealthDot
+                          showLabel
+                          organizationId={org.id}
+                          health={{
+                            health: org.health,
+                            expiredCount: org.expired_count,
+                            criticalCount: org.critical_count,
+                            warningCount: org.warning_count,
+                            reasons: org.reasons,
+                          }}
+                        />
+                      </TableCell>
                       <TableCell className="tabular-nums text-ink-muted">{org.site_count}</TableCell>
                       <TableCell className="tabular-nums text-ink-muted">{org.asset_count}</TableCell>
                       <TableCell className="tabular-nums text-ink-muted">{org.secret_count}</TableCell>
-                      <TableCell>
-                        {org.worst_severity ? (
-                          <Badge tone={severityTone(org.worst_severity)}>{org.worst_severity}</Badge>
-                        ) : (
-                          <span className="text-ink-faint">—</span>
-                        )}
-                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

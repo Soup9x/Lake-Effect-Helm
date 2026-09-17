@@ -135,12 +135,13 @@ export const POST = tenantRoute(
       // The credential node. Same transaction, so the two cannot come apart.
       [node] = await tx<{ id: string }[]>`
         INSERT INTO asset_node (
-          tenant_id, organization_id, site_id, node_type, name,
+          tenant_id, organization_id, site_id, node_type, name, notes,
           criticality, created_by, updated_by
         )
         VALUES (
           ${identity.tenantId}::uuid, ${body.organizationId}::uuid,
           ${body.siteId ?? null}, 'credential'::node_type, ${body.label},
+          ${body.notes ?? null},
           ${body.criticality}, ${identity.actorId}::uuid, ${identity.actorId}::uuid
         )
         RETURNING id
@@ -153,15 +154,19 @@ export const POST = tenantRoute(
     }
     if (!node) throw ApiError.conflict('the credential could not be created');
 
+    // `notes` went onto the NODE above, not here. 0370 removed
+    // credential.notes: a credential that carried its own notes column had two
+    // of them once every asset gained one, with the interface editing the node's
+    // and the offboarding export reading the credential's.
     await tx`
       INSERT INTO credential (
-        id, tenant_id, node_type, credential_type, username, url, notes,
+        id, tenant_id, node_type, credential_type, username, url,
         secret_id, is_break_glass
       )
       VALUES (
         ${node.id}::uuid, ${identity.tenantId}::uuid, 'credential',
         ${body.credentialType}::credential_type,
-        ${body.username ?? null}, ${body.url ?? null}, ${body.notes ?? null},
+        ${body.username ?? null}, ${body.url ?? null},
         ${created.secretId}::uuid, ${body.isBreakGlass}
       )
     `;

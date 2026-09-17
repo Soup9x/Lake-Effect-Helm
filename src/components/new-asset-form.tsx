@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Loader2, Plus, Server, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
-import { FieldHint, Input, Label, Select } from './ui/field';
+import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 
 /**
  * Documenting an asset.
@@ -85,6 +85,7 @@ export function NewAssetForm({
   const [name, setName] = useState('');
   const [siteId, setSiteId] = useState('');
   const [extra, setExtra] = useState('');
+  const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,6 +93,7 @@ export function NewAssetForm({
     setName('');
     setSiteId('');
     setExtra('');
+    setNotes('');
     setNodeType('device');
     setError(null);
     setOpen(false);
@@ -145,6 +147,7 @@ export function NewAssetForm({
           name: name.trim(),
           ...(siteId ? { siteId } : {}),
           ...(key ? { [key]: extraValue } : {}),
+          ...(notes.trim() ? { notes: notes.trim() } : {}),
         }),
       });
       if (!response.ok) {
@@ -259,6 +262,18 @@ export function NewAssetForm({
                 </Select>
               </div>
             )}
+          </div>
+
+          <div>
+            <Label htmlFor="asset-notes">Notes</Label>
+            <Textarea
+              id="asset-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              maxLength={4000}
+              placeholder="Optional. Anything the next person opening this would want to know."
+            />
           </div>
 
           {error && (

@@ -9,6 +9,10 @@ import { NewSiteForm } from '@/components/new-site-form';
 import { NewAssetForm } from '@/components/new-asset-form';
 import { RenameOrganization } from '@/components/rename-organization';
 import { isClientRole } from '@/lib/ui/roles';
+import { FavoriteStar } from '@/components/favorite-star';
+import { NotesCard } from '@/components/notes-card';
+import { HealthDot } from '@/components/ui/health-dot';
+import { isFavorite, recordView } from '@/lib/workspace/queries';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -19,12 +23,13 @@ import { formatDate, humanise, relativeDays } from '@/lib/ui/format';
 interface OrgRow {
   id: string; name: string; legal_name: string | null; status: string;
   industry: string | null; employee_count: number | null; timezone: string | null;
-  website: string | null; onboarded_at: Date | null;
+  website: string | null; onboarded_at: Date | null; notes: string | null;
 }
 
 interface SiteRow {
   id: string; name: string; is_primary: boolean; address_line1: string | null;
   city: string | null; region: string | null; main_phone: string | null;
+  notes: string | null;
 }
 
 interface ContactRow {
@@ -47,6 +52,11 @@ interface ExpiryRow {
   id: string; label: string; kind: string; expires_at: Date; severity: string; days_remaining: number;
 }
 
+interface HealthRow {
+  health: string; expired_count: number; critical_count: number;
+  warning_count: number; reasons: string[] | null;
+}
+
 /**
  * One client, everything Helm knows about them.
  *
@@ -67,14 +77,19 @@ export default async function OrganizationPage({
   const data = await withTenant(actorOf(identity), async (tx) => {
     const [organization] = await tx<OrgRow[]>`
       SELECT id, name, legal_name, status::text, industry, employee_count,
-             timezone, website, onboarded_at
+             timezone, website, onboarded_at, notes
       FROM organization WHERE id = ${organizationId}::uuid AND deleted_at IS NULL
     `;
     if (!organization) return null;
 
-    const [sites, contacts, assets, credentials, expiries] = await Promise.all([
+    // Recorded before the rest, and only once the organisation has been proven
+    // readable: an id that RLS refuses returns above, so nothing lands in
+    // somebody's history for a client they cannot see.
+    await recordView(tx, { organizationId });
+
+    const [sites, contacts, assets, credentials, expiries, health, pinned] = await Promise.all([
       tx<SiteRow[]>`
-        SELECT id, name, is_primary, address_line1, city, region, main_phone
+        SELECT id, name, is_primary, address_line1, city, region, main_phone, notes
         FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
         ORDER BY is_primary DESC, name
       `,
@@ -107,21 +122,27 @@ export default async function OrganizationPage({
         WHERE organization_id = ${organizationId}::uuid
         ORDER BY expires_at LIMIT 25
       `,
+      tx<HealthRow[]>`
+        SELECT health, expired_count, critical_count, warning_count, reasons
+        FROM v_client_health WHERE organization_id = ${organizationId}::uuid
+      `,
+      isFavorite(tx, organizationId),
     ]);
 
-    return { organization, sites, contacts, assets, credentials, expiries };
+    return { organization, sites, contacts, assets, credentials, expiries, health: health[0], pinned };
   });
 
   // RLS makes "not yours" and "not there" the same answer; so does this page.
   if (!data) notFound();
 
-  const { organization, sites, contacts, assets, credentials, expiries } = data;
+  const { organization, sites, contacts, assets, credentials, expiries, health, pinned } = data;
   const canWrite = !isClientRole(identity.roleKey);
 
   return (
     <>
       <PageHeader
         title={organization.name}
+        trail={[{ label: 'Clients', href: '/organizations' }]}
         description={
           [organization.legal_name, organization.industry, organization.timezone]
             .filter(Boolean)
@@ -129,6 +150,22 @@ export default async function OrganizationPage({
         }
         actions={
           <div className="flex items-center gap-2">
+            <HealthDot
+              showLabel
+              organizationId={organization.id}
+              health={{
+                health: health?.health ?? 'green',
+                expiredCount: health?.expired_count ?? 0,
+                criticalCount: health?.critical_count ?? 0,
+                warningCount: health?.warning_count ?? 0,
+                reasons: health?.reasons ?? null,
+              }}
+            />
+            <FavoriteStar
+              organizationId={organization.id}
+              pinned={pinned}
+              label={organization.name}
+            />
             {canWrite && (
               <RenameOrganization
                 organizationId={organization.id}
@@ -152,6 +189,11 @@ export default async function OrganizationPage({
             />
           </div>
         )}
+        <NotesCard
+          endpoint={`/api/organizations/${organization.id}`}
+          notes={organization.notes}
+          canEdit={canWrite}
+        />
         <div className="grid gap-4 lg:grid-cols-3">
           <Card>
             <CardHeader>
@@ -171,6 +213,11 @@ export default async function OrganizationPage({
                     {[site.address_line1, site.city, site.region].filter(Boolean).join(', ') || '—'}
                   </div>
                   {site.main_phone && <div className="text-ink-faint">{site.main_phone}</div>}
+                  {site.notes && (
+                    <p className="mt-1 whitespace-pre-wrap break-words border-l-2 border-border pl-2 text-xs text-ink-muted">
+                      {site.notes}
+                    </p>
+                  )}
                 </div>
               ))}
             </CardContent>

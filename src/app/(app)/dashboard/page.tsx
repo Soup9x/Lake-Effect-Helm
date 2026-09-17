@@ -3,10 +3,14 @@ import { AlertTriangle, Building2, CalendarClock, FileDown, KeyRound, Plug } fro
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge, severityTone } from '@/components/ui/badge';
-import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { formatDate, humanise, relativeDays } from '@/lib/ui/format';
+import { Card, CardContent } from '@/components/ui/card';
+import { DashboardCustomise } from '@/components/dashboard-customise';
+import {
+  ActivityWidget, ClientHealthWidget, ExpirationsWidget, FavoritesWidget, RecentlyViewedWidget,
+  type ActivityRow, type ClientHealthRow, type UpcomingRow,
+} from '@/components/widgets';
+import { getLayout, listFavorites, listRecent } from '@/lib/workspace/queries';
+import type { WidgetKey } from '@/lib/workspace/widgets';
 
 interface Counts {
   organizations: string;
@@ -18,29 +22,42 @@ interface Counts {
   pending_approvals: string;
 }
 
-interface UpcomingRow {
-  id: string;
-  organization_name: string;
-  kind: string;
-  label: string;
-  expires_at: Date;
-  severity: string;
-  days_remaining: number;
+interface HealthRow {
+  organization_id: string; name: string; health: string;
+  expired_count: number; critical_count: number; warning_count: number;
+  reasons: string[] | null;
 }
 
 /**
- * The single pane of glass.
+ * The single pane of glass, arranged by whoever is looking at it.
  *
  * Every number here is scoped by RLS to what this actor may see, so a
  * client-side co-managed user gets their own organisation's counts from the
  * same query a super admin runs across every client. There is no "if client
  * then different query" branch, which is exactly the branch that eventually
  * gets the condition backwards.
+ *
+ * WHAT IS AND IS NOT A WIDGET.
+ *
+ * The two banners and the counter strip are fixed. They are not panels somebody
+ * chose to look at — they are the things that mean somebody has to do something
+ * today, and a dashboard where "three credential exports are waiting for a
+ * second approver" can be switched off is a dashboard where it will be. The
+ * five widgets below are arrangement: which lists you want in front of you,
+ * which is genuinely a matter of what you do all day.
+ *
+ * Only the widgets in the layout are queried. Somebody who removed the activity
+ * widget does not read the audit log on every dashboard load, and that is
+ * visible here rather than buried in five components that each fetch their own.
  */
 export default async function DashboardPage() {
   const identity = await getServerIdentity();
 
-  const { counts, upcoming } = await withTenant(actorOf(identity), async (tx) => {
+  const data = await withTenant(actorOf(identity), async (tx) => {
+    // The layout first: everything after it is conditional on what it names.
+    const layout = await getLayout(tx);
+    const wants = (key: WidgetKey) => layout.includes(key);
+
     const [countRow] = await tx<Counts[]>`
       SELECT
         (SELECT count(*) FROM organization WHERE deleted_at IS NULL) AS organizations,
@@ -56,25 +73,80 @@ export default async function DashboardPage() {
             AND revoked_at IS NULL AND expires_at > now()) AS pending_approvals
     `;
 
-    const rows = await tx<UpcomingRow[]>`
-      SELECT id, organization_name, kind::text, label, expires_at, severity::text, days_remaining
-      FROM v_expiration_dashboard
-      WHERE days_remaining <= 45
-      ORDER BY expires_at
-      LIMIT 12
-    `;
+    const [favorites, recent, upcoming, activity, health] = await Promise.all([
+      wants('favorites') ? listFavorites(tx) : [],
+      wants('recently_viewed') ? listRecent(tx, 8) : [],
+      wants('expirations')
+        ? tx<UpcomingRow[]>`
+            SELECT id, organization_name, kind::text, label, expires_at, severity::text,
+                   days_remaining
+            FROM v_expiration_dashboard
+            WHERE days_remaining <= 45
+            ORDER BY expires_at
+            LIMIT 12
+          `
+        : [],
+      wants('audit_activity')
+        ? tx<ActivityRow[]>`
+            SELECT a.event_uid, a.occurred_at, a.actor_label, a.action, a.outcome::text,
+                   o.name AS organization_name
+            FROM audit_log a
+            LEFT JOIN organization o ON o.id = a.organization_id
+            ORDER BY a.occurred_at DESC
+            LIMIT 10
+          `
+        : [],
+      wants('client_health')
+        ? tx<HealthRow[]>`
+            SELECT h.organization_id, h.organization_name AS name, h.health,
+                   h.expired_count, h.critical_count, h.warning_count, h.reasons
+            FROM v_client_health h
+          `
+        : [],
+    ]);
 
-    return { counts: countRow, upcoming: rows };
+    return { layout, counts: countRow, favorites, recent, upcoming, activity, health };
   });
 
+  const { layout, counts, favorites, recent, upcoming, activity, health } = data;
   const expired = Number(counts?.expired ?? 0);
   const pendingApprovals = Number(counts?.pending_approvals ?? 0);
+
+  const clients: ClientHealthRow[] = health.map((row) => ({
+    organizationId: row.organization_id,
+    name: row.name,
+    health: row.health,
+    expiredCount: row.expired_count,
+    criticalCount: row.critical_count,
+    warningCount: row.warning_count,
+    reasons: row.reasons,
+  }));
+
+  // Two columns of widgets, except the expirations table, which is a five
+  // column table and unreadable in half the width.
+  const WIDE = new Set<WidgetKey>(['expirations']);
+
+  function render(key: WidgetKey) {
+    switch (key) {
+      case 'favorites':
+        return <FavoritesWidget favorites={favorites} />;
+      case 'recently_viewed':
+        return <RecentlyViewedWidget recent={recent} />;
+      case 'expirations':
+        return <ExpirationsWidget upcoming={upcoming} />;
+      case 'audit_activity':
+        return <ActivityWidget activity={activity} />;
+      case 'client_health':
+        return <ClientHealthWidget clients={clients} />;
+    }
+  }
 
   return (
     <>
       <PageHeader
         title={identity.tenantName}
         description="Everything that needs attention, across every client."
+        actions={<DashboardCustomise layout={layout} />}
       />
       <PageBody>
         {/*
@@ -126,45 +198,19 @@ export default async function DashboardPage() {
           />
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Next 45 days</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead>Item</TableHead>
-                  <TableHead>Client</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Expires</TableHead>
-                  <TableHead>Severity</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {upcoming.length === 0 && (
-                  <TableEmpty colSpan={5}>Nothing expires in the next 45 days.</TableEmpty>
-                )}
-                {upcoming.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="font-medium">{row.label}</TableCell>
-                    <TableCell className="text-ink-muted">{row.organization_name}</TableCell>
-                    <TableCell className="text-ink-muted">{humanise(row.kind)}</TableCell>
-                    <TableCell className="text-ink-muted">
-                      {formatDate(row.expires_at)}
-                      <span className="ml-2 text-xs text-ink-faint">
-                        {relativeDays(row.days_remaining)}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <Badge tone={severityTone(row.severity)}>{row.severity}</Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        {layout.length === 0 ? (
+          <p className="rounded-[--radius-card] border border-dashed border-border px-4 py-8 text-center text-sm text-ink-muted">
+            No widgets on your dashboard. Customise adds them back.
+          </p>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {layout.map((key) => (
+              <div key={key} className={WIDE.has(key) ? 'lg:col-span-2' : undefined}>
+                {render(key)}
+              </div>
+            ))}
+          </div>
+        )}
       </PageBody>
     </>
   );

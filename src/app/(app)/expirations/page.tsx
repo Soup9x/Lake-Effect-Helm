@@ -10,6 +10,7 @@ import { formatDate, humanise, relativeDays } from '@/lib/ui/format';
 import { cn } from '@/lib/ui/cn';
 
 const SEVERITIES = ['expired', 'critical', 'warning', 'notice', 'info'] as const;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface ExpirationRow {
   id: string;
@@ -35,43 +36,82 @@ interface ExpirationRow {
 export default async function ExpirationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ severity?: string }>;
+  searchParams: Promise<{ severity?: string; organizationId?: string }>;
 }) {
   const identity = await getServerIdentity();
   const params = await searchParams;
   const severity = SEVERITIES.includes(params.severity as never) ? params.severity : undefined;
+  // A malformed id is dropped rather than refused: this is a filter on a list,
+  // and an unparseable one should show the unfiltered list, not an error page.
+  // The value is parameterised regardless, and RLS scopes the result either way.
+  const organizationId = UUID.test(params.organizationId ?? '') ? params.organizationId : undefined;
 
-  const rows = await withTenant(actorOf(identity), async (tx) => {
-    return tx<ExpirationRow[]>`
+  const { rows, organizationName } = await withTenant(actorOf(identity), async (tx) => {
+    const list = await tx<ExpirationRow[]>`
       SELECT id, organization_id, organization_name, kind::text, node_id, label,
              expires_at, auto_renew, severity::text, days_remaining
       FROM v_expiration_dashboard
-      ${severity ? tx`WHERE severity = ${severity}::alert_severity` : tx``}
+      WHERE true
+        ${severity ? tx`AND severity = ${severity}::alert_severity` : tx``}
+        ${organizationId ? tx`AND organization_id = ${organizationId}::uuid` : tx``}
       ORDER BY expires_at
       LIMIT 500
     `;
+    // Named from the organisation rather than from the first row, so filtering
+    // to a client with nothing expiring still says whose list is empty.
+    const named = organizationId
+      ? await tx<{ name: string }[]>`
+          SELECT name FROM organization WHERE id = ${organizationId}::uuid AND deleted_at IS NULL
+        `
+      : [];
+    return { rows: list, organizationName: named[0]?.name ?? null };
   });
+
+  const keep = (extra: Record<string, string | undefined>) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries({ severity, organizationId, ...extra })) {
+      if (value) query.set(key, value);
+    }
+    const encoded = query.toString();
+    return encoded ? `/expirations?${encoded}` : '/expirations';
+  };
 
   return (
     <>
       <PageHeader
         title="Expirations"
-        description="Certificates, domains, warranties, licences and contracts across every client, in one list."
+        trail={
+          organizationId && organizationName
+            ? [
+                { label: 'Clients', href: '/organizations' },
+                { label: organizationName, href: `/organizations/${organizationId}` },
+              ]
+            : []
+        }
+        description={
+          organizationName
+            ? `Everything tracked as expiring for ${organizationName}.`
+            : 'Certificates, domains, warranties, licences and contracts across every client, in one list.'
+        }
       />
       <PageBody>
         <nav className="flex flex-wrap items-center gap-1.5">
-          <FilterLink href="/expirations" active={!severity}>
+          <FilterLink href={keep({ severity: undefined })} active={!severity}>
             All
           </FilterLink>
           {SEVERITIES.map((value) => (
-            <FilterLink
-              key={value}
-              href={`/expirations?severity=${value}`}
-              active={severity === value}
-            >
+            <FilterLink key={value} href={keep({ severity: value })} active={severity === value}>
               {humanise(value)}
             </FilterLink>
           ))}
+          {organizationId && (
+            /* The client filter is removable on its own, so somebody who
+               arrived from a health badge can widen back out without
+               losing the severity they then picked. */
+            <FilterLink href={keep({ organizationId: undefined })} active>
+              {organizationName ?? 'This client'} ✕
+            </FilterLink>
+          )}
         </nav>
 
         <Card>

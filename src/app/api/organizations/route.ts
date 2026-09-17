@@ -65,6 +65,7 @@ const createSchema = z.object({
   industry: z.string().trim().max(120).optional(),
   website: z.string().trim().url('website must be a URL').max(500).optional(),
   timezone: z.string().trim().max(64).default('America/New_York'),
+  notes: z.string().trim().max(4000).optional(),
 });
 
 /**
@@ -104,13 +105,14 @@ export const POST = tenantRoute(
     try {
       [created] = await tx<{ id: string; slug: string; name: string }[]>`
         INSERT INTO organization (
-          tenant_id, slug, name, legal_name, status, industry, website, timezone, created_by
+          tenant_id, slug, name, legal_name, status, industry, website, timezone, notes,
+          created_by
         )
         VALUES (
           ${identity.tenantId}::uuid, ${body.slug}, ${body.name},
           ${body.legalName ?? null}, ${body.status}::organization_status,
           ${body.industry ?? null}, ${body.website ?? null}, ${body.timezone},
-          ${identity.actorId}::uuid
+          ${body.notes ?? null}, ${identity.actorId}::uuid
         )
         RETURNING id, slug, name
       `;

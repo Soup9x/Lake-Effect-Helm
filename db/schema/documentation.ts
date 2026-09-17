@@ -27,7 +27,9 @@ export const credential = pgTable('credential', {
   credentialType: credentialType('credential_type').notNull().default('standard_user'),
   username: text('username'),
   url: text('url'),
-  notes: text('notes'),
+  // No `notes` here. 0370 moved it to asset_node, where every asset's notes
+  // live: a credential carrying its own left the interface editing one field
+  // and the offboarding export reading another.
 
   secretId: uuid('secret_id'),
   totpSecretId: uuid('totp_secret_id'),

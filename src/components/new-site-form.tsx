@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Loader2, MapPin, Plus, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
-import { FieldHint, Input, Label } from './ui/field';
+import { FieldHint, Input, Label, Textarea } from './ui/field';
 
 /**
  * Adding a location.
@@ -23,6 +23,7 @@ export function NewSiteForm({ organizationId }: { organizationId: string }) {
   const [city, setCity] = useState('');
   const [region, setRegion] = useState('');
   const [isPrimary, setIsPrimary] = useState(false);
+  const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,6 +33,7 @@ export function NewSiteForm({ organizationId }: { organizationId: string }) {
     setCity('');
     setRegion('');
     setIsPrimary(false);
+    setNotes('');
     setError(null);
     setOpen(false);
   }
@@ -51,6 +53,7 @@ export function NewSiteForm({ organizationId }: { organizationId: string }) {
           ...(code.trim() ? { code: code.trim() } : {}),
           ...(city.trim() ? { city: city.trim() } : {}),
           ...(region.trim() ? { region: region.trim() } : {}),
+          ...(notes.trim() ? { notes: notes.trim() } : {}),
         }),
       });
       if (!response.ok) {
@@ -152,6 +155,19 @@ export function NewSiteForm({ organizationId }: { organizationId: string }) {
                 Whichever site is primary today will stop being primary.
               </FieldHint>
             )}
+          </div>
+
+
+          <div>
+            <Label htmlFor="site-notes">Notes</Label>
+            <Textarea
+              id="site-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              maxLength={4000}
+              placeholder="Optional. Anything the next person opening this would want to know."
+            />
           </div>
 
           {error && (

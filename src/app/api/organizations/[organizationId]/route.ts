@@ -27,6 +27,8 @@ const patchSchema = z
     industry: z.string().trim().max(120).nullable().optional(),
     website: z.string().trim().url('website must be a URL').max(500).nullable().optional(),
     timezone: z.string().trim().max(64).optional(),
+    /** Informal context, bounded at 4000 characters by a CHECK in 0370. */
+    notes: z.string().trim().max(4000).nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
 
@@ -81,6 +83,7 @@ export const PATCH = tenantRoute(
           industry   = ${body.industry === undefined ? tx`industry` : body.industry},
           website    = ${body.website === undefined ? tx`website` : body.website},
           timezone   = COALESCE(${body.timezone ?? null}, timezone),
+          notes      = ${body.notes === undefined ? tx`notes` : body.notes},
           updated_at = now(),
           updated_by = ${identity.actorId}::uuid
         WHERE id = ${organizationId.data}::uuid AND deleted_at IS NULL
