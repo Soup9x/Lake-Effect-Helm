@@ -25,6 +25,8 @@ export const assetNode = pgTable('asset_node', {
   nodeType: nodeType('node_type').notNull(),
   name: text('name').notNull(),
   description: text('description'),
+  /** Informal context. `description` is what this asset IS; notes are what somebody needs to know about it. */
+  notes: text('notes'),
   status: nodeStatus('status').notNull().default('active'),
 
   tags: textArray('tags').notNull().default([]),

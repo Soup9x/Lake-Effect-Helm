@@ -19,6 +19,7 @@
 \set u_ro      '''1b000000-0000-0000-0000-000000000004'''
 \set u_admin2  '''2b000000-0000-0000-0000-000000000001'''
 
+\set sa1       '''1f000000-0000-0000-0000-000000000001'''
 \set k1        '''1c000000-0000-0000-0000-000000000001'''
 \set k2        '''2c000000-0000-0000-0000-000000000001'''
 
@@ -59,6 +60,12 @@ INSERT INTO membership (tenant_id, user_id, role_key, org_scope_all, org_scope, 
   (:t1, :u_acme,   'client_admin',     false, ARRAY[:t1_acme]::uuid[], false),
   (:t1, :u_ro,     'client_read_only', false, ARRAY[:t1_acme]::uuid[], false),
   (:t2, :u_admin2, 'super_admin',      true,  NULL, false);
+
+-- A machine identity. Not a person: it has no membership, no recently-viewed
+-- list and no dashboard, which is what the personal-state policies rely on to
+-- keep a background job out of somebody's browsing history.
+INSERT INTO service_account (id, tenant_id, name, role_key, org_scope_all) VALUES
+  (:sa1, :t1, 'expiration-sweeper', 'api_service', true);
 
 INSERT INTO tenant_data_key
   (id, tenant_id, generation, status, wrapped_dek, wrap_provider, kek_id, activated_at)

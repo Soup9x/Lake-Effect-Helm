@@ -22,6 +22,7 @@
 \set n_net     '''1d000000-0000-0000-0000-000000000002'''
 \set n_cred    '''1d000000-0000-0000-0000-000000000004'''
 \set k1        '''1c000000-0000-0000-0000-000000000001'''
+\set sa1       '''1f000000-0000-0000-0000-000000000001'''
 
 \echo ''
 \echo '== 1. Fail-closed: a connection with no session context sees nothing =='
@@ -740,6 +741,218 @@ SELECT helm_test.check('no client-side role holds it',
     SELECT 1 FROM role_permission rp JOIN app_role r ON r.key = rp.role_key
     WHERE rp.permission_key = 'tenant:write' AND NOT r.is_tenant_wide));
 ROLLBACK;
+
+\echo ''
+\echo '== 26. Personal workspace state is personal, not merely tenant-scoped =='
+-- user_favorite, user_recent_view and user_dashboard are scoped by a policy
+-- naming both the tenant AND the acting user. Almost every other table in this
+-- schema is scoped by tenant alone, so this is the one place where the usual
+-- reasoning — "same tenant, therefore visible" — is deliberately wrong.
+--
+-- It matters because a recently-viewed list is a record of WHICH CLIENTS
+-- SOMEBODY HAS BEEN LOOKING AT. In an MSP that is exactly the question the
+-- audit log exists to answer under supervision, and not one every colleague
+-- should be able to answer casually over the same connection.
+--
+-- These assertions use a live session context rather than reading pg_policies,
+-- because a policy whose text mentions current_actor_id() can still be wrong.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_tech1);
+INSERT INTO user_favorite (tenant_id, user_id, organization_id)
+  VALUES (:t1, :u_tech1, :t1_acme);
+SELECT helm.record_view(:t1_acme, NULL);
+SELECT helm.record_view(NULL, :n_fw);
+INSERT INTO user_dashboard (tenant_id, user_id, widgets)
+  VALUES (:t1, :u_tech1, '["favorites","expirations"]'::jsonb);
+
+SELECT helm_test.check('a technician sees their own favourite',
+  (SELECT count(*) FROM user_favorite) = 1);
+SELECT helm_test.check('...and the two things they just opened',
+  (SELECT count(*) FROM user_recent_view) = 2);
+SELECT helm_test.check('record_view took the actor from the context, not an argument',
+  (SELECT count(*) FROM user_recent_view WHERE user_id = :u_tech1) = 2);
+
+-- Writing a row onto somebody else's list. The INSERT policy's WITH CHECK
+-- names the actor, so this is refused rather than silently landing in a
+-- colleague's favourites.
+SELECT helm_test.check_raises('cannot favourite on another user''s behalf',
+  format($$INSERT INTO user_favorite (tenant_id, user_id, organization_id)
+           VALUES (%L, %L, %L)$$, :t1, :u_admin1, :t1_globex));
+
+-- And the same for moving an existing row across. USING would find it; the
+-- WITH CHECK is what refuses the destination.
+SELECT helm_test.check_raises('cannot hand a favourite to another user',
+  format($$UPDATE user_favorite SET user_id = %L$$, :u_admin1));
+
+-- A layout the interface cannot render is refused at write time by
+-- helm.dashboard_layout_valid(), so a broken dashboard is never a row somebody
+-- has to find in the database.
+SELECT helm_test.check_raises('an unknown widget key is refused',
+  format($$UPDATE user_dashboard SET widgets = '["favorites","not_a_widget"]'::jsonb
+           WHERE user_id = %L$$, :u_tech1));
+SELECT helm_test.check_raises('a duplicated widget is refused',
+  format($$UPDATE user_dashboard SET widgets = '["favorites","favorites"]'::jsonb
+           WHERE user_id = %L$$, :u_tech1));
+SELECT helm_test.check_raises('a layout that is not an array is refused',
+  format($$UPDATE user_dashboard SET widgets = '{"favorites": true}'::jsonb
+           WHERE user_id = %L$$, :u_tech1));
+SELECT helm_test.check('an empty dashboard is allowed — it is a choice',
+  helm.dashboard_layout_valid('[]'::jsonb));
+COMMIT;
+
+-- A colleague in the SAME TENANT, on the same connection pool, reading the
+-- same tables. This is the assertion the whole section exists for.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check('a colleague cannot see the technician''s favourites',
+  (SELECT count(*) FROM user_favorite) = 0);
+SELECT helm_test.check('nor which clients they have been opening',
+  (SELECT count(*) FROM user_recent_view) = 0);
+SELECT helm_test.check('nor their dashboard layout',
+  (SELECT count(*) FROM user_dashboard) = 0);
+SELECT helm_test.check('...not even a super admin, who can see everything else',
+  (SELECT count(*) FROM organization) > 1);
+
+-- Deleting what you cannot see. The DELETE policy filters on the actor, so
+-- this removes nothing rather than clearing somebody else's list.
+DELETE FROM user_favorite;
+SELECT helm_test.check('a colleague''s DELETE reaches no row of theirs',
+  (SELECT count(*) FROM user_favorite) = 0);
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_tech1);
+SELECT helm_test.check('the favourite survived the colleague''s DELETE',
+  (SELECT count(*) FROM user_favorite) = 1);
+ROLLBACK;
+
+-- Another MSP entirely. §19 establishes that u_tech1 has no membership in T2
+-- and cannot open a context there at all, so the live assertion available here
+-- is from T2's own administrator: the row is invisible from the other side of
+-- the tenant boundary as well as from the next desk.
+BEGIN;
+SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('another MSP cannot see it either',
+  (SELECT count(*) FROM user_favorite) = 0);
+SELECT helm_test.check('nor the recently viewed behind it',
+  (SELECT count(*) FROM user_recent_view) = 0);
+ROLLBACK;
+
+-- What that does NOT establish is the consultant case: one person holding
+-- memberships in two MSPs must keep two separate lists, or the names of one
+-- MSP's clients appear in the other's interface. No fixture user has two
+-- memberships, so this is asserted from the key: tenant_id leads the primary
+-- key and the unique indexes, which is what makes the same (user, client) pair
+-- two rows rather than one shared one.
+SELECT helm_test.check('a favourite is keyed by tenant, not by user alone',
+  (SELECT array_agg(a.attname::text ORDER BY k.ord)
+     FROM pg_constraint c
+     CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+     JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+    WHERE c.conrelid = 'public.user_favorite'::regclass AND c.contype = 'p')
+  = ARRAY['tenant_id', 'user_id', 'organization_id']);
+SELECT helm_test.check('so is a dashboard layout',
+  (SELECT array_agg(a.attname::text ORDER BY k.ord)
+     FROM pg_constraint c
+     CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+     JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+    WHERE c.conrelid = 'public.user_dashboard'::regclass AND c.contype = 'p')
+  = ARRAY['tenant_id', 'user_id']);
+SELECT helm_test.check('and every unique index on the recent list leads with the tenant',
+  NOT EXISTS (
+    SELECT 1 FROM pg_index i
+    WHERE i.indrelid = 'public.user_recent_view'::regclass AND i.indisunique
+      AND (SELECT attname::text FROM pg_attribute
+           WHERE attrelid = i.indrelid AND attnum = i.indkey[0]) <> 'tenant_id'));
+
+-- The background worker. It is a MEMBER of helm_app, so it holds the table
+-- grants by inheritance and no REVOKE can take them away — 0370 says so
+-- outright rather than implying a protection that is not there. What keeps it
+-- out is the policy: it runs as a service account, and there is no app_user
+-- row whose id it carries.
+BEGIN;
+SELECT helm.set_session_context(:t1, :sa1, 'service_account');
+SELECT helm_test.check('a non-person actor sees no personal state at all',
+  (SELECT count(*) FROM user_favorite) = 0
+  AND (SELECT count(*) FROM user_recent_view) = 0
+  AND (SELECT count(*) FROM user_dashboard) = 0);
+-- record_view returns quietly rather than raising: a worker touching an
+-- organisation is not a person browsing, and a job that fails because it
+-- incidentally read a client is worse than one that records nothing.
+SELECT helm.record_view(:t1_acme, NULL);
+SELECT helm_test.check('record_view records nothing for a non-person actor',
+  (SELECT count(*) FROM user_recent_view WHERE user_id = :sa1) = 0);
+ROLLBACK;
+
+-- Clean up the rows §26 committed, so a re-run starts where it started.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_tech1);
+DELETE FROM user_favorite;
+DELETE FROM user_recent_view;
+DELETE FROM user_dashboard;
+COMMIT;
+
+\echo ''
+\echo '== 27. Client health is derived, and scoped like everything else =='
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_acme);
+-- v_client_health reads organization, which is behind RLS, so the view is
+-- scoped by the tables under it rather than by a filter of its own. A client
+-- admin must see a health badge for their own client and no others.
+SELECT helm_test.check('a client admin sees health for their own client only',
+  (SELECT count(*) FROM v_client_health) = 1);
+SELECT helm_test.check('and it is theirs',
+  (SELECT organization_id FROM v_client_health) = :t1_acme);
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+-- Every client appears, including the quiet ones. A health view that omits the
+-- clients with nothing expiring makes an MSP look busier than it is, and hides
+-- the clients nobody is tracking anything for.
+SELECT helm_test.check('every visible client has a health row',
+  (SELECT count(*) FROM v_client_health)
+    = (SELECT count(*) FROM organization WHERE deleted_at IS NULL));
+SELECT helm_test.check('health is one of exactly three values',
+  NOT EXISTS (SELECT 1 FROM v_client_health WHERE health NOT IN ('red', 'amber', 'green')));
+SELECT helm_test.check('a green client has nothing to explain',
+  NOT EXISTS (
+    SELECT 1 FROM v_client_health
+    WHERE health = 'green' AND (expired_count > 0 OR critical_count > 0 OR warning_count > 0)));
+-- The severity thresholds are helm.expiration_severity()'s, not a second copy.
+-- Asserted by agreement rather than by reading the view definition: if someone
+-- inlines their own CASE over days-remaining, these stop matching.
+SELECT helm_test.check('red means the expiration dashboard says expired or critical',
+  NOT EXISTS (
+    SELECT 1 FROM v_client_health h
+    WHERE (h.health = 'red') <> EXISTS (
+      SELECT 1 FROM v_expiration_dashboard e
+      WHERE e.organization_id = h.organization_id
+        AND e.severity IN ('expired', 'critical'))));
+SELECT helm_test.check('the hover text names at most three things',
+  NOT EXISTS (SELECT 1 FROM v_client_health WHERE array_length(reasons, 1) > 3));
+ROLLBACK;
+
+-- Every view in the schema, not just this one.
+--
+-- A view without security_invoker runs with its OWNER's privileges. Every view
+-- in db/sql is owned by the migrating role, which bypasses RLS deliberately —
+-- so ONE omitted option turns a view into a hole that publishes every tenant's
+-- rows to anybody holding SELECT on it, with no error, no warning and no
+-- visible difference until somebody looks.
+--
+-- v_client_health shipped that way for the length of one test run. This
+-- assertion is why that was the length of one test run: it is quantified over
+-- every view rather than the ones somebody remembered, because the next view is
+-- the one nobody will think to check.
+SELECT helm_test.check('no view in the schema runs with the owner''s privileges',
+  NOT EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = 'v'
+      AND NOT coalesce(c.reloptions @> ARRAY['security_invoker=true'], false)));
+SELECT helm_test.check('...and there are views for that to have been true of',
+  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relkind = 'v') >= 8);
 
 \echo ''
 \echo '== All security assertions passed =='

@@ -15,3 +15,4 @@ export * from './assets';
 export * from './documentation';
 export * from './integrations';
 export * from './audit';
+export * from './workspace';

@@ -37,6 +37,8 @@ export const organization = pgTable('organization', {
   website: text('website'),
   logoUrl: text('logo_url'),
   quickNotes: text('quick_notes'),
+  /** Informal context, bounded at 4000 characters in SQL. */
+  notes: text('notes'),
 
   accountManagerId: uuid('account_manager_id'),
   primaryContactId: uuid('primary_contact_id'),
@@ -76,6 +78,8 @@ export const site = pgTable('site', {
   afterHoursPhone: text('after_hours_phone'),
   accessNotes: text('access_notes'),
   physicalSecurity: text('physical_security'),
+  /** Informal context. `accessNotes` is how to get in; this is everything else. */
+  notes: text('notes'),
   ...auditColumns,
   ...softDelete,
 }, (t) => [
