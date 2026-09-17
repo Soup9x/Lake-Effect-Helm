@@ -955,4 +955,144 @@ SELECT helm_test.check('...and there are views for that to have been true of',
    WHERE n.nspname = 'public' AND c.relkind = 'v') >= 8);
 
 \echo ''
+\echo '== 28. The search index is not a way around anything =='
+-- The index is the least protected copy of the data: denormalised, widely
+-- read, and the one table a future Meilisearch mirror would be built from. Two
+-- properties have to hold no matter what a projector is later taught to write.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+-- 1. No secret material, ever. Asserted against the generated blob rather than
+--    against any one column, so it covers every field a projector writes and
+--    every projector added later.
+SELECT helm_test.check('no search document contains a stored credential',
+  NOT EXISTS (
+    SELECT 1 FROM search_document d
+    WHERE d.search_text LIKE '%a-domain-admin-password%'
+       OR d.search_text LIKE '%correct horse%'));
+
+-- 2. The blob is GENERATED. A plain column maintained by five projectors is one
+--    forgotten assignment away from a document that is findable by word and
+--    not by fragment — the hardest kind of search bug to notice, because the
+--    feature still works for everything else.
+SELECT helm_test.check('search_text is generated, not written',
+  (SELECT attgenerated FROM pg_attribute
+    WHERE attrelid = 'public.search_document'::regclass AND attname = 'search_text') = 's');
+ROLLBACK;
+
+-- Every kind the constraint allows is one the interface groups under. A kind
+-- nothing can render is a heading that never appears, which reads to the person
+-- searching as "there are none of those".
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check('no document carries a kind outside the known set',
+  NOT EXISTS (
+    SELECT 1 FROM search_document
+    WHERE kind NOT IN ('client', 'site', 'credential', 'document', 'asset', 'contact')));
+ROLLBACK;
+
+\echo ''
+\echo '== 29. Search withholds what a co-managed client may not see =='
+-- search_document is scoped by helm.apply_tenant_rls, which names the tenant
+-- and the organisation and says NOTHING about is_internal_only. So the flag
+-- that marks documentation a client must never see is not enforced by the
+-- policy — helm.search() enforces it, and these assertions are what keep that
+-- true, because a rewrite of the function would otherwise silently drop it.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE asset_node SET is_internal_only = true, description = 'zzinternalmarker'
+ WHERE id = :n_fw;
+SELECT helm_test.check('the MSP finds its own internal note',
+  EXISTS (SELECT 1 FROM helm.search('zzinternalmarker')));
+COMMIT;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('a client administrator does NOT',
+  NOT EXISTS (SELECT 1 FROM helm.search('zzinternalmarker')));
+-- ...and the reason is the flag, not the scoping: the same actor finds other
+-- documents belonging to the same client, so this is not vacuous.
+SELECT helm_test.check('...and still finds their own non-internal documentation',
+  EXISTS (SELECT 1 FROM helm.search('acme')));
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE asset_node SET is_internal_only = false, description = NULL WHERE id = :n_fw;
+COMMIT;
+
+SELECT helm_test.check('helm.search is not SECURITY DEFINER',
+  NOT (SELECT prosecdef FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'helm' AND p.proname = 'search'));
+
+\echo ''
+\echo '== 30. Archiving is not deleting =='
+-- The whole promise of the feature. If a migration ever made archived_at an
+-- alias for deleted_at, rows already hidden would become indistinguishable
+-- from deleted ones and "recoverable" would quietly stop being true.
+SELECT helm_test.check('organization carries BOTH archived_at and deleted_at',
+  (SELECT count(*) FROM pg_attribute
+    WHERE attrelid = 'public.organization'::regclass
+      AND attname IN ('archived_at', 'deleted_at')
+      AND attnum > 0 AND NOT attisdropped) = 2);
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE organization SET archived_at = now() WHERE id = :t1_globex;
+SELECT helm_test.check('an archived client keeps its row and its name',
+  (SELECT name FROM organization WHERE id = :t1_globex) = 'Globex Corporation');
+SELECT helm_test.check('...and is not marked deleted',
+  (SELECT deleted_at FROM organization WHERE id = :t1_globex) IS NULL);
+SELECT helm_test.check('...and its assets are untouched',
+  EXISTS (SELECT 1 FROM asset_node WHERE organization_id = :t1_globex AND archived_at IS NULL));
+SELECT helm_test.check('...and it leaves the search index while archived',
+  NOT EXISTS (SELECT 1 FROM search_document
+              WHERE entity_type = 'organization' AND entity_id = :t1_globex));
+
+UPDATE organization SET archived_at = NULL WHERE id = :t1_globex;
+SELECT helm_test.check('restoring puts it back in the index',
+  EXISTS (SELECT 1 FROM search_document
+          WHERE entity_type = 'organization' AND entity_id = :t1_globex));
+ROLLBACK;
+
+\echo ''
+\echo '== 31. A bulk action cannot outrank the actor doing it =='
+-- Bulk endpoints issue one UPDATE over a set of ids. The protection is that
+-- the statement runs under the caller's RLS, so rows the policy refuses are
+-- simply not matched — there is no application-side permission check to get
+-- wrong. These assertions establish that at the statement level, which is
+-- where it actually lives; tests/integration/bulk.test.ts establishes that the
+-- route then REFUSES the shortfall rather than half-applying it.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_acme);
+-- A client administrator may read their own organisation and may not write it.
+CREATE TEMP TABLE bulk_probe AS
+  SELECT id FROM organization WHERE id IN (:t1_acme, :t1_globex);
+SELECT helm_test.check('a client admin sees only their own client in a two-id selection',
+  (SELECT count(*) FROM bulk_probe) = 1);
+SELECT helm_test.check_raises('...and writing it is refused outright',
+  format($$UPDATE organization SET tags = ARRAY['x'] WHERE id = %L$$, :t1_acme));
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_tech1);
+-- tier1 holds asset:write and not organization:write. An UPDATE naming a
+-- client it can SEE is still refused, which is the case an application-side
+-- check gets wrong: the actor holds the endpoint's declared permission and the
+-- loop proceeds.
+SELECT helm_test.check('tier1 can see the clients',
+  (SELECT count(*) FROM organization) > 1);
+SELECT helm_test.check_raises('tier1 cannot archive a client in bulk or otherwise',
+  format($$UPDATE organization SET archived_at = now() WHERE id = %L$$, :t1_acme));
+-- The other half of the same claim: the refusal above is about clients, not
+-- about tier1. A check that only showed the refusal would be satisfied by a
+-- policy that refused everything.
+WITH touched AS (
+  UPDATE asset_node SET archived_at = now() WHERE id = :n_fw RETURNING id
+)
+SELECT helm_test.check('tier1 CAN archive an asset, so the refusal above is about clients',
+  (SELECT count(*) FROM touched) = 1);
+ROLLBACK;
+
+\echo ''
 \echo '== All security assertions passed =='

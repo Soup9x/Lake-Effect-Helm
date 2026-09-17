@@ -316,12 +316,24 @@ describe('search', () => {
     expect(response.status).toBe(400);
   });
 
-  it('rejects an unknown entity type filter', async () => {
-    // The column is free text; passing the filter through would let a caller
-    // probe which entity types exist.
+  it('rejects an unknown kind filter', async () => {
+    // `kind` is a text column; passing the filter through would let a caller
+    // probe which kinds exist.
+    //
+    // The parameter was `type` until this batch and named entity_type, which
+    // is the TABLE a row came from — so a credential and a firewall were both
+    // 'asset_node' and the filter could not tell them apart. `kind` is what
+    // results group under, which is what somebody filtering actually wants.
     asUser(IDS.admin1, 'admin@northwind.test');
-    const response = await searchRoute(request('/api/search?q=acme&type=secret_version'));
+    const response = await searchRoute(request('/api/search?q=acme&kind=secret_version'));
     expect(response.status).toBe(400);
+  });
+
+  it('groups results by kind', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const payload = await body(await searchRoute(request('/api/search?q=acme')));
+    expect(payload).toHaveProperty('groups');
+    expect(Array.isArray(payload.groups)).toBe(true);
   });
 
   it('reports whether more results exist without a second count query', async () => {

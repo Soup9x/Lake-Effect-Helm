@@ -8,7 +8,7 @@
  * query layer.
  */
 import { boolean, index, integer, jsonb, numeric, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { auditColumns, citext, softDelete, tstz } from './_types';
+import { auditColumns, citext, softDelete, textArray, tstz } from './_types';
 import { organizationStatus, tenantStatus } from './enums';
 
 export const tenant = pgTable('tenant', {
@@ -39,6 +39,8 @@ export const organization = pgTable('organization', {
   quickNotes: text('quick_notes'),
   /** Informal context, bounded at 4000 characters in SQL. */
   notes: text('notes'),
+  /** Free-form labels, same shape and meaning as asset_node.tags. */
+  tags: textArray('tags').notNull().default([]),
 
   accountManagerId: uuid('account_manager_id'),
   primaryContactId: uuid('primary_contact_id'),
@@ -48,6 +50,12 @@ export const organization = pgTable('organization', {
 
   onboardedAt: tstz('onboarded_at'),
   offboardedAt: tstz('offboarded_at'),
+  /**
+   * Hidden from default views, fully readable, restorable. Deliberately NOT
+   * `deletedAt`: a deleted client is on its way out of the system, an archived
+   * one is a client the MSP no longer works with every day.
+   */
+  archivedAt: tstz('archived_at'),
   ...auditColumns,
   ...softDelete,
 }, (t) => [

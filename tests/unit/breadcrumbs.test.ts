@@ -50,12 +50,21 @@ describe('every nested page', () => {
   }
 
   /**
-   * Expirations is top-level AND shows a trail, when it is filtered to one
-   * client — somebody who arrived there from a client's health badge is in a
-   * nested view whatever the URL shape says. Named here rather than filtered
-   * out by a substring, so the exception is a statement instead of a silence.
+   * Two pages are top-level AND show a trail, each when a filter puts them
+   * under something: expirations narrowed to one client, and the clients list
+   * showing the archive. Somebody who arrived at either from the page above is
+   * in a nested view whatever the URL shape says.
+   *
+   * Named here rather than filtered out by a substring, so each exception is a
+   * statement instead of a silence.
    */
-  const TRAIL_WHEN_FILTERED = new Set([join(APP, 'expirations', 'page.tsx')]);
+  const TRAIL_WHEN_FILTERED = new Set([
+    join(APP, 'expirations', 'page.tsx'),
+    // The clients list is top-level, and `?archived=1` is a view UNDER it: the
+    // archive is reached from the list and returns to it, which is a trail
+    // whatever the URL shape says.
+    join(APP, 'organizations', 'page.tsx'),
+  ]);
 
   it('leaves top-level pages alone', () => {
     // Not an accident to be corrected later. A one-item breadcrumb reading

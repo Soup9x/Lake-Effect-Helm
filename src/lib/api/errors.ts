@@ -69,8 +69,8 @@ export class ApiError extends Error {
     return new ApiError('unauthenticated', message);
   }
 
-  static forbidden(message = 'not permitted'): ApiError {
-    return new ApiError('forbidden', message);
+  static forbidden(message = 'not permitted', details?: Record<string, unknown>): ApiError {
+    return new ApiError('forbidden', message, details);
   }
 
   /**

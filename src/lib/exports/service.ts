@@ -74,21 +74,35 @@ export class ExportService {
    * place that decides what the worker may pick up.
    */
   async request(actor: ActorRef, input: RequestExportInput): Promise<{ exportJobId: string; needsApproval: boolean }> {
-    return withTenant(actor, async (tx) => {
-      const [row] = await tx<{ export_job_id: string; needs_approval: boolean }[]>`
-        SELECT * FROM helm.request_export(
-          ${input.organizationId}::uuid,
-          ${input.kind}::export_kind,
-          ${input.format},
-          ${input.reason},
-          ${input.includeSecrets ?? false},
-          ${tx.json(toJson(input.scope ?? {}))}::jsonb,
-          ${input.ttlHours ?? 72}
-        )
-      `;
-      if (!row) throw new Error('request_export returned no row');
-      return { exportJobId: row.export_job_id, needsApproval: row.needs_approval };
-    });
+    return withTenant(actor, (tx) => this.requestInTransaction(tx, input));
+  }
+
+  /**
+   * The same request, in a transaction the caller already owns.
+   *
+   * Exists for bulk export, which queues one job per client and must not leave
+   * three of five behind when the fourth fails — `request()` opens its own
+   * transaction, so a loop over it commits as it goes and there is no way back.
+   * Sharing the caller's transaction makes the whole batch one unit, the same
+   * reason SecretService has createInTransaction.
+   */
+  async requestInTransaction(
+    tx: HelmTx,
+    input: RequestExportInput,
+  ): Promise<{ exportJobId: string; needsApproval: boolean }> {
+    const [row] = await tx<{ export_job_id: string; needs_approval: boolean }[]>`
+      SELECT * FROM helm.request_export(
+        ${input.organizationId}::uuid,
+        ${input.kind}::export_kind,
+        ${input.format},
+        ${input.reason},
+        ${input.includeSecrets ?? false},
+        ${tx.json(toJson(input.scope ?? {}))}::jsonb,
+        ${input.ttlHours ?? 72}
+      )
+    `;
+    if (!row) throw new Error('request_export returned no row');
+    return { exportJobId: row.export_job_id, needsApproval: row.needs_approval };
   }
 
   /** The second pair of eyes. The database refuses self-approval; so does this. */

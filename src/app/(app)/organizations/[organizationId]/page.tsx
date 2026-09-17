@@ -11,6 +11,7 @@ import { RenameOrganization } from '@/components/rename-organization';
 import { isClientRole } from '@/lib/ui/roles';
 import { FavoriteStar } from '@/components/favorite-star';
 import { NotesCard } from '@/components/notes-card';
+import { SelectableTable } from '@/components/selectable-table';
 import { HealthDot } from '@/components/ui/health-dot';
 import { isFavorite, recordView } from '@/lib/workspace/queries';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -45,7 +46,7 @@ interface CredentialRow {
   node_id: string; name: string; credential_type: string; username: string | null;
   url: string | null; secret_id: string | null; sensitivity: string | null;
   requires_reason: boolean; requires_step_up: boolean; is_break_glass: boolean;
-  strength_score: number | null;
+  strength_score: number | null; tags: string[];
 }
 
 interface ExpiryRow {
@@ -107,7 +108,7 @@ export default async function OrganizationPage({
         LIMIT 300
       `,
       tx<CredentialRow[]>`
-        SELECT n.id AS node_id, n.name, c.credential_type::text, c.username::text, c.url,
+        SELECT n.id AS node_id, n.name, n.tags, c.credential_type::text, c.username::text, c.url,
                c.secret_id::text, c.is_break_glass,
                m.sensitivity::text, m.requires_reason, m.requires_step_up, m.strength_score
         FROM credential c
@@ -284,67 +285,65 @@ export default async function OrganizationPage({
                 description="Credentials stored here are encrypted per tenant and every read is recorded."
               />
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead>Credential</TableHead>
-                    <TableHead>Username</TableHead>
-                    <TableHead>Sensitivity</TableHead>
-                    <TableHead className="w-96">Secret</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {credentials.map((credential) => (
-                    <TableRow key={credential.node_id} className="hover:bg-transparent">
-                      <TableCell>
-                        <Link
-                          href={`/assets/${credential.node_id}`}
-                          className="font-medium text-ink hover:text-brand"
-                        >
-                          {credential.name}
-                        </Link>
-                        <div className="mt-0.5 flex items-center gap-1.5">
-                          <span className="text-xs text-ink-faint">
-                            {humanise(credential.credential_type)}
-                          </span>
-                          {credential.is_break_glass && <Badge tone="critical">Break glass</Badge>}
-                          {credential.strength_score !== null && credential.strength_score < 50 && (
-                            <Badge tone="warning">Weak</Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-ink-muted">
-                        {credential.username ?? '—'}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          tone={
-                            credential.sensitivity === 'critical'
-                              ? 'critical'
-                              : credential.sensitivity === 'elevated'
-                                ? 'warning'
-                                : 'neutral'
-                          }
-                        >
-                          {credential.sensitivity ?? 'unknown'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {credential.secret_id ? (
-                          <RevealButton
-                            secretId={credential.secret_id}
-                            label={credential.name}
-                            requiresReason={credential.requires_reason}
-                            requiresStepUp={credential.requires_step_up}
-                          />
-                        ) : (
-                          <span className="text-xs text-ink-faint">No stored secret</span>
+              <SelectableTable
+                target="node"
+                selectable={canWrite}
+                columns={['Credential', 'Username', 'Sensitivity', <span key="s" className="w-96">Secret</span>]}
+                rows={credentials.map((credential) => ({
+                  id: credential.node_id,
+                  label: credential.name,
+                  cells: [
+                    <div key="name">
+                      <Link
+                        href={`/assets/${credential.node_id}`}
+                        className="font-medium text-ink hover:text-brand"
+                      >
+                        {credential.name}
+                      </Link>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs text-ink-faint">
+                          {humanise(credential.credential_type)}
+                        </span>
+                        {credential.is_break_glass && <Badge tone="critical">Break glass</Badge>}
+                        {credential.strength_score !== null && credential.strength_score < 50 && (
+                          <Badge tone="warning">Weak</Badge>
                         )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                        {credential.tags.map((tag) => (
+                          <Badge key={tag} tone="neutral">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>,
+                    <span key="user" className="font-mono text-xs text-ink-muted">
+                      {credential.username ?? '—'}
+                    </span>,
+                    <Badge
+                      key="sens"
+                      tone={
+                        credential.sensitivity === 'critical'
+                          ? 'critical'
+                          : credential.sensitivity === 'elevated'
+                            ? 'warning'
+                            : 'neutral'
+                      }
+                    >
+                      {credential.sensitivity ?? 'unknown'}
+                    </Badge>,
+                    credential.secret_id ? (
+                      <RevealButton
+                        key="reveal"
+                        secretId={credential.secret_id}
+                        label={credential.name}
+                        requiresReason={credential.requires_reason}
+                        requiresStepUp={credential.requires_step_up}
+                      />
+                    ) : (
+                      <span key="reveal" className="text-xs text-ink-faint">No stored secret</span>
+                    ),
+                  ],
+                }))}
+              />
             )}
           </CardContent>
         </Card>

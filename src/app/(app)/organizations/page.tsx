@@ -6,9 +6,9 @@ import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { HealthDot } from '@/components/ui/health-dot';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { NewOrganizationForm } from '@/components/new-organization-form';
 import { FavoriteStar } from '@/components/favorite-star';
+import { SelectableTable, type SelectableRow } from '@/components/selectable-table';
 import { isClientRole } from '@/lib/ui/roles';
 import { favoriteIds } from '@/lib/workspace/queries';
 
@@ -18,6 +18,7 @@ interface OrganizationRow {
   status: string;
   is_msp_internal: boolean;
   industry: string | null;
+  tags: string[];
   site_count: string;
   asset_count: string;
   secret_count: string;
@@ -37,19 +38,26 @@ interface OrganizationRow {
  * the asset count wrong.
  *
  * Health comes from v_client_health, which aggregates v_expiration_dashboard.
- * The old "next expiry" column showed the severity of the SOONEST row, which is
- * not the same thing and was quietly wrong: a client with a certificate that
- * expired last month and a warranty due next year reported the warranty.
+ *
+ * ARCHIVED CLIENTS are absent by default and reachable by a filter, never
+ * deleted. `?archived=1` shows only them, which is also the only place they can
+ * be restored from — an archive you cannot open is a delete with extra steps.
  */
-export default async function OrganizationsPage() {
+export default async function OrganizationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ archived?: string }>;
+}) {
   const identity = await getServerIdentity();
+  const params = await searchParams;
+  const showArchived = params.archived === '1';
 
   const canWrite = !isClientRole(identity.roleKey);
 
-  const { organizations, pinned } = await withTenant(actorOf(identity), async (tx) => {
+  const { organizations, pinned, archivedCount } = await withTenant(actorOf(identity), async (tx) => {
     const rows = await tx<OrganizationRow[]>`
       SELECT
-        o.id, o.name, o.status::text, o.is_msp_internal, o.industry,
+        o.id, o.name, o.status::text, o.is_msp_internal, o.industry, o.tags,
         (SELECT count(*) FROM site s
           WHERE s.organization_id = o.id AND s.deleted_at IS NULL) AS site_count,
         (SELECT count(*) FROM asset_node n
@@ -64,9 +72,14 @@ export default async function OrganizationsPage() {
       FROM organization o
       LEFT JOIN v_client_health h ON h.organization_id = o.id
       WHERE o.deleted_at IS NULL
+        AND (${showArchived}::boolean = (o.archived_at IS NOT NULL))
       ORDER BY o.is_msp_internal, o.name
     `;
-    return { organizations: rows, pinned: await favoriteIds(tx) };
+    const [counted] = await tx<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM organization
+      WHERE deleted_at IS NULL AND archived_at IS NOT NULL
+    `;
+    return { organizations: rows, pinned: await favoriteIds(tx), archivedCount: counted?.n ?? 0 };
   });
 
   // Pinned clients float to the top of the same table rather than into a
@@ -76,92 +89,110 @@ export default async function OrganizationsPage() {
     ...organizations.filter((o) => pinned.has(o.id)),
     ...organizations.filter((o) => !pinned.has(o.id)),
   ];
-  const firstUnpinned = organizations.filter((o) => pinned.has(o.id)).length;
+  const pinnedCount = organizations.filter((o) => pinned.has(o.id)).length;
+
+  const rows: SelectableRow[] = ordered.map((org, index) => ({
+    id: org.id,
+    label: org.name,
+    dividerAfter: pinnedCount > 0 && index === pinnedCount - 1,
+    cells: [
+      <FavoriteStar key="star" organizationId={org.id} pinned={pinned.has(org.id)} label={org.name} />,
+      <div key="name">
+        <Link href={`/organizations/${org.id}`} className="font-medium text-ink hover:text-brand">
+          {org.name}
+        </Link>
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+          {org.is_msp_internal && <Badge tone="brand">Internal</Badge>}
+          {org.status !== 'active' && <Badge tone="danger">{org.status}</Badge>}
+          {org.tags.map((tag) => (
+            <Badge key={tag} tone="neutral">
+              {tag}
+            </Badge>
+          ))}
+          {org.industry && <span className="text-xs text-ink-faint">{org.industry}</span>}
+        </div>
+      </div>,
+      <HealthDot
+        key="health"
+        showLabel
+        organizationId={org.id}
+        health={{
+          health: org.health,
+          expiredCount: org.expired_count,
+          criticalCount: org.critical_count,
+          warningCount: org.warning_count,
+          reasons: org.reasons,
+        }}
+      />,
+      <span key="sites" className="tabular-nums text-ink-muted">{org.site_count}</span>,
+      <span key="assets" className="tabular-nums text-ink-muted">{org.asset_count}</span>,
+      <span key="secrets" className="tabular-nums text-ink-muted">{org.secret_count}</span>,
+    ],
+  }));
 
   return (
     <>
       <PageHeader
-        title="Clients"
-        description="Every organisation documented in this tenant, and what is in each."
-        actions={canWrite ? <NewOrganizationForm /> : undefined}
+        title={showArchived ? 'Archived clients' : 'Clients'}
+        trail={showArchived ? [{ label: 'Clients', href: '/organizations' }] : []}
+        description={
+          showArchived
+            ? 'Hidden from the client list and from search. Nothing has been deleted; select and restore to bring one back.'
+            : 'Every organisation documented in this tenant, and what is in each.'
+        }
+        actions={canWrite && !showArchived ? <NewOrganizationForm /> : undefined}
       />
       <PageBody>
+        {/* Only offered when there is an archive to open. A link to an empty
+            page is a promise of something that is not there. */}
+        {(archivedCount > 0 || showArchived) && (
+          <nav className="flex items-center gap-1.5 text-xs">
+            <Link
+              href="/organizations"
+              className={showArchived ? 'text-brand hover:underline' : 'font-medium text-ink'}
+            >
+              Active
+            </Link>
+            <span className="text-ink-faint">·</span>
+            <Link
+              href="/organizations?archived=1"
+              className={showArchived ? 'font-medium text-ink' : 'text-brand hover:underline'}
+            >
+              Archived <span className="tabular-nums">{archivedCount}</span>
+            </Link>
+          </nav>
+        )}
+
         <Card>
           <CardContent className="p-0">
             {organizations.length === 0 ? (
               <EmptyState
                 icon={Building2}
-                title="No clients are visible"
-                description="Either none are documented yet, or your membership is scoped to organisations that no longer exist."
+                title={showArchived ? 'Nothing is archived' : 'No clients are visible'}
+                description={
+                  showArchived
+                    ? 'Archived clients appear here and can be restored.'
+                    : 'Either none are documented yet, or your membership is scoped to organisations that no longer exist.'
+                }
               />
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-8">
-                      <span className="sr-only">Pinned</span>
-                    </TableHead>
-                    <TableHead>Client</TableHead>
-                    <TableHead>Health</TableHead>
-                    <TableHead>Sites</TableHead>
-                    <TableHead>Assets</TableHead>
-                    <TableHead>Credentials</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {ordered.map((org, index) => (
-                    <TableRow
-                      key={org.id}
-                      // A hairline under the last pinned row. Enough to say
-                      // "these are yours" without a second heading.
-                      className={
-                        firstUnpinned > 0 && index === firstUnpinned - 1
-                          ? 'border-b-2 border-b-border'
-                          : undefined
-                      }
-                    >
-                      <TableCell className="pr-0">
-                        <FavoriteStar
-                          organizationId={org.id}
-                          pinned={pinned.has(org.id)}
-                          label={org.name}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Link
-                          href={`/organizations/${org.id}`}
-                          className="font-medium text-ink hover:text-brand"
-                        >
-                          {org.name}
-                        </Link>
-                        <div className="mt-0.5 flex items-center gap-1.5">
-                          {org.is_msp_internal && <Badge tone="brand">Internal</Badge>}
-                          {org.status !== 'active' && <Badge tone="danger">{org.status}</Badge>}
-                          {org.industry && (
-                            <span className="text-xs text-ink-faint">{org.industry}</span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <HealthDot
-                          showLabel
-                          organizationId={org.id}
-                          health={{
-                            health: org.health,
-                            expiredCount: org.expired_count,
-                            criticalCount: org.critical_count,
-                            warningCount: org.warning_count,
-                            reasons: org.reasons,
-                          }}
-                        />
-                      </TableCell>
-                      <TableCell className="tabular-nums text-ink-muted">{org.site_count}</TableCell>
-                      <TableCell className="tabular-nums text-ink-muted">{org.asset_count}</TableCell>
-                      <TableCell className="tabular-nums text-ink-muted">{org.secret_count}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <SelectableTable
+                target="client"
+                archived={showArchived}
+                selectable={canWrite}
+                columns={[
+                  // The star column has no heading worth showing, but it still
+                  // needs one: a header cell short of the body cells shifts
+                  // every column right by one.
+                  <span key="pin" className="sr-only">Pinned</span>,
+                  'Client',
+                  'Health',
+                  'Sites',
+                  'Assets',
+                  'Credentials',
+                ]}
+                rows={rows}
+              />
             )}
           </CardContent>
         </Card>

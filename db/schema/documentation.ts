@@ -288,6 +288,8 @@ export const searchDocument = pgTable('search_document', {
   tenantId: uuid('tenant_id').notNull(),
   organizationId: uuid('organization_id').notNull(),
   siteId: uuid('site_id'),
+  /** Which heading a result groups under: client, site, credential, document, asset, contact. */
+  kind: text('kind').notNull().default('asset'),
   title: text('title').notNull(),
   subtitle: text('subtitle'),
   body: text('body'),
@@ -302,6 +304,14 @@ export const searchDocument = pgTable('search_document', {
    * Database-generated weighted vector. Declared so drift detection can see it;
    * it is never written from the application.
    */
+  /**
+   * Everything matchable, lowercased, in one string. Generated, never written:
+   * a plain column maintained by five projectors is one forgotten assignment
+   * away from a document findable by word and not by fragment.
+   */
+  searchText: text('search_text').generatedAlwaysAs(
+    sql`helm.search_blob(title, subtitle, body, identifiers, tags)`,
+  ),
   tsv: tsvector('tsv').generatedAlwaysAs(
     sql`setweight(to_tsvector('english', coalesce(title, '')), 'A')
      || setweight(array_to_tsvector(identifiers), 'A')

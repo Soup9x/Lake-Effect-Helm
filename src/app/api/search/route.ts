@@ -1,13 +1,17 @@
 import { z } from 'zod';
 import { tenantRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
-import { MAX_PAGE_SIZE, SEARCHABLE_ENTITY_TYPES, search } from '@/lib/search/service';
+import { MAX_PAGE_SIZE, RESULT_KINDS, search } from '@/lib/search/service';
 
 const querySchema = z.object({
   q: z.string().min(1, 'a search term is required'),
   organizationId: z.guid().optional(),
-  // Repeatable: ?type=asset_node&type=contact
-  type: z.array(z.enum(SEARCHABLE_ENTITY_TYPES)).optional(),
+  // Repeatable: ?kind=client&kind=credential
+  //
+  // An allow-list rather than passing the parameter through: `kind` is a text
+  // column, and letting a caller filter on an arbitrary value turns the filter
+  // into a probe for which kinds exist.
+  kind: z.array(z.enum(RESULT_KINDS)).optional(),
   limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
@@ -25,7 +29,7 @@ export const GET = tenantRoute(
     const parsed = querySchema.safeParse({
       q: url.searchParams.get('q') ?? '',
       organizationId: url.searchParams.get('organizationId') ?? undefined,
-      type: url.searchParams.getAll('type').length > 0 ? url.searchParams.getAll('type') : undefined,
+      kind: url.searchParams.getAll('kind').length > 0 ? url.searchParams.getAll('kind') : undefined,
       limit: url.searchParams.get('limit') ?? undefined,
       offset: url.searchParams.get('offset') ?? undefined,
     });
@@ -36,8 +40,8 @@ export const GET = tenantRoute(
       });
     }
 
-    const { q, organizationId, type, limit, offset } = parsed.data;
-    return search(tx, { query: q, organizationId, entityTypes: type, limit, offset });
+    const { q, organizationId, kind, limit, offset } = parsed.data;
+    return search(tx, { query: q, organizationId, kinds: kind, limit, offset });
   },
   { permissions: ['asset:read'] },
 );
