@@ -43,7 +43,10 @@ INSERT INTO permission (key, category, description, msp_only) VALUES
   ('audit:read',           'audit',        'Read the audit log', false),
   ('audit:verify',         'audit',        'Verify audit chain integrity', true),
   ('export:create',        'export',       'Request an export', false),
-  ('export:approve',       'export',       'Approve a secret-bearing export', true),
+  -- Renamed in 0400. Two-person approval is gone; what this still grants is
+  -- the authority to revoke SOMEBODY ELSE'S export, which is a containment
+  -- action and was always bundled into the same permission.
+  ('export:revoke_any',    'export',       'Revoke an export requested by someone else', true),
   ('key:rotate',           'security',     'Rotate tenant data encryption keys', true),
   ('alert:manage',         'alert',        'Configure expiry alert rules', true);
 
@@ -67,7 +70,7 @@ INSERT INTO app_role (key, name, description, rank, is_tenant_wide, is_system) V
 INSERT INTO role_permission (role_key, permission_key)
 SELECT 'super_admin', key FROM permission;
 
--- tier3: everything except deleting organisations and approving their own exports.
+-- tier3: everything except deleting organisations, tenant settings and keys.
 INSERT INTO role_permission (role_key, permission_key)
 SELECT 'tier3', key FROM permission
 WHERE key NOT IN ('organization:delete', 'tenant:write', 'key:rotate');

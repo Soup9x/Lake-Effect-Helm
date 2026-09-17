@@ -48,7 +48,7 @@ const listSchema = z.object({
  *
  * Deliberately readable by anyone who may create an export, not just by the
  * person who made each one. "Who exported this client's credentials, when, and
- * who approved it" is a question the whole team should be able to answer
+ * who requested it" is a question the whole team should be able to answer
  * without asking an administrator to run a query.
  */
 export const GET = tenantRoute(
@@ -78,9 +78,12 @@ export const GET = tenantRoute(
 /**
  * POST /api/exports — request one.
  *
- * A secret-bearing export is created but not renderable: helm.export_backlog()
- * only hands the worker jobs that a second person has approved. The response
- * says so explicitly rather than leaving the caller to infer it from a status.
+ * Every export is renderable as soon as it is created. Two-person approval was
+ * removed in 0400 as a deliberate change of posture, so a secret-bearing export
+ * is no longer parked — `secret:export`, the per-secret rank ladder and the
+ * audit trail are what stand between a request and a bundle of credentials.
+ * The response says what will happen rather than leaving the caller to infer
+ * it from a status.
  */
 export const POST = tenantRoute(
   async ({ identity, request }) => {
@@ -94,9 +97,11 @@ export const POST = tenantRoute(
     return {
       exportJobId: result.exportJobId,
       status: 'queued',
-      needsApproval: result.needsApproval,
-      message: result.needsApproval
-        ? 'This export contains credentials and will not render until a second person approves it.'
+      // No approval step. 0400 removed it deliberately; the message says what
+      // will actually happen rather than describing a gate that is gone.
+      message: body.includeSecrets
+        ? 'This export contains credentials. It will render shortly; the request, ' +
+          'each credential included and every download are recorded in the audit log.'
         : 'Queued for rendering.',
     };
   },

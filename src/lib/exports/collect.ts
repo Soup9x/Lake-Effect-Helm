@@ -79,7 +79,7 @@ export interface AssetRecord {
 export interface CredentialRecord {
   node_id: string; name: string; credential_type: string;
   username: string | null; url: string | null; notes: string | null;
-  client_visible: boolean; is_break_glass: boolean;
+  is_break_glass: boolean;
   secret_id: string | null; secret_label: string | null;
   secret_kind: string | null; sensitivity: string | null;
   totp_secret_id: string | null;
@@ -190,7 +190,7 @@ export async function collectExport(
 
   const credentials = await tx<CredentialRecord[]>`
     SELECT n.id AS node_id, n.name, c.credential_type::text,
-           c.username::text, c.url, n.notes, c.client_visible, c.is_break_glass,
+           c.username::text, c.url, n.notes, c.is_break_glass,
            c.secret_id::text, c.totp_secret_id::text,
            s.label AS secret_label, s.kind::text AS secret_kind, s.sensitivity::text AS sensitivity
     FROM credential c

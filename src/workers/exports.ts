@@ -3,7 +3,7 @@
  *
  * Rendering runs in the background rather than in the request that asked for
  * it, for three reasons that are all about the secret-bearing case: a handover
- * pack for a 4,000-device client takes minutes, the four-eyes approval arrives
+ * pack for a 4,000-device client takes minutes, the request arrives
  * later than the request by design, and the render decrypts hundreds of
  * credentials — work that belongs in a process the web tier cannot be made to
  * do synchronously.

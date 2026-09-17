@@ -374,8 +374,8 @@ pnpm verify                # typecheck + 151 TypeScript tests + schema drift
 The SQL suite covers fail-closed defaults, tenant isolation, organisation
 scoping, the full reveal authorisation ladder, audit immutability, three tamper
 scenarios, GCM nonce reuse, cross-tenant FK rejection, expiry projection, graph
-traversal across the isolation boundary, inline-secret rejection, and export
-four-eyes approval.
+traversal across the isolation boundary, inline-secret rejection, and the export
+controls that survived the removal of two-person approval in `0400` (§15, §35).
 
 The TypeScript suite adds the real cryptographic path end to end: RFC 6238
 vectors, AAD replay across tenant/secret/field/version, KEK context binding, DEK

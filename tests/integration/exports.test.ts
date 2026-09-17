@@ -27,7 +27,7 @@ const ADMIN = actor(IDS.tenant1, IDS.admin1);
 const TECH = actor(IDS.tenant1, IDS.tech1);
 /**
  * The client's own administrator. Holds export:create but NOT secret:export or
- * export:approve — a co-managed customer may pull their own inventory and may
+ * secret:export — a co-managed customer may pull their own inventory and may
  * not walk out with the credential vault or wave one through.
  */
 const CLIENT = actor(IDS.tenant1, IDS.acmeAdmin);
@@ -142,7 +142,7 @@ describe('export engine', () => {
   describe('an export without credentials', () => {
     let jobId: string;
 
-    it('needs no approval', async () => {
+    it('is created and queued', async () => {
       const result = await getExportService().request(ADMIN, {
         organizationId: IDS.orgAcme,
         kind: 'asset_inventory',
@@ -150,7 +150,7 @@ describe('export engine', () => {
         reason: 'quarterly asset inventory for the client review meeting',
       });
       jobId = result.exportJobId;
-      expect(result.needsApproval).toBe(false);
+      expect(jobId).toMatch(/^[0-9a-f-]{36}$/);
     });
 
     it('is renderable immediately', async () => {
@@ -222,10 +222,20 @@ describe('export engine', () => {
   });
 
   // -------------------------------------------------------------------------
-  describe('four-eyes approval', () => {
+  describe('a credential export needs ONE authorised person', () => {
+    /**
+     * A DELIBERATE CHANGE OF POSTURE, made in 0400. Two-person approval used to
+     * park a secret-bearing export until somebody else agreed; it does not any
+     * more, and the audit trail is what watches the person instead.
+     *
+     * These tests are written to fail loudly if that is ever quietly reversed
+     * OR quietly widened — the second half matters as much as the first. The
+     * gate is gone; secret:export, the per-secret rank ladder, the written
+     * reason and the encryption of the bundle are not.
+     */
     let jobId: string;
 
-    it('parks a credential-bearing export until a second person approves', async () => {
+    it('is renderable immediately, with no second approver', async () => {
       const result = await getExportService().request(ADMIN, {
         organizationId: IDS.orgAcme,
         kind: 'client_offboarding',
@@ -235,82 +245,100 @@ describe('export engine', () => {
       });
       jobId = result.exportJobId;
 
-      expect(result.needsApproval).toBe(true);
-      // Queued, but NOT renderable. The backlog query is the one place that
-      // decides, so there is no second definition to drift.
-      expect((await backlog()).map((r) => r.export_job_id)).not.toContain(jobId);
+      // The backlog is the one place that decides what the worker may pick up,
+      // so this is the whole change in one assertion.
+      expect((await backlog()).map((r) => r.export_job_id)).toContain(jobId);
     });
 
-    it('refuses self-approval', async () => {
-      await expect(getExportService().approve(ADMIN, jobId)).rejects.toThrow(
-        /approved by someone other than the person who requested it/,
-      );
+    it('records the request in the audit log, with who and what', async () => {
+      // The audit trail is now the primary safeguard rather than a supplement,
+      // so it is asserted directly rather than assumed.
+      const rows = await withTenant(ADMIN, async (tx) => {
+        return tx<{ actor_id: string; reason: string; metadata: Record<string, unknown> }[]>`
+          SELECT actor_id::text, reason, metadata FROM audit_log
+          WHERE action = 'export.requested' AND entity_id = ${jobId}::uuid
+        `;
+      });
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.actor_id).toBe(IDS.admin1);
+      expect(rows[0]!.reason).toContain('Acme have given notice');
+      expect(rows[0]!.metadata.include_secrets).toBe(true);
     });
 
-    it('refuses an approver without the permission', async () => {
-      // The client's own administrator may pull their inventory; waving through
-      // a credential handover is not theirs to do.
-      await expect(getExportService().approve(CLIENT, jobId)).rejects.toThrow(/export:approve/);
+    it('still refuses a requester without secret:export', async () => {
+      // The control that remains. "Remove the second approver" must not have
+      // become "remove the controls near the second approver".
+      await expect(
+        getExportService().request(CLIENT, {
+          organizationId: IDS.orgAcme,
+          kind: 'client_offboarding',
+          format: 'zip',
+          reason: 'a client administrator trying to take the credentials with them',
+          includeSecrets: true,
+        }),
+      ).rejects.toThrow(/secret:export/);
     });
 
-    it('accepts a second person who holds the permission', async () => {
-      // A second super_admin, created as the superuser: provisioning a user is
-      // an administrative act outside the request path, and app_user has no
-      // insert policy for a tenant-context session by design.
+    it('still requires a written reason of real length', async () => {
+      await expect(
+        getExportService().request(ADMIN, {
+          organizationId: IDS.orgAcme,
+          kind: 'client_offboarding',
+          format: 'zip',
+          reason: 'because',
+          includeSecrets: true,
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('has no approval function left to call', async () => {
+      // Left in place it would set a column nothing reads — a control that
+      // looks present and does nothing, which is worse than one that is gone.
+      const [row] = await withTenant(ADMIN, async (tx) => {
+        return tx<{ n: number }[]>`
+          SELECT count(*)::int AS n FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'helm' AND p.proname = 'approve_export'
+        `;
+      });
+      expect(row!.n).toBe(0);
+    });
+
+    it('keeps revocation available to a senior reviewer, not just the requester', async () => {
+      // export:approve was RENAMED rather than deleted, because revoke_export
+      // gated on it too. Deleting it would have narrowed revocation to the
+      // requester alone — removing the brakes along with the gate.
       const sql = superuserSql();
       try {
         await sql`
           INSERT INTO app_user (id, email, name)
-          VALUES (${'1b000000-0000-0000-0000-0000000000f1'}::uuid, 'second@northwind.test', 'Second Approver')
+          VALUES (${'1b000000-0000-0000-0000-0000000000f1'}::uuid, 'second@northwind.test', 'Second Reviewer')
+          ON CONFLICT (id) DO NOTHING
         `;
         await sql`
           INSERT INTO membership (tenant_id, user_id, role_key, org_scope_all)
           VALUES (${IDS.tenant1}::uuid, ${'1b000000-0000-0000-0000-0000000000f1'}::uuid, 'super_admin', true)
+          ON CONFLICT DO NOTHING
         `;
       } finally {
         await sql.end({ timeout: 5 });
       }
 
-      await getExportService().approve(
+      const other = await getExportService().request(ADMIN, {
+        organizationId: IDS.orgAcme,
+        kind: 'asset_inventory',
+        format: 'zip',
+        reason: 'an inventory that somebody else will decide to pull back',
+        includeSecrets: false,
+      });
+
+      const revoked = await getExportService().revoke(
         actor(IDS.tenant1, '1b000000-0000-0000-0000-0000000000f1'),
-        jobId,
-        'reviewed the scope; Acme handover is contractually due',
+        other.exportJobId,
+        'not appropriate to send this week',
       );
-
-      const job = await getExportService().get(ADMIN, jobId);
-      expect(job.approvedBy).toBe('1b000000-0000-0000-0000-0000000000f1');
-      expect(job.approvedAt).toBeInstanceOf(Date);
-    });
-
-    it('refuses a second approval', async () => {
-      await expect(
-        getExportService().approve(actor(IDS.tenant1, '1b000000-0000-0000-0000-0000000000f1'), jobId),
-      ).rejects.toThrow(/already approved/);
-    });
-
-    it('becomes renderable once approved', async () => {
-      expect((await backlog()).map((r) => r.export_job_id)).toContain(jobId);
-    });
-
-    it('stops being renderable if the scope changes after approval', async () => {
-      // The attack this closes: approve a two-server inventory, then widen it to
-      // the whole tenant with one UPDATE and render on the strength of a review
-      // nobody gave.
-      await withTenant(ADMIN, async (tx) => {
-        await tx`
-          UPDATE export_job SET scope = ${tx.json({ nodeTypes: ['credential'] })}::jsonb
-          WHERE id = ${jobId}::uuid
-        `;
-      });
-
-      expect((await backlog()).map((r) => r.export_job_id)).not.toContain(jobId);
-
-      // Restoring the reviewed scope makes it renderable again, which is the
-      // correct behaviour: the digest is over the scope, not over time.
-      await withTenant(ADMIN, async (tx) => {
-        await tx`UPDATE export_job SET scope = '{}'::jsonb WHERE id = ${jobId}::uuid`;
-      });
-      expect((await backlog()).map((r) => r.export_job_id)).toContain(jobId);
+      expect(revoked).toBe(true);
     });
 
     it('renders an encrypted bundle and returns the passphrase once', async () => {
@@ -375,12 +403,6 @@ describe('export engine', () => {
         reason: 'second handover pack for the incoming provider',
         includeSecrets: true,
       });
-      await getExportService().approve(
-        actor(IDS.tenant1, '1b000000-0000-0000-0000-0000000000f1'),
-        request.exportJobId,
-        'approved: same handover, second copy',
-      );
-
       const job = (await backlog()).find((r) => r.export_job_id === request.exportJobId)!;
       const result = await renderFrom(job);
 
@@ -402,8 +424,10 @@ describe('export engine', () => {
       // first thing an auditor reading a handover pack looks for, and the
       // render worker has no user:read of its own to look it up with.
       expect(document.helm.requestedBy).toBe('Northwind Admin');
-      expect(document.helm.approvedBy).toBe('Second Approver');
-      expect(pdfText(unpacked)).toContain('Second Approver');
+      // No approver: 0400 removed the step. The requester is the accountable
+      // party and the cover page names them instead.
+      expect(document.helm.approvedBy).toBeNull();
+      expect(pdfText(unpacked)).toContain('Northwind Admin');
 
       expect(document.helm.omittedSecrets).toHaveLength(1);
       const firewall = document.credentials.find((c) => c.name === 'Acme firewall admin');

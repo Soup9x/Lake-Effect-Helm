@@ -10,7 +10,7 @@
  *   truncate, WinAnsi cannot render every script — and so it is never the only
  *   artefact. Where the PDF says "..." the JSON has the whole value.
  *
- * Secret material appears only when the job was approved to carry it, and even
+ * Secret material appears only when the job was requested to carry it, and even
  * then the PDF marks each credential's provenance so that a reader can tell a
  * revealed password from one that was withheld.
  */
@@ -95,7 +95,10 @@ export function renderPdf(data: CollectedExport, options: RenderOptions): Buffer
     ['Prepared by', data.attestation.tenantName],
     ['Generated', data.attestation.generatedAt],
     ['Requested by', options.requestedBy],
-    ['Approved by', options.approvedBy ?? 'not required (no credentials included)'],
+    // Still printed when present, because bundles produced before 0400 really
+    // were approved and the cover page is the record of that. On everything
+    // since, the requester is the accountable party and the line says so.
+    ...(options.approvedBy ? [['Approved by', options.approvedBy] as [string, string]] : []),
     ['Reason', options.reason],
     ['Credentials', options.includeSecrets ? 'INCLUDED — handle accordingly' : 'metadata only'],
   ]);
@@ -333,7 +336,6 @@ function credentialRows(
   ];
 
   if (credential.is_break_glass) rows.push(['Break glass', 'yes — emergency use, audited']);
-  if (!credential.client_visible) rows.push(['Visibility', 'internal to the MSP']);
 
   if (includeSecrets) {
     rows.push([

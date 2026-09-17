@@ -19,7 +19,7 @@ interface Counts {
   expiring_30: string;
   expired: string;
   degraded_integrations: string;
-  pending_approvals: string;
+  secret_exports_7d: string;
 }
 
 interface HealthRow {
@@ -41,10 +41,13 @@ interface HealthRow {
  *
  * The two banners and the counter strip are fixed. They are not panels somebody
  * chose to look at — they are the things that mean somebody has to do something
- * today, and a dashboard where "three credential exports are waiting for a
- * second approver" can be switched off is a dashboard where it will be. The
- * five widgets below are arrangement: which lists you want in front of you,
- * which is genuinely a matter of what you do all day.
+ * today, and a dashboard where "three credential exports left the building this
+ * week" can be switched off is a dashboard where it will be. That banner
+ * counted exports awaiting a second approver until 0400; with approval gone it
+ * counts exports that ALREADY HAPPENED, which is no longer a queue to work
+ * through but the thing somebody is expected to notice. The five widgets below
+ * are arrangement: which lists you want in front of you, which is genuinely a
+ * matter of what you do all day.
  *
  * Only the widgets in the layout are queried. Somebody who removed the activity
  * widget does not read the audit log on every dashboard load, and that is
@@ -68,9 +71,14 @@ export default async function DashboardPage() {
         (SELECT count(*) FROM v_expiration_dashboard WHERE days_remaining < 0) AS expired,
         (SELECT count(*) FROM integration_connection
           WHERE status IN ('degraded', 'error') AND disabled_at IS NULL) AS degraded_integrations,
+        -- Credential exports produced in the last week. Two-person approval
+        -- was removed in 0400, so this is no longer "somebody needs to act" —
+        -- it is "this happened, and somebody should have noticed". A banner
+        -- rather than a widget for the same reason the other one was: a number
+        -- that can be switched off is a number that will be.
         (SELECT count(*) FROM export_job
-          WHERE status = 'queued' AND include_secrets AND approved_by IS NULL
-            AND revoked_at IS NULL AND expires_at > now()) AS pending_approvals
+          WHERE include_secrets AND revoked_at IS NULL
+            AND created_at > now() - interval '7 days') AS secret_exports_7d
     `;
 
     const [favorites, recent, upcoming, activity, health] = await Promise.all([
@@ -110,7 +118,7 @@ export default async function DashboardPage() {
 
   const { layout, counts, favorites, recent, upcoming, activity, health } = data;
   const expired = Number(counts?.expired ?? 0);
-  const pendingApprovals = Number(counts?.pending_approvals ?? 0);
+  const secretExports = Number(counts?.secret_exports_7d ?? 0);
 
   const clients: ClientHealthRow[] = health.map((row) => ({
     organizationId: row.organization_id,
@@ -167,15 +175,16 @@ export default async function DashboardPage() {
           </Link>
         )}
 
-        {pendingApprovals > 0 && (
+        {secretExports > 0 && (
           <Link
             href="/exports"
             className="flex items-center gap-3 rounded-[--radius-card] border border-sev-warning/40 bg-sev-warning/5 px-4 py-3 text-sm"
           >
             <FileDown className="size-4 shrink-0 text-sev-warning" aria-hidden />
             <span className="text-ink">
-              <strong className="font-semibold">{pendingApprovals}</strong> credential{' '}
-              {pendingApprovals === 1 ? 'export is' : 'exports are'} waiting for a second approver.
+              <strong className="font-semibold">{secretExports}</strong> credential{' '}
+              {secretExports === 1 ? 'export was' : 'exports were'} produced in the last seven
+              days. Review who requested them.
             </span>
           </Link>
         )}

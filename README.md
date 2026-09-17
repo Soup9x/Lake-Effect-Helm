@@ -51,7 +51,7 @@ docs/
   architecture/02-data-model.md         schema shape and rejected alternatives
   architecture/03-crypto-operations.md  how reads, writes and rotation work
   architecture/04-api-layer.md          request flow, auth, untrusted schemas
-  architecture/05-workers-and-exports.md  jobs, worker identities, four eyes
+  architecture/05-workers-and-exports.md  jobs, worker identities, exports
   architecture/06-web-interface.md      pages, tenant switching, secret handling
   architecture/07-local-authentication.md  passwords, lockout, reset, the outage case
   architecture/08-radius-authentication.md  the third door, and how it degrades
@@ -98,9 +98,16 @@ scripts/
 | `0280_onprem_kek` | On-premises KEK custody, `host_held_kek`, key-custody reporting |
 | `0290_worker_identities` | `helm_worker`, per-tenant worker service accounts, reveal-purpose pinning |
 | `0300_worker_queues` | Backlog enumerators, alert evaluation, sync lifecycle, chain anchoring |
-| `0310_export_engine` | Export request/approve/render/download, four-eyes and scope binding |
+| `0310_export_engine` | Export request/approve/render/download, four-eyes and scope binding (approval removed in `0400`) |
 | `0320_export_approval_window` | The parked-approval window; `v_secret_metadata` without a join |
 | `0330_export_render_context` | Requester and approver names, without granting the worker `user:read` |
+| `0340_local_authentication` | Password hashes in `helm_auth`, lockout, reset tokens |
+| `0350_membership_authority` | Who may grant which role, enforced in the database |
+| `0360_radius_authentication` | RADIUS config and session tracking; `radius_config` readable only by `helm_auth` |
+| `0370_workspace_and_notes` | Per-user favourites, recently viewed, dashboard layout, item notes |
+| `0380_search_tags_and_archive` | Trigram search, tags, archive state |
+| `0390_internal_only_rls` | `is_internal_only` enforced in RLS rather than in application code |
+| `0400_single_approver_exports` | Two-person approval on credential exports removed; `credential.client_visible` dropped |
 | `0900_seed_system_data` | Roles and permissions |
 | `0910_worker_seed` | Worker roles, their permissions, and per-tenant identities |
 

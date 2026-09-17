@@ -153,13 +153,19 @@ describe('background workers', () => {
       ).rejects.toMatchObject({ reason: 'not_an_integration_credential' });
     });
 
-    it('refuses an export worker outside an approved export', async () => {
+    it('refuses an export worker outside a live export', async () => {
+      // The gate used to be "is this secret in an APPROVED export"; 0400
+      // removed two-person approval and loosened it to "in a live export that
+      // asked for credentials". The pin is unchanged in substance: an export
+      // worker still cannot reach a secret just because it exists, which is the
+      // property that stops the export identity being a vault-wide skeleton
+      // key. Only the denial's name moved.
       await expect(
         getSecretService().reveal(workerActor(identities.export), ordinarySecretId, {
           purpose: 'export',
           role: 'worker',
         }),
-      ).rejects.toMatchObject({ reason: 'not_in_an_approved_export' });
+      ).rejects.toMatchObject({ reason: 'not_in_a_live_export' });
     });
 
     it('records every refusal in the audit log', async () => {
@@ -169,7 +175,7 @@ describe('background workers', () => {
           WHERE action = 'secret.reveal_denied'
             AND metadata ->> 'cause' IN (
               'purpose_not_permitted_for_actor', 'not_an_integration_credential',
-              'not_in_an_approved_export')
+              'not_in_a_live_export')
         `;
       });
       expect(rows.length).toBeGreaterThanOrEqual(3);

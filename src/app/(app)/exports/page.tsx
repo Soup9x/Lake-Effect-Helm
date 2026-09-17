@@ -7,7 +7,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { ExportRequestForm } from '@/components/export-request-form';
 import {
-  ApproveExportButton,
   DownloadExportButton,
   RevokeExportButton,
 } from '@/components/export-actions';
@@ -34,7 +33,7 @@ function statusTone(status: string): BadgeTone {
  *
  * Readable by anyone who may create an export rather than only by the person
  * who made each one: "who exported this client's credentials, when, and who
- * approved it" is a question the whole team should be able to answer without
+ * requested it" is a question the whole team should be able to answer without
  * asking an administrator to run a query.
  */
 export default async function ExportsPage({
@@ -64,47 +63,13 @@ export default async function ExportsPage({
     }),
   ]);
 
-  const awaitingApproval = exports.filter((job) => job.awaitingMyApproval);
-  const canApprove = permissions.has('export:approve');
-
   return (
     <>
       <PageHeader
         title="Exports"
-        description="Compliance packs and client handovers. Anything containing credentials needs a second approver."
+        description="Compliance packs and client handovers. Every export is recorded here permanently — who asked, what it contained, and every download."
       />
       <PageBody>
-        {awaitingApproval.length > 0 && canApprove && (
-          <Card className="border-sev-warning/40">
-            <CardHeader>
-              <CardTitle>
-                {awaitingApproval.length} credential{' '}
-                {awaitingApproval.length === 1 ? 'export needs' : 'exports need'} your review
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {awaitingApproval.map((job) => (
-                <div
-                  key={job.id}
-                  className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4 last:border-0 last:pb-0"
-                >
-                  <div className="min-w-0 space-y-1">
-                    <div className="font-medium text-ink">
-                      {job.organizationName} · {humanise(job.kind)}
-                    </div>
-                    <p className="max-w-xl text-sm text-ink-muted">{job.reason}</p>
-                    <p className="text-xs text-ink-faint">
-                      Requested by {job.requestedByName ?? 'unknown'} ·{' '}
-                      {formatDateTime(job.createdAt)}
-                    </p>
-                  </div>
-                  <ApproveExportButton exportJobId={job.id} disabled={false} />
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        )}
-
         <ExportRequestForm
           organizations={organizations}
           canExportSecrets={permissions.has('secret:export')}
@@ -147,6 +112,10 @@ export default async function ExportsPage({
                         <span className="text-ink-muted">{job.requestedByName ?? '—'}</span>{' '}
                         {formatDateTime(job.createdAt)}
                       </div>
+                      {/* Only ever set on jobs requested before 0400 removed
+                          two-person approval. Kept so the history of a real
+                          approval is not rewritten to say it never happened;
+                          nothing sets it now, so it simply stops appearing. */}
                       {job.approvedByName && (
                         <div>
                           Approved by{' '}
@@ -180,19 +149,6 @@ export default async function ExportsPage({
                         encrypted={job.encryptionMethod !== null}
                       />
                     )}
-                    {job.awaitingMyApproval && canApprove && (
-                      <ApproveExportButton exportJobId={job.id} disabled={false} />
-                    )}
-                    {job.includeSecrets &&
-                      !job.approvedBy &&
-                      job.status === 'queued' &&
-                      !job.awaitingMyApproval && (
-                        <span className="text-xs text-ink-faint">
-                          {canApprove
-                            ? 'You requested this — someone else must approve it'
-                            : 'Awaiting approval'}
-                        </span>
-                      )}
                     {['queued', 'running', 'completed'].includes(job.status) && !job.revokedAt && (
                       <RevokeExportButton exportJobId={job.id} />
                     )}

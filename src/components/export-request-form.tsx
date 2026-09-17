@@ -158,8 +158,8 @@ export function ExportRequestForm({
                 <span>
                   <span className="font-medium text-ink">Include credentials</span>
                   <span className="mt-0.5 block text-xs text-ink-muted">
-                    Requires a second approver. The bundle is encrypted and every credential in it
-                    is decrypted and audited individually.
+                    The bundle is encrypted, every credential in it is decrypted and audited
+                    individually, and your name is on the record for each one.
                   </span>
                 </span>
               </label>

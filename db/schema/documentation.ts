@@ -47,7 +47,8 @@ export const credential = pgTable('credential', {
   totpAccount: text('totp_account'),
 
   isBreakGlass: boolean('is_break_glass').notNull().default(false),
-  clientVisible: boolean('client_visible').notNull().default(false),
+  // No clientVisible. 0400 dropped the column: it defaulted to false, no write
+  // path ever set it, and a credential is hidden with the asset it documents.
   lastVerifiedAt: tstz('last_verified_at'),
   verifiedBy: uuid('verified_by').references(() => appUser.id, { onDelete: 'set null' }),
 });

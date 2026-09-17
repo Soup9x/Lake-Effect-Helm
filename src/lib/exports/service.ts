@@ -2,11 +2,17 @@
  * The export engine's application layer.
  *
  * Every state transition goes through a SECURITY DEFINER function in
- * db/sql/0310, so the audit row and the transition commit together and the
- * four-eyes rule is enforced by the database rather than by this file. What
- * lives here is the part that cannot live in SQL: decrypting secrets one at a
- * time through the audited reveal path, rendering, encrypting the bundle, and
- * handing the passphrase back exactly once.
+ * db/sql/0310 (as revised by 0400), so the audit row and the transition commit
+ * together and the access rules are enforced by the database rather than by
+ * this file. What lives here is the part that cannot live in SQL: decrypting
+ * secrets one at a time through the audited reveal path, rendering, encrypting
+ * the bundle, and handing the passphrase back exactly once.
+ *
+ * Secret-bearing exports needed a second approver until 0400. They do not any
+ * more — one person holding secret:export is enough, and what watches them is
+ * the audit trail plus the export notifications in 0410. Nothing in this file
+ * gates on approval; approvedBy is carried only so a bundle produced under the
+ * old rule still says who signed it off.
  */
 import type { ActorRef } from '../secrets/service';
 import { withTenant, type HelmTx } from '../db/client';
@@ -63,17 +69,19 @@ export interface ExportJobSummary {
   contentSha256: string | null;
   encryptionMethod: string | null;
   error: string | null;
-  /** True when this actor may approve it: has the permission and did not request it. */
-  awaitingMyApproval: boolean;
 }
 
 export class ExportService {
   /**
-   * Create a job. A secret-bearing one is parked until a second person approves
-   * it — the job is `queued` either way, and helm.export_backlog() is the single
+   * Create a job.
+   *
+   * It renders as soon as the worker reaches it. Two-person approval was
+   * removed in 0400 as a deliberate change of posture: a single person holding
+   * secret:export may now produce a credential-bearing bundle, and the audit
+   * trail is what watches them. `helm.export_backlog()` remains the single
    * place that decides what the worker may pick up.
    */
-  async request(actor: ActorRef, input: RequestExportInput): Promise<{ exportJobId: string; needsApproval: boolean }> {
+  async request(actor: ActorRef, input: RequestExportInput): Promise<{ exportJobId: string }> {
     return withTenant(actor, (tx) => this.requestInTransaction(tx, input));
   }
 
@@ -89,8 +97,13 @@ export class ExportService {
   async requestInTransaction(
     tx: HelmTx,
     input: RequestExportInput,
-  ): Promise<{ exportJobId: string; needsApproval: boolean }> {
-    const [row] = await tx<{ export_job_id: string; needs_approval: boolean }[]>`
+  ): Promise<{ exportJobId: string }> {
+    // request_export returned a third column, `needs_approval`, until 0400. It
+    // was include_secrets under another name, and once approval was removed it
+    // would have told every caller that a job which is already renderable is
+    // waiting for a reviewer. Narrowing the function's return type was the
+    // point — a value that lies is worse than one that is missing.
+    const [row] = await tx<{ export_job_id: string }[]>`
       SELECT * FROM helm.request_export(
         ${input.organizationId}::uuid,
         ${input.kind}::export_kind,
@@ -102,14 +115,7 @@ export class ExportService {
       )
     `;
     if (!row) throw new Error('request_export returned no row');
-    return { exportJobId: row.export_job_id, needsApproval: row.needs_approval };
-  }
-
-  /** The second pair of eyes. The database refuses self-approval; so does this. */
-  async approve(actor: ActorRef, exportJobId: string, reason?: string): Promise<void> {
-    await withTenant(actor, async (tx) => {
-      await tx`SELECT helm.approve_export(${exportJobId}::uuid, ${reason ?? null})`;
-    });
+    return { exportJobId: row.export_job_id };
   }
 
   async revoke(actor: ActorRef, exportJobId: string, reason: string): Promise<boolean> {
@@ -140,7 +146,7 @@ export class ExportService {
         ORDER BY j.created_at DESC
         LIMIT ${Math.min(Math.max(filter.limit ?? 50, 1), 200)}
       `;
-      return rows.map((row) => toSummary(row, actor));
+      return rows.map((row) => toSummary(row));
     });
   }
 
@@ -156,7 +162,7 @@ export class ExportService {
         WHERE j.id = ${exportJobId}::uuid
       `;
       if (!row) throw ApiError.notFound('no such export');
-      return toSummary(row, actor);
+      return toSummary(row);
     });
   }
 
@@ -466,7 +472,7 @@ interface ClaimRow {
   download_number: number | null;
 }
 
-function toSummary(row: RawJobRow, actor: ActorRef): ExportJobSummary {
+function toSummary(row: RawJobRow): ExportJobSummary {
   return {
     id: row.id,
     organizationId: row.organization_id,
@@ -493,14 +499,6 @@ function toSummary(row: RawJobRow, actor: ActorRef): ExportJobSummary {
     contentSha256: row.content_sha256?.toString('hex') ?? null,
     encryptionMethod: row.encryption_method,
     error: row.error,
-    // A hint for the UI only. The database is what actually refuses, so a
-    // client that ignores this and calls approve anyway is still refused.
-    awaitingMyApproval:
-      row.include_secrets &&
-      row.approved_by === null &&
-      row.status === 'queued' &&
-      row.revoked_at === null &&
-      row.requested_by !== actor.actorId,
   };
 }
 

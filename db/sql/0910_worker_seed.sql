@@ -30,8 +30,8 @@ INSERT INTO app_role (key, name, description, rank, is_tenant_wide, is_system) V
    'Verifies and externally anchors the audit hash chain. Read-only over audit '
    'history; cannot read documentation or secrets.', 60, true, true),
   ('system_export', 'Export Render Worker',
-   'Renders approved compliance and offboarding exports. May reveal only secrets '
-   'inside a live, four-eyes-approved export job.', 60, true, true);
+   'Renders compliance and offboarding exports. May reveal only secrets '
+   'inside a live export job that asked for them.', 60, true, true);
 
 INSERT INTO role_permission (role_key, permission_key) VALUES
   ('system_alerts', 'organization:read'),

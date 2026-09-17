@@ -236,38 +236,61 @@ documentation, and an auditor asking for evidence needs a record they can read.
 Refusing to build it does not make it not happen — it makes it happen through a
 database dump nobody logged.
 
-### Four eyes
+### One authorised person, and a trail
 
-A secret-bearing export needs a second person, and the approver cannot be the
-requester. `export_job_four_eyes` enforces that as a CHECK constraint, so it
-holds against a direct UPDATE by someone who found a way past the API.
+**This changed deliberately in `0400`.** A secret-bearing export used to require
+a second person who was not the requester. It no longer does: one account
+holding `secret:export` can request a credential-bearing export and it renders
+immediately. That was a requested change of security posture, not a bug fix, and
+what follows describes both what went and what stayed.
 
-`helm.approve_export()` is the only way `approved_by` gets set. It refuses
-self-approval, re-approval, approval by a machine identity, approval of a job
-that is not queued, and approval of a job whose organisation the approver cannot
-see.
+What was removed: the `export_job_secrets_need_approval` constraint, the
+approval filter and scope-digest comparison in `helm.export_backlog()`,
+`helm.approve_export()` itself, and the approval gate inside the render worker's
+own reveal check.
 
-**Requesting is separately permissioned from approving.** `secret:export` is
-required to *request* a credential-bearing export, so someone who could never
-export credentials themselves cannot park one in the queue for a colleague to
-rubber-stamp.
+What was kept, and is now load-bearing:
 
-### The approval is bound to what was reviewed
+- **`secret:export`.** Still required to request an export carrying credentials,
+  still separate from `export:create`, still `msp_only` so no client-side role
+  can hold it. This is now the whole of the gate rather than the first half of
+  it.
+- **`min_role_rank`, per secret.** The render reveals each credential through
+  `helm.reveal_secret()`, which applies the rank ladder individually. An export
+  cannot carry a credential its requester could not have revealed one at a time.
+- **Tenant and organisation scoping**, the ten-character written reason, the
+  bundle expiry, mandatory encryption of any bundle containing secrets, and the
+  numbered record of every download.
+- **Revocation by somebody else.** `revoke_export()` gated on `export:approve`,
+  so deleting that permission would have narrowed revocation to the requester
+  alone. It was **renamed** to `export:revoke_any`, preserving every grant —
+  removing a gate must not remove the brakes.
 
-`approve_export()` records `approved_scope_sha256`, a digest over the job's kind,
-format, secrets flag and scope. `helm.export_backlog()` recomputes it and
-refuses to hand the job to the worker if it no longer matches. Otherwise
-"approve a two-server inventory, then widen it to the whole tenant" is one UPDATE
-away from being an approved full-vault export.
+`approved_by`, `approved_at` and `approved_scope_sha256` remain on the table and
+`export_job_four_eyes` still guards them. Nothing writes them now; the columns
+exist so that an export approved before `0400` keeps the record that it was.
+The exports page and the bundle cover page print an approver only when there is
+one, so the field simply stops appearing on new jobs.
 
-A schema note: the original `export_job_secrets_need_approval` constraint
-required an approver for *any* secret-bearing row, which made the parked state
-unrepresentable and would have forced the approver's name into the creation
-call — one person typing two names, which is not four eyes. It now permits
-`queued` and `revoked` without an approver and demands one for every other
-status. `helm.begin_export_render()` is the transition into `running`, so an
-unapproved job is refused by the database at the moment it would start reading
-credentials.
+### What replaces prevention
+
+Honestly: nothing prevents it any more. A single authorised person can export a
+client's credentials, and the MSP finds out afterwards. The safeguard is
+detection, and it is deliberately louder than the one row of "somebody agreed"
+that approval produced:
+
+| Event | What it records |
+| --- | --- |
+| `export.requested` | who asked, which client, scope, reason, whether it carries credentials |
+| `secret.revealed` | **one row per credential**, written by `reveal_secret()` with purpose `export` — so "who exported *what*" is answerable per credential, not per job |
+| `export.rendered` | counts, bytes, sha256, omissions |
+| `export.downloaded` | every retrieval, numbered, with byte size |
+
+The chain is hash-linked and append-only (`0140`), so the person it describes
+cannot edit it afterwards. Export events are also the primary subject of the
+outbound notifications in `0410`: a webhook fires on request and on download, so
+an export shows up in a channel somebody reads rather than only in a log
+somebody has to think to open.
 
 ### Rendering
 
@@ -361,9 +384,9 @@ now asserts it column by column across all five runtime roles.
 | Suite | Count |
 | --- | --- |
 | `tests/integration/workers.test.ts` | 28 — identities, purpose restriction, alert semantics, sync backoff, anchoring refusals |
-| `tests/integration/exports.test.ts` | 26 — four eyes, scope binding, omissions, revocation, expiry, storage mode |
+| `tests/integration/exports.test.ts` | single-approver exports, scope binding, omissions, revocation, expiry, storage mode |
 | `tests/unit/exports.test.ts` | 21 — PDF structure and xref resolution, bundle round-trip, passphrase distribution |
-| `db/tests/security.sql` | 109 assertions, including the revised four-eyes section |
+| `db/tests/security.sql` | §15 (export behaviour) and §35 (what `0400` removed, and what it kept) |
 
 The PDF output was additionally parsed with an independent reader (`pypdf`) to
 confirm page count, extracted text, repeated table headers and the UTF-16 title.

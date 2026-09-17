@@ -199,8 +199,9 @@ control into one file.
 
 - `include_secrets` defaults false; turning it on is a separate, separately
   permissioned, separately audited decision
-- secret-bearing exports require a second approver, and `CHECK` forbids
-  self-approval — one compromised account must not walk out with the vault
+- secret-bearing exports require `secret:export`, which is `msp_only`; they
+  required a second approver until `0400`, which deliberately removed that gate
+  and left the per-credential audit trail as the safeguard
 - `expires_at` is `NOT NULL`; a handover archive lingering in a bucket is a
   breach waiting for a misconfigured ACL
 - every download is its own row, not a counter bump

@@ -2,109 +2,23 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, Download, Loader2, ShieldAlert, X } from 'lucide-react';
+import { Download, Loader2, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 
 /**
- * Approving, revoking and downloading an export.
+ * Revoking and downloading an export.
  *
  * Client components because each one is an audited state change that must be
  * attributable to a click, and because the download is a file transfer the
  * browser has to own.
  *
- * The approve button's disabled state is a COURTESY, not a control. The
- * database refuses self-approval, re-approval, approval of a non-queued job and
- * approval by anyone without the permission; this only stops a person from
- * clicking something that is certain to fail.
+ * Revoking is a courtesy in the same way every disabled state here is: the
+ * database decides, and a client that ignores the UI is still refused.
+ *
+ * There is no approve button. Two-person approval was removed in 0400 — see
+ * db/sql/0400_single_approver_exports.sql for what replaced it.
  */
-export function ApproveExportButton({
-  exportJobId,
-  disabled,
-  disabledReason,
-}: {
-  exportJobId: string;
-  disabled: boolean;
-  disabledReason?: string;
-}) {
-  const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [reason, setReason] = useState('');
-  const [open, setOpen] = useState(false);
-  const router = useRouter();
-
-  if (disabled) {
-    return (
-      <span className="text-xs text-ink-faint" title={disabledReason}>
-        {disabledReason ?? 'Awaiting another approver'}
-      </span>
-    );
-  }
-
-  const approve = () => {
-    setError(null);
-    startTransition(async () => {
-      const response = await fetch(`/api/exports/${exportJobId}/approve`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(reason.trim().length >= 10 ? { reason: reason.trim() } : {}),
-      });
-
-      if (!response.ok) {
-        const body = (await response.json()) as { error?: { message?: string } };
-        setError(body.error?.message ?? 'The approval was refused.');
-        return;
-      }
-      setOpen(false);
-      router.refresh();
-    });
-  };
-
-  return (
-    <div className="space-y-2">
-      {open ? (
-        <div className="space-y-2 rounded-md border border-border bg-surface-sunken p-3">
-          <p className="text-xs text-ink-muted">
-            You are approving a credential export. Check the client, the scope and the reason
-            before confirming — the approval is recorded against your account and is bound to the
-            scope as it stands now.
-          </p>
-          <div className="space-y-1">
-            <Label htmlFor={`approve-${exportJobId}`}>Note (optional)</Label>
-            <Input
-              id={`approve-${exportJobId}`}
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="What you checked"
-            />
-          </div>
-          <div className="flex gap-2">
-            <Button size="sm" variant="primary" onClick={approve} disabled={pending}>
-              {pending ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
-              Confirm approval
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={pending}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <Button size="sm" variant="primary" onClick={() => setOpen(true)}>
-          <Check aria-hidden />
-          Approve
-        </Button>
-      )}
-
-      {error && (
-        <p className="flex items-start gap-1.5 text-xs text-danger">
-          <ShieldAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
 export function RevokeExportButton({ exportJobId }: { exportJobId: string }) {
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState('');

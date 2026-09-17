@@ -28,13 +28,17 @@ const schema = z.object({
  * So a selection of nodes is grouped by the client they belong to, and a
  * selection of clients becomes one job each. The response lists them.
  *
- * SECRET MATERIAL IS NOT INCLUDED, and this endpoint cannot ask for it. A
- * secret-bearing export needs `secret:export`, a written reason, and a second
- * approver who is not the requester — four-eyes, enforced in 0310/0320. Letting
- * a checkbox on a list view request forty of them would turn the most carefully
- * gated operation in the product into the easiest one to trigger by accident.
- * Somebody who needs credentials in an export requests it per client, from the
- * exports page, where the approval it requires is visible.
+ * SECRET MATERIAL IS NOT INCLUDED, and this endpoint cannot ask for it. That
+ * restriction MATTERS MORE since 0400, not less. A secret-bearing export needs
+ * `secret:export` and a written reason, and it used to need a second approver
+ * as well; with that gone, one person is enough. Letting a checkbox on a list
+ * view request forty of them would mean a single click walking out with every
+ * credential of every selected client — turning the most carefully gated
+ * operation in the product into the easiest one to trigger by accident.
+ *
+ * Somebody who needs credentials in an export requests it one client at a time,
+ * from the exports page, where the reason and the client are in front of them
+ * and each job is its own audited, notified event.
  */
 export const POST = tenantRoute(
   async ({ tx, request }) => {

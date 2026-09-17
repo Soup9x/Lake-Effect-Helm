@@ -375,66 +375,83 @@ SELECT helm_test.check_raises('a published schema body is immutable',
 ROLLBACK;
 
 \echo ''
-\echo '== 15. Secret-bearing exports need a second pair of eyes =='
+\echo '== 15. A credential export needs ONE authorised person =='
+-- CHANGED POSTURE, 0400. This section used to assert that a secret-bearing
+-- export could not render until a second person approved it. That requirement
+-- was deliberately removed; these assertions are its replacement, and they are
+-- written as the INVERSE of the old ones so a silent revert shows up here.
+--
+-- §35 checks the catalogue — what was dropped, renamed and kept. This section
+-- checks BEHAVIOUR, with a real actor, against real rows.
 BEGIN;
 SELECT helm_test.ctx(:t1, :u_admin1);
-SELECT helm_test.check_raises('a secret-bearing export cannot be self-approved',
-  format($$INSERT INTO export_job (tenant_id, organization_id, kind, format,
-                                   include_secrets, reason, requested_by, approved_by,
-                                   approved_at, expires_at)
-           VALUES (%L, %L, 'client_offboarding', 'zip', true,
-                   'offboarding handover for Acme', %L, %L, now(), now() + interval '7 days')$$,
-         :t1, :t1_acme, :u_admin1, :u_admin1));
--- An unapproved credential-bearing export CAN exist, parked in `queued`. That
--- is the state a reviewer looks at, and making it unrepresentable would force
--- the approver's name into the creation call — one person typing two names,
--- which is not four eyes. The guarantee is about what it may DO, below.
+
+-- Requesting is still permissioned, and secret:export is now the whole of the
+-- gate rather than the first half of it. u_acme is a client-side user and
+-- may never hold it.
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check_raises('a user without secret:export cannot request one',
+  format($$SELECT helm.request_export(%L, 'client_offboarding'::export_kind, 'zip',
+                                      'trying to take the passwords home', true)$$, :t1_acme));
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+SELECT helm_test.check_raises('an export still needs a written reason',
+  format($$SELECT helm.request_export(%L, 'client_offboarding'::export_kind, 'zip',
+                                      'x', true)$$, :t1_acme));
+
+-- THE CHANGE. Under the old rule this row could exist but could not start:
+-- begin_export_render refused it and the backlog did not offer it.
 INSERT INTO export_job (id, tenant_id, organization_id, kind, format,
                         include_secrets, reason, requested_by, expires_at)
   VALUES ('e0000000-0000-0000-0000-000000000001', :t1, :t1_acme,
           'client_offboarding', 'zip', true,
           'offboarding handover for Acme', :u_admin1, now() + interval '7 days');
-SELECT helm_test.check('an unapproved secret-bearing export may await review',
+
+SELECT helm_test.check('a secret-bearing export with no approver starts rendering',
+  helm.begin_export_render('e0000000-0000-0000-0000-000000000001'));
+SELECT helm_test.check('...and is in running, where credentials get decrypted',
   EXISTS (SELECT 1 FROM export_job
-          WHERE id = 'e0000000-0000-0000-0000-000000000001' AND status = 'queued'));
+          WHERE id = 'e0000000-0000-0000-0000-000000000001' AND status = 'running'));
 
--- THE guarantee: it cannot start. begin_export_render is the transition into
--- `running`, and running is where credentials get decrypted.
-SELECT helm_test.check_raises('an unapproved secret-bearing export cannot start rendering',
-  $$SELECT helm.begin_export_render('e0000000-0000-0000-0000-000000000001')$$);
+-- The one that would have shipped a silently EMPTY handover pack. The worker
+-- reveals each credential through the 'export' purpose, and that purpose asks
+-- is_in_live_secret_export(). While it still asked for an approver, nothing was
+-- ever in an approved export and every credential was omitted without an error.
+SELECT helm_test.check('the render worker can actually reach the material',
+  helm.is_in_live_secret_export(:s_dom_adm));
 
-SELECT helm_test.check('an unapproved secret-bearing export is not offered to the render worker',
-  NOT EXISTS (SELECT 1 FROM export_job j
-              WHERE j.id = 'e0000000-0000-0000-0000-000000000001'
-                AND j.include_secrets
-                AND j.approved_by IS NOT NULL));
+-- ...and the conditions it DOES still impose, checked by changing the job
+-- rather than by reading the function's text.
+UPDATE export_job SET revoked_at = now(), status = 'revoked'
+  WHERE id = 'e0000000-0000-0000-0000-000000000001';
+SELECT helm_test.check('a revoked export stops yielding material immediately',
+  NOT helm.is_in_live_secret_export(:s_dom_adm));
 
-DELETE FROM export_job WHERE id = 'e0000000-0000-0000-0000-000000000001';
--- The supported path: someone else requested it, this session approves it.
--- Going through the function rather than an INSERT is the point — approve_export
--- is what records the scope digest, and a direct INSERT setting approved_by is
--- refused by export_job_approved_scope_recorded precisely so that an approval
--- always says what was approved.
-INSERT INTO export_job (id, tenant_id, organization_id, kind, format, include_secrets,
-                        reason, requested_by, expires_at)
-  VALUES ('e0000000-0000-0000-0000-000000000002', :t1, :t1_acme,
-          'client_offboarding', 'zip', true,
-          'offboarding handover for Acme', :u_tech1, now() + interval '7 days');
+UPDATE export_job SET revoked_at = NULL, status = 'queued',
+                      expires_at = now() - interval '1 hour'
+  WHERE id = 'e0000000-0000-0000-0000-000000000001';
+SELECT helm_test.check('an expired export stops yielding material too',
+  NOT helm.is_in_live_secret_export(:s_dom_adm));
 
-SELECT helm_test.check_raises('an approval must record what was approved',
-  format($$UPDATE export_job SET approved_by = %L, approved_at = now()
-           WHERE id = 'e0000000-0000-0000-0000-000000000002'$$, :u_admin1));
+UPDATE export_job SET expires_at = now() + interval '7 days', include_secrets = false
+  WHERE id = 'e0000000-0000-0000-0000-000000000001';
+SELECT helm_test.check('a job that never asked for credentials cannot reveal any',
+  NOT helm.is_in_live_secret_export(:s_dom_adm));
 
-SELECT helm.approve_export('e0000000-0000-0000-0000-000000000002',
-                           'reviewed the scope; handover is contractually due');
-SELECT helm_test.check('an export approved by a second person is accepted',
-  EXISTS (SELECT 1 FROM export_job
-          WHERE id = 'e0000000-0000-0000-0000-000000000002'
-            AND approved_by = :u_admin1
-            AND approved_scope_sha256 IS NOT NULL));
-
-SELECT helm_test.check_raises('an approved export cannot be approved again',
-  $$SELECT helm.approve_export('e0000000-0000-0000-0000-000000000002')$$);
+-- Revocation survived the change. export:approve was renamed to
+-- export:revoke_any rather than deleted precisely so this still works: pulling
+-- back somebody else's export is the containment action, and removing a gate
+-- must not remove the brakes.
+UPDATE export_job SET include_secrets = true, requested_by = :u_tech1
+  WHERE id = 'e0000000-0000-0000-0000-000000000001';
+SELECT helm_test.check('a senior reviewer can still revoke somebody else''s export',
+  helm.revoke_export('e0000000-0000-0000-0000-000000000001',
+                     'this should not have left the building'));
+SELECT helm_test.check('...and the revocation is on the record',
+  EXISTS (SELECT 1 FROM audit_log
+          WHERE action = 'export.revoked'
+            AND entity_id = 'e0000000-0000-0000-0000-000000000001'
+            AND actor_id = :u_admin1));
 ROLLBACK;
 
 \echo ''
@@ -1331,6 +1348,135 @@ SELECT helm_test.check('...and expiration and audit_log name the node check',
     WHERE (tablename = 'expiration' OR tablename LIKE 'audit_log%')
       AND cmd = 'SELECT'
       AND coalesce(qual, '') NOT LIKE '%node_visible%'));
+
+\echo ''
+\echo '== 35. Credential export: one authorised person, and a trail =='
+-- A DELIBERATE CHANGE OF POSTURE made in 0400, not a bug fix. Two-person
+-- approval used to park a secret-bearing export until somebody else agreed. It
+-- does not any more.
+--
+-- These assertions exist to stop the change being quietly REVERSED and, just as
+-- importantly, from being quietly WIDENED. "Remove the second approver" must
+-- not become "remove the controls that were near the second approver", so each
+-- removal below is paired with something that must still be there.
+
+\echo '-- the gate is gone --'
+SELECT helm_test.check('the approval constraint no longer exists',
+  NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'export_job'::regclass
+      AND conname = 'export_job_secrets_need_approval'));
+SELECT helm_test.check('helm.approve_export no longer exists',
+  NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'helm' AND p.proname = 'approve_export'));
+-- The worker's own reveal gate was ALSO approval-shaped. Left alone it would
+-- have refused every credential and produced handover packs containing none,
+-- silently.
+SELECT helm_test.check('the render worker is no longer gated on approval',
+  NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'helm' AND p.proname = 'is_in_approved_export'));
+SELECT helm_test.check('...and its replacement still requires a LIVE job asking for secrets',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'is_in_live_secret_export')
+  LIKE '%include_secrets%');
+SELECT helm_test.check('...and still stops yielding material once revoked',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'is_in_live_secret_export')
+  LIKE '%revoked_at IS NULL%');
+
+\echo '-- everything else is still standing --'
+SELECT helm_test.check('secret:export still exists and is MSP-only',
+  EXISTS (SELECT 1 FROM permission WHERE key = 'secret:export' AND msp_only));
+SELECT helm_test.check('no client-side role may export secret material',
+  NOT EXISTS (
+    SELECT 1 FROM role_permission rp JOIN app_role r ON r.key = rp.role_key
+    WHERE rp.permission_key = 'secret:export' AND NOT r.is_tenant_wide));
+SELECT helm_test.check('the reveal ladder still gates the export purpose on secret:export',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'reveal_secret')
+  LIKE '%export_not_permitted%');
+SELECT helm_test.check('...and still applies min_role_rank per secret',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'reveal_secret')
+  LIKE '%min_role_rank%');
+SELECT helm_test.check('a written reason is still required',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'export_job'::regclass AND conname = 'export_job_reason_present'));
+SELECT helm_test.check('a completed secret-bearing bundle must still be encrypted',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'export_job'::regclass
+            AND conname = 'export_job_secrets_need_encryption'));
+
+\echo '-- revocation did not go with it --'
+-- export:approve was RENAMED, not deleted. helm.revoke_export() gated on it
+-- too, so deleting it would have narrowed revocation to the requester alone —
+-- taking the brakes off along with the gate.
+SELECT helm_test.check('export:approve is gone',
+  NOT EXISTS (SELECT 1 FROM permission WHERE key = 'export:approve'));
+SELECT helm_test.check('...replaced by a permission that says what it does',
+  EXISTS (SELECT 1 FROM permission WHERE key = 'export:revoke_any'));
+SELECT helm_test.check('...held by the same senior roles',
+  (SELECT count(*) FROM role_permission WHERE permission_key = 'export:revoke_any') >= 2);
+SELECT helm_test.check('...and revoke_export still lets them pull back somebody else''s export',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'revoke_export')
+  LIKE '%export:revoke_any%');
+
+\echo '-- the audit trail is now the primary safeguard --'
+-- It replaced one row saying somebody agreed with a record of what actually
+-- happened. Asserted end to end: request, per-credential reveal, render.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+CREATE TEMP TABLE export_probe ON COMMIT DROP AS
+  SELECT * FROM helm.request_export(
+    :t1_acme, 'client_offboarding'::export_kind, 'zip',
+    'contractual handover of all documentation for the audit trail check',
+    true, '{}'::jsonb, 72);
+
+-- Stated as the conditions helm.export_backlog() now requires, rather than by
+-- calling it: the backlog is granted to helm_worker alone and this suite runs
+-- as helm_app. That boundary is deliberate, so the test bends and not the
+-- grant. §15 proves the same property the other way round, by actually
+-- starting the render.
+SELECT helm_test.check('the request is renderable straight away, with no approver',
+  EXISTS (
+    SELECT 1 FROM export_job j
+    WHERE j.id = (SELECT export_job_id FROM export_probe)
+      AND j.status = 'queued'
+      AND j.approved_by IS NULL
+      AND j.revoked_at IS NULL
+      AND j.expires_at > now()));
+SELECT helm_test.check('...and is recorded with who asked and why',
+  EXISTS (
+    SELECT 1 FROM audit_log
+    WHERE action = 'export.requested'
+      AND entity_id = (SELECT export_job_id FROM export_probe)
+      AND actor_id = :u_admin1
+      AND reason LIKE '%contractual handover%'));
+SELECT helm_test.check('...naming that it carries credentials',
+  (SELECT metadata ->> 'include_secrets' FROM audit_log
+    WHERE action = 'export.requested'
+      AND entity_id = (SELECT export_job_id FROM export_probe)) = 'true');
+ROLLBACK;
+
+-- The per-credential record is what makes "who exported WHAT" answerable, and
+-- it comes from the reveal ladder rather than from the export engine.
+SELECT helm_test.check('a reveal for export writes one audit row per secret',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'reveal_secret')
+  LIKE '%secret.revealed%');
+SELECT helm_test.check('and the audit log is still append-only',
+  EXISTS (
+    SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+    WHERE c.relname = 'audit_log' AND NOT t.tgisinternal));
 
 \echo ''
 \echo '== All security assertions passed =='

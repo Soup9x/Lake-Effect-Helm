@@ -240,7 +240,7 @@ function ExportPopover({
           />
           <FieldHint>
             Recorded in the audit log. One export per client. Credential material is never included —
-            that needs a second approver, from the Exports page.
+            request that one client at a time, from the Exports page.
           </FieldHint>
           <div className="mt-2 flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>

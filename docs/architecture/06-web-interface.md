@@ -86,13 +86,19 @@ a printed page is the filing-cabinet problem the vault was supposed to remove.
 
 ## 4. The export flow
 
-The exports page is where four eyes becomes visible. A requester fills in the
-form — the credentials checkbox is labelled with its consequence rather than
-left as an unexplained toggle — and the job appears in the history as `queued`
-with no approve control for them. A colleague with `export:approve` sees a
-review banner at the top of the same page and confirms, having been told
-explicitly that their approval is recorded against their account and is bound to
-the scope as it stands.
+The exports page is where the cost of an export is made visible. A requester
+fills in the form — the credentials checkbox is labelled with its consequence
+rather than left as an unexplained toggle — and the job appears in the history
+as `queued`, renderable straight away.
+
+**There is no approve control, deliberately.** `0400` removed two-person
+approval; one account with `secret:export` is now sufficient. Since nothing
+stops the export, the page is built to make it *seen* instead: the dashboard
+carries a fixed banner counting credential exports produced in the last seven
+days, the request form says plainly that each credential is audited
+individually, and every job on the page names its requester, its reason and its
+download count. Revocation stays available to a senior reviewer, so an export
+that should not have happened can still be pulled back before it is fetched.
 
 None of the UI state is the control. The database refuses self-approval,
 re-approval, approval by a machine identity, and rendering a job whose scope
@@ -172,10 +178,11 @@ database:
 - Every page renders with real data.
 - React hydrates and `RevealButton` decrypts a credential, producing a
   `secret.revealed` audit row with `purpose = view`.
-- A requester queues a credential export and sees **no** approve control; a
-  second person sees the review banner and approves; `export_job` records both
-  names and the scope digest.
+- A requester queues a credential export with no second approver and it is
+  immediately renderable; `export_job` records the requester and the reason, and
+  `audit_log` carries `export.requested` plus one `secret.revealed` row per
+  credential.
 - The worker renders it, encrypts it, and writes the passphrase to its sink.
-- The bundle downloads in full (33,627 bytes), and unpacks with that passphrase
-  to a JSON document naming `approvedBy: Second Approver` and a PDF that opens
-  in an independent reader.
+- The bundle downloads in full, and unpacks with that passphrase to a JSON
+  document with a null `approvedBy` and a PDF that opens in an independent
+  reader.
