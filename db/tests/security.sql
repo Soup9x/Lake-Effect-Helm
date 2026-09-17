@@ -559,7 +559,15 @@ SELECT helm_test.check('reset tokens are helm_auth''s alone',
 SELECT helm_test.check('helm_app cannot run the pre-context login challenge',
   NOT has_function_privilege('helm_app', 'helm.local_login_challenge(text, inet)', 'EXECUTE'));
 SELECT helm_test.check('helm_app cannot forge a session',
-  NOT has_function_privilege('helm_app', 'helm.create_local_session(uuid, text, integer)', 'EXECUTE'));
+  NOT has_function_privilege('helm_app',
+    'helm.create_local_session(uuid, text, integer, auth_method, inet, text)', 'EXECUTE'));
+-- 0360 replaced the three-argument form. Asserting it is gone as well as that
+-- the new one is ungranted: an overload left behind would be an ungated
+-- session constructor sitting next to a gated one.
+SELECT helm_test.check('the session constructor that records nothing is gone',
+  NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'helm' AND p.proname = 'create_local_session' AND p.pronargs = 3));
 SELECT helm_test.check('helm_app cannot mint or redeem a reset token',
   NOT (has_function_privilege('helm_app', 'helm.issue_password_reset(uuid, bytea, text, integer, uuid, inet)', 'EXECUTE')
     OR has_function_privilege('helm_app', 'helm.redeem_password_reset(bytea)', 'EXECUTE')));
@@ -623,6 +631,114 @@ WHERE tenant_id = :t1 AND user_id = :u_tech1;
 
 SELECT helm_test.check('a rank-80 actor can still grant below its own rank',
   (SELECT role_key FROM membership WHERE tenant_id = :t1 AND user_id = :u_tech1) = 'tier1');
+ROLLBACK;
+
+\echo ''
+\echo '== 23. The RADIUS shared secret is behind the same door as a password hash =='
+BEGIN;
+-- The secret authenticates the RADIUS SERVER to Helm. Anyone who can read it
+-- can forge an Access-Accept and sign in as anybody in the directory, so it
+-- belongs behind helm_auth exactly as password_phc does — and NOT in front of
+-- helm_app, which renders every page in the product.
+--
+-- Worth asserting rather than assuming: 0220 sets ALTER DEFAULT PRIVILEGES
+-- granting helm_app full DML on tables created by later migrations, so this
+-- table arrived readable and had to be explicitly revoked. A future migration
+-- that recreates it and forgets will be caught here.
+SELECT helm_test.check('helm_app cannot read radius_config',
+  NOT has_table_privilege('helm_app', 'radius_config', 'SELECT'));
+SELECT helm_test.check('helm_app cannot write radius_config directly',
+  NOT has_table_privilege('helm_app', 'radius_config', 'INSERT')
+  AND NOT has_table_privilege('helm_app', 'radius_config', 'UPDATE'));
+SELECT helm_test.check('the background worker cannot read it either',
+  NOT has_table_privilege('helm_worker', 'radius_config', 'SELECT'));
+SELECT helm_test.check('nor can the auditor role',
+  NOT has_table_privilege('helm_auditor', 'radius_config', 'SELECT'));
+SELECT helm_test.check('helm_auth can, because the sign-in path needs it',
+  has_table_privilege('helm_auth', 'radius_config', 'SELECT'));
+
+-- Column-level, because one convenient grant on one column is all it takes.
+--
+-- Enumerated from pg_attribute rather than information_schema.columns, and that
+-- is not a style preference: information_schema hides columns the current role
+-- has no privilege on, so run as helm_app it returns NOTHING for this table and
+-- every column assertion over it passes vacuously. A test that cannot fail is
+-- worse than no test, because it reads like coverage.
+SELECT helm_test.check('no column of radius_config is readable by helm_app',
+  NOT EXISTS (
+    SELECT 1 FROM pg_attribute a
+    WHERE a.attrelid = 'public.radius_config'::regclass
+      AND a.attnum > 0 AND NOT a.attisdropped
+      AND has_column_privilege('helm_app', a.attrelid, a.attnum, 'SELECT')));
+
+-- ...and that the enumeration found columns at all, so the assertion above is
+-- quantifying over something.
+SELECT helm_test.check('radius_config has columns to have been checked',
+  (SELECT count(*) FROM pg_attribute a
+   WHERE a.attrelid = 'public.radius_config'::regclass
+     AND a.attnum > 0 AND NOT a.attisdropped) > 10);
+
+-- The secret is never stored beside its key: the DEK in the row is WRAPPED, and
+-- unwrapping it needs the master key, which lives outside the database
+-- entirely. A row read from a stolen dump is not a usable secret.
+SELECT helm_test.check('the stored DEK is wrapped, not a bare key',
+  EXISTS (SELECT 1 FROM pg_attribute
+          WHERE attrelid = 'public.radius_config'::regclass AND attname = 'wrapped_dek')
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = 'public.radius_config'::regclass
+      AND attname IN ('shared_secret', 'secret', 'password', 'plaintext')));
+ROLLBACK;
+
+\echo ''
+\echo '== 24. Your own sessions, and nobody else''s =='
+BEGIN;
+-- helm_app still cannot touch auth_session (§21), so the account page reaches
+-- it through SECURITY DEFINER functions. The risk that introduces is that a
+-- definer function is a hole the size of whatever it forgets to filter on.
+SELECT helm_test.check('the session helpers are SECURITY DEFINER',
+  (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm'
+     AND p.proname IN ('my_sessions', 'revoke_my_session', 'revoke_my_other_sessions')
+     AND p.prosecdef) = 3);
+
+-- Each one filters on the actor from the session context. A definer function
+-- that took a user id as an argument would be an account-takeover primitive.
+SELECT helm_test.check('none of them accepts a user id from the caller',
+  NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'helm'
+      AND p.proname IN ('my_sessions', 'revoke_my_session', 'revoke_my_other_sessions')
+      AND 'uuid'::regtype::oid = ANY (p.proargtypes)));
+
+SELECT helm_test.check('helm_app still cannot delete from auth_session directly',
+  NOT has_table_privilege('helm_app', 'auth_session', 'DELETE'));
+
+-- The reference is a hash, so what the page renders is not a bearer token.
+SELECT helm_test.check('a session reference is not the session token',
+  helm.session_ref('a-token-that-is-at-least-32-characters-long')
+    <> 'a-token-that-is-at-least-32-characters-long');
+SELECT helm_test.check('a session reference is 32 hex characters',
+  helm.session_ref('a-token-that-is-at-least-32-characters-long') ~ '^[0-9a-f]{32}$');
+ROLLBACK;
+
+\echo ''
+\echo '== 25. Configuring authentication is a super_admin act =='
+BEGIN;
+-- tier3 holds every permission except organization:delete, tenant:write and
+-- key:rotate. Gating RADIUS on tenant:write is what keeps "change how the whole
+-- MSP signs in" out of a senior technician's hands, and it is one seed row away
+-- from not being true.
+SELECT helm_test.check('tier3 does not hold tenant:write',
+  NOT EXISTS (SELECT 1 FROM role_permission
+              WHERE role_key = 'tier3' AND permission_key = 'tenant:write'));
+SELECT helm_test.check('super_admin does',
+  EXISTS (SELECT 1 FROM role_permission
+          WHERE role_key = 'super_admin' AND permission_key = 'tenant:write'));
+SELECT helm_test.check('no client-side role holds it',
+  NOT EXISTS (
+    SELECT 1 FROM role_permission rp JOIN app_role r ON r.key = rp.role_key
+    WHERE rp.permission_key = 'tenant:write' AND NOT r.is_tenant_wide));
 ROLLBACK;
 
 \echo ''

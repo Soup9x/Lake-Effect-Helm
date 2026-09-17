@@ -23,6 +23,7 @@
  * database mode. Helm is in database mode, so the value is the token and
  * nothing else needs to match.
  */
+import { createHash } from 'node:crypto';
 import type { NextResponse } from 'next/server';
 
 /** True when Auth.js would be using secure cookies, per auth/config.ts. */
@@ -85,4 +86,21 @@ export function clearSessionCookie(response: NextResponse): void {
     secure: useSecureCookies(),
     maxAge: 0,
   });
+}
+
+/**
+ * The public handle for a session: sha256 of the token, hex, first 32 chars.
+ *
+ * MUST agree byte for byte with helm.session_ref() in 0360 — the account page
+ * lists sessions by the identifier the database computes and revokes them by
+ * the identifier computed here, so a divergence would silently make "this
+ * device" unmatchable and "sign out everywhere else" sign you out of
+ * everywhere, including here. There is a test that runs both and compares.
+ *
+ * Computed in Node rather than by calling the SQL function, so a live session
+ * token never appears as a query parameter — where it would be one
+ * log_statement setting away from sitting in the Postgres log in the clear.
+ */
+export function sessionRef(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 32);
 }

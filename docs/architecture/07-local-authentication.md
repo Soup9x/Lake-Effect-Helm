@@ -12,6 +12,11 @@ too. Local accounts are not a convenience feature, a migration aid, or a
 concession to people who dislike SSO. They are the break-glass path, and every
 decision below is what that implies.
 
+Helm has a third door as well — RADIUS, for MSPs that already run one — which is
+layered onto this path rather than beside it, and which falls through to the
+local password on anything short of an acceptance. See
+[`08-radius-authentication.md`](08-radius-authentication.md).
+
 ---
 
 ## 1. What it is not

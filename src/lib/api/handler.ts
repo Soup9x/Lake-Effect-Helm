@@ -146,6 +146,21 @@ export function publicRoute<T>(
   };
 }
 
+/**
+ * A Postgres `insufficient_privilege` (SQLSTATE 42501).
+ *
+ * Matched structurally rather than with an instanceof: postgres.js does not
+ * export its error class, and a duck-typed check here is more robust than
+ * reaching into the driver's internals for one that may be renamed.
+ */
+function isInsufficientPrivilege(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === '42501'
+  );
+}
+
 function assertPermitted(session: ResolvedSessionContext, options: TenantRouteOptions): void {
   if (options.minRoleRank !== undefined && session.roleRank < options.minRoleRank) {
     throw ApiError.forbidden('your role does not permit this operation');
@@ -195,6 +210,26 @@ export function errorResponse(error: unknown, requestId: string): Response {
         requestId,
       ),
       409,
+      requestId,
+    );
+  }
+
+  // A refusal raised by the database — a policy that matched nothing, or a
+  // SECURITY DEFINER function that checked a permission and said no — is a 403,
+  // not a fault. Without this every such guard surfaced as a bare 500 with a
+  // stack trace in the log, which reads as "Helm is broken" rather than "you
+  // may not do that". Routes that want a more specific message still translate
+  // it themselves inside the handler; this is the floor, not the ceiling.
+  if (isInsufficientPrivilege(error)) {
+    return json(
+      toErrorBody(
+        ApiError.forbidden(
+          (error as { message?: string }).message?.replace(/^helm: /, '') ??
+            'your role does not permit this operation',
+        ),
+        requestId,
+      ),
+      403,
       requestId,
     );
   }

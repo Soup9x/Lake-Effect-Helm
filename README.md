@@ -37,10 +37,11 @@ src/
   workers/      Job runtime, expiry alerts, RMM/PSA sync, audit anchoring,
                 export rendering and expiry.
 tests/
-  unit/         230 tests — RFC 6238 vectors, envelope semantics, schema guard,
+  unit/         259 tests — RFC 6238 vectors, envelope semantics, schema guard,
                 on-premises key custody, PDF structure, bundle encryption,
-                Argon2id and password policy, session cookie naming.
-  integration/  249 tests against a real cluster as the real roles.
+                Argon2id and password policy, session cookie naming, and the
+                RADIUS codec against a real UDP responder.
+  integration/  359 tests against a real cluster as the real roles.
                 The UI was additionally driven end to end in a real browser;
                 see docs/architecture/06-web-interface.md §8.
 .github/
@@ -53,6 +54,7 @@ docs/
   architecture/05-workers-and-exports.md  jobs, worker identities, four eyes
   architecture/06-web-interface.md      pages, tenant switching, secret handling
   architecture/07-local-authentication.md  passwords, lockout, reset, the outage case
+  architecture/08-radius-authentication.md  the third door, and how it degrades
   deployment/docker-on-prem.md          step-by-step Docker install and backup/restore
   deployment/on-premises.md             docker compose, keys, TLS, rotation runbook
 deploy/
@@ -277,7 +279,7 @@ ALTER ROLE helm_auditor   PASSWORD '...';
 
 ```bash
 pnpm verify        # typecheck + 244 vitest tests + schema drift
-pnpm test:sql      # 105 SQL assertions including tamper detection
+pnpm test:sql      # 142 SQL assertions including tamper detection
 pnpm build         # every route must compile and be dynamic
 ```
 

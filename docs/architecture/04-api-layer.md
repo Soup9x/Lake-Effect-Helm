@@ -348,7 +348,7 @@ remembering.
 
 ```bash
 pnpm verify      # typecheck + 244 vitest tests + schema drift
-pnpm test:sql    # 105 SQL assertions including tamper detection
+pnpm test:sql    # 142 SQL assertions including tamper detection
 pnpm build       # every route must compile and be dynamic
 ```
 

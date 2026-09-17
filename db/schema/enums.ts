@@ -121,3 +121,5 @@ export const exportKind = pgEnum('export_kind', [
 export const exportStatus = pgEnum('export_status', ['queued', 'running', 'completed', 'failed', 'expired', 'revoked']);
 
 export const auditOutcome = pgEnum('audit_outcome', ['success', 'denied', 'error']);
+
+export const authMethod = pgEnum('auth_method', ['sso', 'password', 'radius']);

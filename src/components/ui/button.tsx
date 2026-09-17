@@ -15,10 +15,10 @@ const button = cva(
   {
     variants: {
       variant: {
-        primary: 'bg-brand text-white hover:bg-brand-strong',
+        primary: 'bg-brand text-on-brand hover:bg-brand-strong',
         secondary: 'bg-surface-raised text-ink border border-border-strong hover:bg-surface-sunken',
         ghost: 'text-ink-muted hover:bg-surface-sunken hover:text-ink',
-        danger: 'bg-danger text-white hover:brightness-90',
+        danger: 'bg-danger text-on-danger hover:brightness-90',
         link: 'text-brand underline-offset-4 hover:underline',
       },
       size: {

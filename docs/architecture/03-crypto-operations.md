@@ -351,7 +351,7 @@ window, not as making key material unrecoverable.
 
 ```bash
 pnpm verify              # typecheck + 151 vitest tests + schema drift
-pnpm test:sql            # 105 SQL assertions incl. tamper detection
+pnpm test:sql            # 142 SQL assertions incl. tamper detection
 ```
 
 | Suite | Covers |

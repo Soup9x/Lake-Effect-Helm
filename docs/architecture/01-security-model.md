@@ -367,7 +367,7 @@ candidates — the extension never holds a searchable copy of the vault.
 ## 8. Verification
 
 ```bash
-pnpm test:sql              # 105 SQL assertions against a real Postgres 16 cluster
+pnpm test:sql              # 142 SQL assertions against a real Postgres 16 cluster
 pnpm verify                # typecheck + 151 TypeScript tests + schema drift
 ```
 

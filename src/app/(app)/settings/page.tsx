@@ -1,9 +1,10 @@
-import { KeyRound, Plug, ShieldCheck, Bot } from 'lucide-react';
+import { KeyRound, Plug, ShieldCheck, Bot, Building } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ChangePasswordCard } from '@/components/change-password-card';
+import { RenameTenant } from '@/components/rename-tenant';
+import { RadiusSettingsCard, type RadiusSettings } from '@/components/radius-settings';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime, humanise } from '@/lib/ui/format';
@@ -42,9 +43,39 @@ function integrationTone(status: string): BadgeTone {
   }
 }
 
+interface RadiusRow {
+  enabled: boolean;
+  host: string;
+  port: number;
+  timeout_ms: number;
+  retries: number;
+  nas_identifier: string;
+  secret_set: boolean;
+  last_test_at: Date | null;
+  last_test_ok: boolean | null;
+  last_test_error: string | null;
+}
+
+function toRadiusSettings(row: RadiusRow | null): RadiusSettings | null {
+  if (!row) return null;
+  return {
+    configured: true,
+    enabled: row.enabled,
+    host: row.host,
+    port: row.port,
+    timeoutMs: row.timeout_ms,
+    retries: row.retries,
+    nasIdentifier: row.nas_identifier,
+    secretSet: row.secret_set,
+    lastTestAt: row.last_test_at?.toISOString() ?? null,
+    lastTestOk: row.last_test_ok,
+    lastTestError: row.last_test_error,
+  };
+}
+
 /**
- * Where the keys are, what the integrations are doing, and what the background
- * workers are allowed to decrypt.
+ * Deployment-wide settings: how people sign in, where the keys are, what the
+ * integrations are doing, and what the background workers may decrypt.
  *
  * The key custody panel exists because "could someone with root on the app
  * server read this client's credentials" is the first question of any breach
@@ -52,21 +83,19 @@ function integrationTone(status: string): BadgeTone {
  * later is not a plan. `host_held_kek` is a generated column, so the answer
  * comes from the row rather than from configuration that may since have changed.
  *
- * Nothing on this page is editable. Key rotation is `pnpm helm:rotate-kek` and
- * worker authorisation is fixed by a database trigger — deliberately, because a
- * UI that can widen the sync worker's reveal purposes is a UI that can hand it
- * the vault.
+ * Key rotation is `pnpm helm:rotate-kek` and worker authorisation is fixed by a
+ * database trigger — deliberately, because a UI that can widen the sync
+ * worker's reveal purposes is a UI that can hand it the vault.
+ *
+ * Personal settings are NOT here. This page is hidden from client-side roles
+ * entirely, and "change my password" has to be reachable by everybody who can
+ * sign in, so it lives on /account.
  */
-interface CredentialRow {
-  must_change: boolean;
-  password_changed_at: Date;
-}
-
 export default async function SettingsPage() {
   const identity = await getServerIdentity();
 
-  const { keys, integrations, workers, credential } = await withTenant(actorOf(identity), async (tx) => {
-    const [keyRows, integrationRows, workerRows, credentialRows] = await Promise.all([
+  const { keys, integrations, workers, tenant, radius } = await withTenant(actorOf(identity), async (tx) => {
+    const [keyRows, integrationRows, workerRows, tenantRows, radiusRows] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -78,18 +107,28 @@ export default async function SettingsPage() {
         SELECT id, name, role_key, allowed_reveal_purposes, disabled_at
         FROM service_account WHERE is_system ORDER BY name
       `,
-      // The view carries no hash — helm_app holds column grants that exclude it.
-      // Its only job here is to answer "do you have a local password, and did
-      // somebody else choose it".
-      tx<CredentialRow[]>`
-        SELECT must_change, password_changed_at FROM v_my_local_credential
+      // tenant_rls_select restricts this to the current tenant, so no
+      // predicate is needed and adding one would imply the policy were
+      // optional. can_rename mirrors the route's permission so the control is
+      // only offered to somebody it would work for.
+      tx<{ name: string; slug: string; can_rename: boolean }[]>`
+        SELECT t.name, t.slug,
+               EXISTS (SELECT 1 FROM membership m
+                       JOIN role_permission rp ON rp.role_key = m.role_key
+                       WHERE m.user_id = ${identity.actorId}::uuid
+                         AND rp.permission_key = 'tenant:write') AS can_rename
+        FROM tenant t
       `,
+      // Settings only, never the shared secret: helm_app cannot read that
+      // column, and this function's result type does not contain it.
+      tx<RadiusRow[]>`SELECT * FROM helm.radius_settings()`,
     ]);
     return {
       keys: keyRows,
       integrations: integrationRows,
       workers: workerRows,
-      credential: credentialRows[0] ?? null,
+      tenant: tenantRows[0] ?? null,
+      radius: radiusRows[0] ?? null,
     };
   });
 
@@ -100,14 +139,30 @@ export default async function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        description="Your password, key custody, integration health and the identities your background jobs run as."
+        description="Authentication, key custody, integration health and the identities your background jobs run as."
       />
       <PageBody>
-        {/* First, because a must-change sign-in redirects here for exactly this. */}
-        <ChangePasswordCard
-          mustChange={credential?.must_change ?? false}
-          passwordChangedAt={credential ? credential.password_changed_at.toISOString() : null}
-        />
+        {tenant && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Building className="size-4 text-ink-faint" aria-hidden /> This MSP
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {tenant.can_rename ? (
+                <RenameTenant currentName={tenant.name} slug={tenant.slug} />
+              ) : (
+                <div>
+                  <div className="text-ink">{tenant.name}</div>
+                  <div className="text-xs text-ink-faint">{tenant.slug}</div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        <RadiusSettingsCard initial={toRadiusSettings(radius)} />
 
         <Card className={developmentKey ? 'border-danger/40' : undefined}>
           <CardHeader>

@@ -20,6 +20,8 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { db } from '../db/client';
+import { authenticate as radiusAuthenticate } from './radius';
+import { radiusForEmail } from './radius-config';
 import {
   checkPasswordPolicy,
   hashPassword,
@@ -37,13 +39,29 @@ export type LoginOutcome =
   | 'no_such_account'
   | 'locked'
   | 'rate_limited'
-  | 'disabled';
+  | 'disabled'
+  /**
+   * RADIUS was configured and did not answer. Recorded, never returned: the
+   * attempt carries on to the local password, so the caller's story is
+   * unchanged and an operator can still see the directory went away.
+   */
+  | 'radius_unavailable';
 
 export interface LoginRequest {
   email: string;
   password: string;
   ip?: string | undefined;
   userAgent?: string | undefined;
+  /**
+   * Whether a successful verification should establish a session. True for a
+   * sign-in; false for the re-authentication the change-password route does,
+   * which only needs to know the answer.
+   *
+   * Without this every password change minted a session nobody held — harmless
+   * while nothing listed sessions, and visibly wrong the moment the account
+   * page started showing people where they are signed in.
+   */
+  establishSession?: boolean | undefined;
 }
 
 export type LoginResult =
@@ -54,10 +72,12 @@ export type LoginResult =
       expires: Date;
       /** The password was set by an administrator; make them replace it. */
       mustChange: boolean;
+      /** Which door this went through. Recorded on the session. */
+      method: 'password' | 'radius';
     }
   | {
       ok: false;
-      outcome: Exclude<LoginOutcome, 'success'>;
+      outcome: Exclude<LoginOutcome, 'success' | 'radius_unavailable'>;
       /** Present only for 'locked'. Shown to the person, never to a stranger. */
       retryAfter?: Date | undefined;
     };
@@ -93,6 +113,23 @@ const SESSION_MINUTES = 60 * 8;
  *      clock, no enumeration oracle.
  *   4. Record every outcome, including the ones that never reached a password.
  *
+ * RADIUS, when the tenant has it configured, is tried between steps 3 and 4 —
+ * after the throttle, never before it, or the rate limiter becomes decorative
+ * and Helm becomes a password-spray amplifier pointed at somebody's directory.
+ *
+ * A RADIUS answer of anything but "yes" FALLS THROUGH to the local password.
+ * That is the whole graceful-degradation story: the break-glass account exists
+ * precisely for the morning a directory is unreachable, and a third door that
+ * could block the second one would defeat the reason the second one is there.
+ *
+ * ONE HONEST CAVEAT. The RADIUS round trip happens only for addresses that have
+ * an account, so a deployment with RADIUS enabled leaks account existence
+ * through timing. The signal is a LAN round trip — single-digit milliseconds —
+ * against the ~260ms of Argon2 every attempt pays either way, so it is small
+ * and noisy rather than absent. Removing it entirely would mean sending decoy
+ * packets to somebody else's RADIUS server on every unknown address, which is a
+ * worse thing to do than the leak it fixes.
+ *
  * The caller gets a session token to put in a cookie and nothing else. In
  * particular it never learns whether the address exists.
  */
@@ -121,6 +158,44 @@ export async function attemptLocalLogin(request: LoginRequest): Promise<LoginRes
   if (challenge.locked_until && challenge.locked_until > new Date()) {
     await record(sql, email, userId, 'locked', request);
     return { ok: false, outcome: 'locked', retryAfter: challenge.locked_until };
+  }
+
+  // The third door, when this tenant has one. Before the local password check
+  // and before the no-such-account branch, because an account that signs in
+  // through the directory may have no local password at all — and refusing it
+  // for that reason would make RADIUS unusable for everyone but the people who
+  // least need it.
+  //
+  // The condition is `userId`, NOT `challenge.found`. They look
+  // interchangeable and are not: `found` reports whether a LOCAL CREDENTIAL
+  // exists, while `user_id` reports whether the ACCOUNT does. Gating on `found`
+  // silently confined RADIUS to people who already had a password here, which
+  // is precisely the set that does not need it.
+  if (userId) {
+    const accepted = await tryRadius(sql, email, userId, request);
+    if (accepted) {
+      // Belt and braces. helm.radius_config_for_email already joins through an
+      // ACTIVE membership and a non-disabled user, so a disabled account finds
+      // no configuration and never reaches an Access-Request at all. This
+      // stands between that filter and a session, in case the filter is ever
+      // relaxed by somebody who has not read it.
+      if (challenge.disabled) {
+        await record(sql, email, userId, 'disabled', request);
+        return { ok: false, outcome: 'disabled' };
+      }
+      const established = await openSession(sql, userId, 'radius', request);
+      await record(sql, email, userId, 'success', request);
+      return {
+        ok: true,
+        userId,
+        sessionToken: established.token,
+        expires: established.expires,
+        // Their password lives in the directory. Forcing a change to a local
+        // one they did not use would be a prompt with nothing behind it.
+        mustChange: false,
+        method: 'radius',
+      };
+    }
   }
 
   // No account, or an account with no local password. Both must cost what a
@@ -158,21 +233,103 @@ export async function attemptLocalLogin(request: LoginRequest): Promise<LoginRes
     void rehashQuietly(userId, request.password);
   }
 
-  const sessionToken = randomBytes(32).toString('base64url');
-  const [session] = await sql<{ create_local_session: Date }[]>`
-    SELECT helm.create_local_session(${userId}::uuid, ${sessionToken}, ${SESSION_MINUTES})
-  `;
-  if (!session) throw new Error('helm.create_local_session returned no row');
+  const established = await openSession(sql, userId, 'password', request);
 
   await record(sql, email, userId, 'success', request);
 
   return {
     ok: true,
     userId,
-    sessionToken,
-    expires: session.create_local_session,
+    sessionToken: established.token,
+    expires: established.expires,
     mustChange: challenge.must_change,
+    method: 'password',
   };
+}
+
+/**
+ * Ask the tenant's RADIUS server about this attempt.
+ *
+ * Returns true only for an explicit Access-Accept. Everything else — a reject,
+ * a timeout, a reply that failed to verify, a server that was never configured,
+ * an exception from the crypto layer — returns false and lets the local
+ * password have its turn.
+ *
+ * Nothing throws out of here. A sign-in page that 500s because a UDP socket
+ * misbehaved is a worse outage than the one it is reporting.
+ */
+async function tryRadius(
+  sql: ReturnType<typeof db>,
+  email: string,
+  userId: string,
+  request: LoginRequest,
+): Promise<boolean> {
+  let resolved;
+  try {
+    resolved = await radiusForEmail(email);
+  } catch (error) {
+    // Most likely the KEK is unavailable, which is a deployment fault worth
+    // seeing — but not one that should stop a local password from working.
+    console.error('[radius] could not load configuration', describe(error));
+    await record(sql, email, userId, 'radius_unavailable', request);
+    return false;
+  }
+
+  if (!resolved) return false;
+
+  const result = await radiusAuthenticate(resolved.server, email, request.password);
+
+  switch (result.outcome) {
+    case 'accept':
+      return true;
+
+    case 'reject':
+    case 'challenge':
+      // The directory answered, and the answer was no. Not recorded as a
+      // separate outcome: the attempt continues to the local password, and
+      // recording two outcomes for one attempt would double-count the throttle.
+      return false;
+
+    default: {
+      // timeout, bad_secret, error. The distinction matters to an operator and
+      // not at all to the person signing in, so it goes to the log and to the
+      // attempt record, and the sign-in carries on.
+      console.error(
+        `[radius] ${resolved.server.host}:${resolved.server.port} unusable ` +
+          `(${result.outcome}): ${result.message}`,
+      );
+      await record(sql, email, userId, 'radius_unavailable', request);
+      return false;
+    }
+  }
+}
+
+async function openSession(
+  sql: ReturnType<typeof db>,
+  userId: string,
+  method: 'password' | 'radius',
+  request: LoginRequest,
+): Promise<{ token: string; expires: Date }> {
+  // A verification-only caller gets no row and no token. It proved what it came
+  // to prove; minting a credential it will drop on the floor is how a session
+  // list fills up with sessions nobody is holding.
+  if (request.establishSession === false) {
+    return { token: '', expires: new Date(Date.now() + SESSION_MINUTES * 60_000) };
+  }
+
+  const token = randomBytes(32).toString('base64url');
+  const [session] = await sql<{ create_local_session: Date }[]>`
+    SELECT helm.create_local_session(
+      ${userId}::uuid, ${token}, ${SESSION_MINUTES}, ${method}::auth_method,
+      ${request.ip ?? null}::inet, ${request.userAgent ?? null})
+  `;
+  if (!session) throw new Error('helm.create_local_session returned no row');
+  return { token, expires: session.create_local_session };
+}
+
+/** An error's message without its stack, for a log line that stays one line. */
+function describe(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
 async function record(

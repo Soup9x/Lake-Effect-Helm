@@ -17,6 +17,7 @@ import { useRouter } from 'next/navigation';
 import { KeyRound, Loader2, ShieldAlert } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
+import { HelmMark } from './ui/helm-mark';
 
 interface Props {
   entraConfigured: boolean;
@@ -57,7 +58,7 @@ export function SignInForm({ entraConfigured, next }: Props) {
       // An administrator-issued password is a temporary one. Sending them
       // straight to the change screen is the difference between a password
       // that gets replaced and one that stays in a handover document forever.
-      router.push(payload.mustChange ? '/settings?password=change' : next);
+      router.push(payload.mustChange ? '/account?password=change' : next);
       router.refresh();
     } catch {
       setError('Could not reach the server. Check your connection and try again.');
@@ -69,9 +70,7 @@ export function SignInForm({ entraConfigured, next }: Props) {
   return (
     <div className="w-full max-w-sm">
       <div className="text-center">
-        <div className="mx-auto grid size-11 place-items-center rounded-xl bg-brand text-sm font-bold text-white">
-          LE
-        </div>
+        <HelmMark className="mx-auto size-12" />
         <h1 className="mt-4 text-lg font-semibold tracking-tight text-ink">Lake Effect Helm</h1>
         <p className="mt-1 text-sm text-ink-muted">Sign in to continue.</p>
       </div>
@@ -142,12 +141,6 @@ export function SignInForm({ entraConfigured, next }: Props) {
           Sign in
         </Button>
       </form>
-
-      <p className="mt-4 text-center text-xs text-ink-muted">
-        Forgotten your password? Ask an administrator to issue a reset code — during
-        an identity provider outage that is faster than email, and it works when
-        email does not.
-      </p>
     </div>
   );
 }

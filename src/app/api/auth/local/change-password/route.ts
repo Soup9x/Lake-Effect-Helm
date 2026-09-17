@@ -58,6 +58,10 @@ export const POST = publicRoute(async (request) => {
     password: body.currentPassword,
     ip: clientIp(request),
     userAgent: request.headers.get('user-agent') ?? undefined,
+    // Verify only. This is a proof of knowledge, not a sign-in, and a session
+    // minted here would show up on the account page as somewhere the person is
+    // supposedly signed in.
+    establishSession: false,
   });
 
   if (!reauth.ok) {
