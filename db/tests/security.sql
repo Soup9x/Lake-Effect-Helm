@@ -1479,4 +1479,95 @@ SELECT helm_test.check('and the audit log is still append-only',
     WHERE c.relname = 'audit_log' AND NOT t.tgisinternal));
 
 \echo ''
+\echo '== 36. A generic OIDC provider is a pre-authentication secret =='
+-- 0410 added a fourth sign-in door. The client secret is presented to an
+-- identity provider BEFORE anybody is signed in, so it sits behind helm_auth
+-- exactly as radius_config and local_credential.password_phc do — and this
+-- section asserts that boundary the same way §22 asserts the RADIUS one.
+--
+-- Written as catalogue checks rather than behavioural ones because the property
+-- is a GRANT: there is no query helm_app could run to demonstrate it, which is
+-- the whole point.
+
+\echo '-- the client secret is not reachable from the application role --'
+SELECT helm_test.check('helm_app cannot read oidc_provider, by any column',
+  NOT EXISTS (
+    SELECT 1 FROM information_schema.columns c
+    WHERE c.table_name = 'oidc_provider'
+      AND has_column_privilege('helm_app', 'oidc_provider', c.column_name, 'SELECT')));
+-- helm_worker is a MEMBER of helm_app, so a REVOKE naming it is a no-op and it
+-- has to be checked in its own right. This has caught a real regression before.
+SELECT helm_test.check('nor helm_worker, which inherits helm_app',
+  NOT has_table_privilege('helm_worker', 'oidc_provider', 'SELECT'));
+SELECT helm_test.check('nor the auditor',
+  NOT has_table_privilege('helm_auditor', 'oidc_provider', 'SELECT'));
+SELECT helm_test.check('nor the key administrator',
+  NOT has_table_privilege('helm_key_admin', 'oidc_provider', 'SELECT'));
+SELECT helm_test.check('helm_auth can, because pre-authentication is its job',
+  has_table_privilege('helm_auth', 'oidc_provider', 'SELECT'));
+
+SELECT helm_test.check('the secret-bearing lookups are helm_auth only',
+  NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'helm'
+      AND p.proname IN ('oidc_provider_by_slug', 'oidc_provider_for_tenant')
+      AND has_function_privilege('helm_app', p.oid, 'EXECUTE')));
+
+\echo '-- ...but the application can still configure one --'
+-- Write without read. A settings page that cannot save is as broken as one
+-- that leaks, and this is the shape that gives neither.
+SELECT helm_test.check('helm_app may write the provider and its sealed secret',
+  has_function_privilege('helm_app',
+    'helm.set_oidc_provider(boolean, text, text, text, text, text[], boolean, boolean, text, text, bytea, bytea, bytea, bytea, text)',
+    'EXECUTE'));
+SELECT helm_test.check('helm_app may read the settings WITHOUT the envelope',
+  has_function_privilege('helm_app', 'helm.oidc_settings()', 'EXECUTE'));
+SELECT helm_test.check('...and that function''s result type has no secret in it',
+  (SELECT pg_get_function_result(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'oidc_settings')
+  NOT LIKE '%ciphertext%');
+
+\echo '-- helm_app still cannot reach auth_session --'
+-- §21 of the security model. The session-stamping function added by 0410 writes
+-- to auth_session, so granting it to helm_app would erase that boundary by a
+-- side door.
+SELECT helm_test.check('the session stamp is not executable by helm_app',
+  NOT has_function_privilege('helm_app',
+    'helm.stamp_session_method(text, auth_method, inet, text)', 'EXECUTE'));
+SELECT helm_test.check('...and helm_app still cannot read auth_session at all',
+  NOT has_table_privilege('helm_app', 'auth_session', 'SELECT'));
+
+\echo '-- configuring a door is tenant:write, not integration:manage --'
+-- Changing how an entire MSP authenticates is a larger act than configuring an
+-- integration, and integration:manage reaches down to tier3.
+SELECT helm_test.check('tenant:write exists and is MSP-only',
+  EXISTS (SELECT 1 FROM permission WHERE key = 'tenant:write' AND msp_only));
+SELECT helm_test.check('tier3 does not hold it, though it holds nearly everything',
+  NOT EXISTS (SELECT 1 FROM role_permission
+              WHERE role_key = 'tier3' AND permission_key = 'tenant:write'));
+SELECT helm_test.check('super_admin does',
+  EXISTS (SELECT 1 FROM role_permission
+          WHERE role_key = 'super_admin' AND permission_key = 'tenant:write'));
+
+\echo '-- the stored shape cannot be a plaintext or unsigned configuration --'
+SELECT helm_test.check('an https issuer is required',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'oidc_provider'::regclass AND conname = 'oidc_issuer_https'));
+SELECT helm_test.check('openid is required among the scopes',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'oidc_provider'::regclass AND conname = 'oidc_scopes_openid'));
+SELECT helm_test.check('a slug cannot shadow a built-in provider id',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'oidc_provider'::regclass AND conname = 'oidc_slug_not_reserved'));
+SELECT helm_test.check('the nonce is a GCM nonce',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'oidc_provider'::regclass AND conname = 'oidc_nonce_len'));
+SELECT helm_test.check('a slug is unique across the deployment, since the callback path has no tenant',
+  EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'oidc_provider'::regclass AND contype = 'u'
+      AND pg_get_constraintdef(oid) LIKE '%(slug)%'));
+
+\echo ''
 \echo '== All security assertions passed =='

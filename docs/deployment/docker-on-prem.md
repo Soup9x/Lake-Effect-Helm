@@ -286,12 +286,45 @@ touch:
 | `HELM_TLS_DIRECTIVE` | `tls internal` | You have your own certificate — §6 |
 | `HELM_HTTPS_PORT` | `443` | 443 is already in use on the host |
 | `HELM_KEK_PROVIDER` | `local-keyfile` | You want the key off this host — see the Vault section of the operations runbook |
-| `AUTH_MICROSOFT_ENTRA_ID_*` | empty | You are wiring SSO |
+| `AUTH_MICROSOFT_ENTRA_ID_*` | empty | You are wiring Entra SSO |
+| `NODE_EXTRA_CA_CERTS` | empty | Your identity provider (or any https service Helm calls) uses a private CA — §6.1 |
 | `HELM_RESET_DELIVERY_URL` | empty | You want self-service password reset by email |
+
+**A generic OpenID Connect provider has no environment variables.** Authentik,
+Keycloak, Okta, Zitadel and anything else that publishes a discovery document
+are configured in the application, under **Settings → OpenID Connect**, and
+stored in the database — the client secret enveloped under this deployment's
+master key and readable only by the sign-in role. The only environmental part
+is the trust store below.
 
 Leave `HELM_TRUSTED_PROXY_HOPS=1` alone unless you put another proxy in front
 of Caddy. It is how Helm finds the real client address for rate limiting and
 API-token IP allowlisting, counted from the *right* of `X-Forwarded-For`.
+
+### Trusting a private certificate authority
+
+On-premises identity providers usually present a certificate from an internal
+CA. Helm fetches the OIDC discovery document over https and **verifies it**, so
+without the CA in the trust store that fetch fails — the connection test on the
+settings page reports a TLS verification error and names this as the remedy.
+
+Mount the CA bundle into the `web` container and point `NODE_EXTRA_CA_CERTS` at
+it:
+
+```yaml
+    volumes:
+      - ./deploy/tls/internal-ca.crt:/etc/ssl/certs/internal-ca.crt:ro
+    environment:
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/internal-ca.crt
+```
+
+Node reads it at start-up, so the container has to be recreated rather than
+reloaded.
+
+**Do not work around a verification failure by disabling verification.** The
+client secret is presented to the token endpoint that this certificate
+authenticates; an unverified connection there is the one place in the sign-in
+flow where it would matter most.
 
 ---
 

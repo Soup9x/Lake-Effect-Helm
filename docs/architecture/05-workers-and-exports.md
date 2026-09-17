@@ -288,7 +288,7 @@ that approval produced:
 
 The chain is hash-linked and append-only (`0140`), so the person it describes
 cannot edit it afterwards. Export events are also the primary subject of the
-outbound notifications in `0410`: a webhook fires on request and on download, so
+outbound notifications in `0420`: a webhook fires on request and on download, so
 an export shows up in a channel somebody reads rather than only in a log
 somebody has to think to open.
 

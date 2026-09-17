@@ -1,0 +1,44 @@
+-- =============================================================================
+-- 0405_auth_method_oidc.sql — one ALTER TYPE, alone, on purpose
+--
+-- This file contains a single statement and exists only because of how
+-- PostgreSQL handles enum growth. It belongs to 0410 and would be two lines
+-- inside it if it could be.
+--
+-- WHY IT CANNOT BE.
+--
+-- db/migrate.ts runs EACH FILE IN ONE TRANSACTION, deliberately: a
+-- half-applied migration is worse than none. But a new enum value cannot be
+-- USED in the transaction that added it —
+--
+--     BEGIN;
+--     ALTER TYPE auth_method ADD VALUE 'oidc';
+--     SELECT 'oidc'::auth_method;
+--     ERROR: unsafe use of new value "oidc" of enum type auth_method
+--     HINT:  New enum values must be committed before they can be used.
+--
+-- — and "used" includes a SQL-language function body that merely mentions it,
+-- which is parsed at CREATE time.
+--
+-- THE PART THAT MAKES THIS WORTH A FILE OF ITS OWN: the test path would not
+-- have caught it. scripts/rebuild-test-db.sh applies each file with `psql -f`,
+-- where every statement is its own transaction, so ALTER TYPE commits
+-- immediately and everything downstream works. The failure appears only under
+-- db/migrate.ts — which is to say, only in a real deployment, during an
+-- upgrade, after the operator has taken the service down.
+--
+-- Splitting the ALTER into its own file makes the commit boundary explicit
+-- rather than incidental. 0410 runs afterwards, against a committed type, and
+-- may use the value freely.
+--
+-- (tests/integration/migrate-guard.test.ts now runs the real migrator over the
+-- whole of db/sql on a throwaway database, so the next instance of this is
+-- caught by a test rather than by an outage.)
+-- =============================================================================
+
+SET search_path = public, extensions;
+
+-- A generic OIDC provider is a fourth door, distinct from 'sso'. Folding a
+-- self-hosted Keycloak in with Entra would lose exactly the distinction
+-- somebody reading an audit trail during an incident is looking for.
+ALTER TYPE auth_method ADD VALUE IF NOT EXISTS 'oidc';

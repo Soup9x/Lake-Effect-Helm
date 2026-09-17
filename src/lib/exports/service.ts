@@ -10,7 +10,7 @@
  *
  * Secret-bearing exports needed a second approver until 0400. They do not any
  * more — one person holding secret:export is enough, and what watches them is
- * the audit trail plus the export notifications in 0410. Nothing in this file
+ * the audit trail plus the export notifications in 0420. Nothing in this file
  * gates on approval; approvedBy is carried only so a bundle produced under the
  * old rule still says who signed it off.
  */

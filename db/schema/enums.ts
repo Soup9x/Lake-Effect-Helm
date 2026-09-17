@@ -122,4 +122,6 @@ export const exportStatus = pgEnum('export_status', ['queued', 'running', 'compl
 
 export const auditOutcome = pgEnum('audit_outcome', ['success', 'denied', 'error']);
 
-export const authMethod = pgEnum('auth_method', ['sso', 'password', 'radius']);
+// 'oidc' was added by 0405, in a file of its own: a new enum value cannot be
+// used in the transaction that adds it, and db/migrate.ts runs one per file.
+export const authMethod = pgEnum('auth_method', ['sso', 'password', 'radius', 'oidc']);

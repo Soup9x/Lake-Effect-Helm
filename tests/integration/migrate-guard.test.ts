@@ -149,3 +149,102 @@ describe('the migration runner', () => {
     }
   });
 });
+
+/**
+ * The real runner, over the real migrations, on a fresh database.
+ *
+ * This exists because of a failure the rest of the suite CANNOT SEE.
+ *
+ * scripts/rebuild-test-db.sh applies each file with `psql -f`, where every
+ * statement commits on its own. db/migrate.ts wraps each FILE in one
+ * transaction, deliberately — a half-applied migration is worse than none. The
+ * two are not equivalent, and PostgreSQL has at least one rule that separates
+ * them:
+ *
+ *     BEGIN;
+ *     ALTER TYPE auth_method ADD VALUE 'oidc';
+ *     SELECT 'oidc'::auth_method;
+ *     ERROR: unsafe use of new value "oidc" of enum type auth_method
+ *
+ * Under psql that works, because the ALTER has already committed. Under the
+ * real runner it fails. So a migration written and tested entirely through the
+ * test path can be broken in production and green everywhere else — appearing
+ * during an upgrade, after the operator has taken the service down.
+ *
+ * (0405_auth_method_oidc.sql is a one-statement file for exactly this reason.)
+ *
+ * The assertion is simply that every file applies. It is slow and it is worth
+ * it: the class of bug it catches has no other detector here.
+ */
+describe('every migration applies under the real runner', () => {
+  const RUNNER_DB = 'helm_migrate_runner_probe';
+
+  beforeAll(async () => {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${RUNNER_DB} WITH (FORCE)`);
+    await admin.unsafe(`CREATE DATABASE ${RUNNER_DB}`);
+  }, 60_000);
+
+  afterAll(async () => {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${RUNNER_DB} WITH (FORCE)`);
+  });
+
+  it('applies db/sql cleanly, one transaction per file', async () => {
+    const { stdout, stderr } = await run('node_modules/.bin/tsx', ['db/migrate.ts'], {
+      env: {
+        ...process.env,
+        PGHOST: PG.host,
+        PGPORT: String(PG.port),
+        PGDATABASE: RUNNER_DB,
+        PGUSER: PG.superuser,
+        DATABASE_URL_MIGRATOR: '',
+        DATABASE_URL: '',
+      },
+      timeout: 180_000,
+    });
+
+    const output = stdout + stderr;
+    expect(output).not.toMatch(/unsafe use of new value/);
+    expect(output).toMatch(/0400_single_approver_exports/);
+    expect(output).toMatch(/0410_oidc_provider/);
+  }, 180_000);
+
+  it('leaves a schema the application can actually use', async () => {
+    // A file can apply and still leave the database wrong, so this checks the
+    // two things 0405 and 0410 exist to produce.
+    const probe = connect(PG.superuser, RUNNER_DB);
+    try {
+      const [method] = await probe<{ present: boolean }[]>`
+        SELECT EXISTS (
+          SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+          WHERE t.typname = 'auth_method' AND e.enumlabel = 'oidc'
+        ) AS present
+      `;
+      expect(method!.present).toBe(true);
+
+      const [table] = await probe<{ present: boolean }[]>`
+        SELECT to_regclass('public.oidc_provider') IS NOT NULL AS present
+      `;
+      expect(table!.present).toBe(true);
+    } finally {
+      await probe.end({ timeout: 5 });
+    }
+  }, 60_000);
+
+  it('is idempotent — a second run applies nothing and succeeds', async () => {
+    const { stdout, stderr } = await run('node_modules/.bin/tsx', ['db/migrate.ts', '--status'], {
+      env: {
+        ...process.env,
+        PGHOST: PG.host,
+        PGPORT: String(PG.port),
+        PGDATABASE: RUNNER_DB,
+        PGUSER: PG.superuser,
+        DATABASE_URL_MIGRATOR: '',
+        DATABASE_URL: '',
+      },
+      timeout: 60_000,
+    });
+    // Every file recorded, nothing left to do. The count moves as migrations
+    // are added, so the assertion is on the state and not on the number.
+    expect(stdout + stderr).toMatch(/up to date \(\d+ migrations applied\)/);
+  }, 60_000);
+});

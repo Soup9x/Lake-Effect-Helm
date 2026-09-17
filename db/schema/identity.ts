@@ -325,3 +325,52 @@ export const radiusConfig = pgTable('radius_config', {
   updatedAt: tstz('updated_at').notNull().defaultNow(),
   updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
 });
+
+/**
+ * Generic OIDC provider settings and the enveloped client secret (db/sql/0410).
+ *
+ * Declared here so the drift check can see it, NOT so request-path code can
+ * query it: helm_app holds no privilege on this table at all, by column, and
+ * 0410 asserts that at migration time. The client secret is presented to an
+ * identity provider before anybody is signed in, so it sits behind helm_auth
+ * exactly as radius_config and local_credential.password_phc do.
+ *
+ * Nothing here names a product. Issuer, client id, client secret and scopes are
+ * what the protocol defines; every endpoint is discovered from the issuer at
+ * sign-in time.
+ */
+export const oidcProvider = pgTable('oidc_provider', {
+  tenantId: uuid('tenant_id').primaryKey().references(() => tenant.id, { onDelete: 'cascade' }),
+
+  enabled: boolean('enabled').notNull().default(false),
+  /** The provider id in /api/auth/callback/<slug>. Immutable once set. */
+  slug: text('slug').notNull().unique(),
+  displayName: text('display_name').notNull(),
+  issuer: text('issuer').notNull(),
+  clientId: text('client_id').notNull(),
+  scopes: textArray('scopes').notNull().default(sql`ARRAY['openid', 'profile', 'email']`),
+
+  /** May a successful sign-in create an app_user that does not exist yet? */
+  allowSignup: boolean('allow_signup').notNull().default(false),
+  /** May an OIDC identity attach to an existing account with the same address? */
+  linkByEmail: boolean('link_by_email').notNull().default(false),
+
+  wrapProvider: text('wrap_provider').notNull(),
+  kekId: text('kek_id').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(),
+  secretCiphertext: bytea('secret_ciphertext').notNull(),
+  secretNonce: bytea('secret_nonce').notNull(),
+  secretTag: bytea('secret_tag').notNull(),
+  secretAad: text('secret_aad').notNull(),
+
+  lastTestAt: tstz('last_test_at'),
+  lastTestOk: boolean('last_test_ok'),
+  lastTestError: text('last_test_error'),
+
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
+});
+
+export type OidcProvider = typeof oidcProvider.$inferSelect;

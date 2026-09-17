@@ -5,6 +5,9 @@ import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { RenameTenant } from '@/components/rename-tenant';
 import { RadiusSettingsCard, type RadiusSettings } from '@/components/radius-settings';
+import { OidcSettingsCard, type OidcSettings } from '@/components/oidc-settings';
+import { redirectUri } from '@/lib/auth/oidc';
+import { headers } from 'next/headers';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime, humanise } from '@/lib/ui/format';
@@ -56,6 +59,50 @@ interface RadiusRow {
   last_test_error: string | null;
 }
 
+interface OidcRow {
+  enabled: boolean;
+  slug: string;
+  display_name: string;
+  issuer: string;
+  client_id: string;
+  scopes: string[];
+  allow_signup: boolean;
+  link_by_email: boolean;
+  secret_set: boolean;
+  last_test_at: Date | null;
+  last_test_ok: boolean | null;
+  last_test_error: string | null;
+}
+
+/**
+ * The redirect URI is COMPUTED from the origin this page was served on, never
+ * stored. It has to be the URL the callback will actually arrive at, and the
+ * only thing that knows that is the request — behind Caddy, that means the
+ * forwarded host. A stored copy would drift from reality, and this is the one
+ * value in an OIDC setup whose mismatch produces an error at the provider
+ * rather than anywhere an operator would think to look.
+ */
+function toOidcSettings(row: OidcRow | null, origin: string): OidcSettings | null {
+  if (!row) return null;
+  return {
+    configured: true,
+    enabled: row.enabled,
+    slug: row.slug,
+    displayName: row.display_name,
+    issuer: row.issuer,
+    clientId: row.client_id,
+    scopes: row.scopes,
+    allowSignup: row.allow_signup,
+    linkByEmail: row.link_by_email,
+    secretSet: row.secret_set,
+    redirectUri: redirectUri(origin, row.slug),
+    lastTestAt: row.last_test_at?.toISOString() ?? null,
+    lastTestOk: row.last_test_ok,
+    lastTestError: row.last_test_error,
+    deadEnd: row.enabled && !row.allow_signup && !row.link_by_email,
+  };
+}
+
 function toRadiusSettings(row: RadiusRow | null): RadiusSettings | null {
   if (!row) return null;
   return {
@@ -94,8 +141,8 @@ function toRadiusSettings(row: RadiusRow | null): RadiusSettings | null {
 export default async function SettingsPage() {
   const identity = await getServerIdentity();
 
-  const { keys, integrations, workers, tenant, radius } = await withTenant(actorOf(identity), async (tx) => {
-    const [keyRows, integrationRows, workerRows, tenantRows, radiusRows] = await Promise.all([
+  const { keys, integrations, workers, tenant, radius, oidc } = await withTenant(actorOf(identity), async (tx) => {
+    const [keyRows, integrationRows, workerRows, tenantRows, radiusRows, oidcRows] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -122,6 +169,9 @@ export default async function SettingsPage() {
       // Settings only, never the shared secret: helm_app cannot read that
       // column, and this function's result type does not contain it.
       tx<RadiusRow[]>`SELECT * FROM helm.radius_settings()`,
+      // Same shape, same boundary: settings without the client secret, which
+      // helm_app cannot read and which is not in this result type.
+      tx<OidcRow[]>`SELECT * FROM helm.oidc_settings()`,
     ]);
     return {
       keys: keyRows,
@@ -129,8 +179,14 @@ export default async function SettingsPage() {
       workers: workerRows,
       tenant: tenantRows[0] ?? null,
       radius: radiusRows[0] ?? null,
+      oidc: oidcRows[0] ?? null,
     };
   });
+
+  const head = await headers();
+  const origin =
+    process.env.AUTH_URL?.replace(/\/+$/, '') ??
+    `${head.get('x-forwarded-proto') ?? 'https'}://${head.get('x-forwarded-host') ?? head.get('host') ?? 'localhost'}`;
 
   const hostHeld = keys.some((key) => key.host_held_kek);
   const developmentKey = keys.some((key) => key.development_key);
@@ -161,6 +217,8 @@ export default async function SettingsPage() {
             </CardContent>
           </Card>
         )}
+
+        <OidcSettingsCard initial={toOidcSettings(oidc, origin)} />
 
         <RadiusSettingsCard initial={toRadiusSettings(radius)} />
 
