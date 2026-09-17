@@ -237,11 +237,32 @@ export class ExportService {
     if (!claimed) return { rendered: false, passphrase: null, omissions: [] };
 
     try {
-      const collected = await withTenant(
-        actor,
-        async (tx) => collectExport(tx, job.organizationId, job.scope),
-        { role: 'worker' },
-      );
+      // Collected as the REQUESTER, not as the worker. See RenderableJob.
+      //
+      // Their membership is re-resolved here, at render time, so an export
+      // requested by somebody whose access has since been revoked fails
+      // rather than rendering with the authority they used to have. That is
+      // the same answer the request would get if they asked again today.
+      const collector: ActorRef = job.requestedBy
+        ? { tenantId: actor.tenantId, actorId: job.requestedBy, actorType: 'user' }
+        : actor;
+
+      let collected;
+      try {
+        collected = await withTenant(
+          collector,
+          async (tx) => collectExport(tx, job.organizationId, job.scope),
+          { role: 'worker' },
+        );
+      } catch (error) {
+        if (job.requestedBy && isContextRefusal(error)) {
+          throw new Error(
+            'the person who requested this export can no longer access this client; ' +
+              'request it again from an account that can',
+          );
+        }
+        throw error;
+      }
 
       const omissions: ExportOmission[] = [];
       let secretCount = 0;
@@ -363,6 +384,17 @@ export class ExportService {
   }
 }
 
+/**
+ * helm.set_session_context() refusing an actor: no active membership, a
+ * disabled account, a suspended tenant. Matched on the message because the
+ * function raises insufficient_privilege for several distinct reasons and only
+ * this one should be reported as "ask someone else to request it".
+ */
+function isContextRefusal(error: unknown): boolean {
+  const message = (error as { message?: string }).message ?? '';
+  return /has no active membership|is disabled|unknown or disabled/i.test(message);
+}
+
 export interface RenderableJob {
   readonly exportJobId: string;
   readonly organizationId: string;
@@ -378,6 +410,21 @@ export interface RenderableJob {
    * two names on a cover page. See db/sql/0330_export_render_context.sql.
    */
   readonly requestedByName: string | null;
+  /**
+   * WHO THE BUNDLE IS FOR, which is not who renders it.
+   *
+   * The worker renders as its own tenant-wide service account, so until 0390
+   * the collector read the organisation with the MSP's eyes and handed the
+   * result to whoever asked. A co-managed client administrator holds
+   * export:create, so requesting an export of their own client returned every
+   * internal-only asset, attachment and note in it.
+   *
+   * Putting the predicate on asset_node's policy does not help here: the
+   * worker passes it. The bundle is instead COLLECTED UNDER THIS ACTOR, so
+   * RLS answers the question it is already good at and the bundle contains
+   * exactly what the requester could have read a page at a time.
+   */
+  readonly requestedBy: string | null;
   readonly approvedByName: string | null;
 }
 

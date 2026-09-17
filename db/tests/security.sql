@@ -21,6 +21,7 @@
 \set n_fw      '''1d000000-0000-0000-0000-000000000001'''
 \set n_net     '''1d000000-0000-0000-0000-000000000002'''
 \set n_cred    '''1d000000-0000-0000-0000-000000000004'''
+\set n_dc      '''1d000000-0000-0000-0000-000000000003'''
 \set k1        '''1c000000-0000-0000-0000-000000000001'''
 \set sa1       '''1f000000-0000-0000-0000-000000000001'''
 
@@ -1093,6 +1094,243 @@ WITH touched AS (
 SELECT helm_test.check('tier1 CAN archive an asset, so the refusal above is about clients',
   (SELECT count(*) FROM touched) = 1);
 ROLLBACK;
+
+\echo ''
+\echo '== 32. Internal-only documentation, through every path that reaches it =='
+-- Helm's premise is that an MSP can document a co-managed client in the system
+-- the client logs into and keep what the client must never see behind a flag.
+-- Until 0390 NO POLICY ANYWHERE CONSULTED THAT FLAG: every table carrying it
+-- was protected by tenant and organisation scoping alone, which is exactly the
+-- scoping a co-managed client PASSES.
+--
+-- This section is an enumeration of PATHS rather than of tables. The bug was
+-- not that one predicate was wrong; it was that the rule lived in nobody's head
+-- as a rule, and a dozen query paths each independently did not implement it. A
+-- test per table would have the same shape as the bug.
+--
+-- ONE TRANSACTION, ROLLED BACK. The context is switched mid-transaction — mark
+-- as the MSP, read as the client — so the suite leaves no residue. Written as
+-- COMMITted setup first, and that was wrong: an assertion failing mid-section
+-- left an asset flagged internal in the database, and the NEXT run failed in §4
+-- with "client admin sees ACME assets" for reasons that had nothing to do with
+-- §4.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+-- Mark one of everything. That a tenant-wide role can still write these rows
+-- is itself the first assertion.
+UPDATE asset_node SET is_internal_only = true,
+       description = 'zzsecretmarker escalation politics'
+ WHERE id = :n_fw;
+INSERT INTO note (tenant_id, organization_id, node_id, body, is_internal_only)
+VALUES (:t1, :t1_acme, :n_fw, 'zzsecretmarker they are 60 days late paying', true);
+INSERT INTO attachment (tenant_id, organization_id, node_id, filename, content_type,
+                        byte_size, storage_key, content_sha256, is_internal_only)
+VALUES (:t1, :t1_acme, :n_fw, 'zzsecretmarker-margins.xlsx', 'application/vnd.ms-excel',
+        2048, 'k/guard', sha256('guard'::bytea), true);
+-- The credential under test is the one documenting the internal asset. A
+-- credential is hidden by the asset it documents, NOT by
+-- credential.client_visible: that column defaults to false and no write path in
+-- the product ever sets it, so enforcing it would hide every credential from
+-- every client. See helm.secret_node_visible() in 0390.
+UPDATE asset_node SET is_internal_only = true WHERE id = :n_cred;
+
+SELECT helm_test.check('the MSP can see the internal asset it just marked',
+  EXISTS (SELECT 1 FROM asset_node WHERE id = :n_fw AND is_internal_only));
+SELECT helm_test.check('...its internal note',
+  EXISTS (SELECT 1 FROM note WHERE is_internal_only AND body LIKE 'zzsecretmarker%'));
+SELECT helm_test.check('...its internal attachment',
+  EXISTS (SELECT 1 FROM attachment WHERE is_internal_only AND filename LIKE 'zzsecretmarker%'));
+SELECT helm_test.check('...and the credential on the internal asset',
+  EXISTS (SELECT 1 FROM credential WHERE id = :n_cred));
+SELECT helm_test.check('...and that secret''s metadata',
+  EXISTS (SELECT 1 FROM v_secret_metadata WHERE id = :s_dom_adm));
+
+-- ---------------------------------------------------------------------------
+-- The same rows, same transaction, read by the co-managed client administrator
+-- of that very organisation. EVERY ONE of these returned the row before 0390.
+-- ---------------------------------------------------------------------------
+SELECT helm_test.ctx(:t1, :u_acme);
+
+\echo '-- direct table reads --'
+SELECT helm_test.check('asset_node: the internal asset is invisible',
+  NOT EXISTS (SELECT 1 FROM asset_node WHERE id = :n_fw));
+SELECT helm_test.check('note: the internal note is invisible',
+  NOT EXISTS (SELECT 1 FROM note WHERE body LIKE 'zzsecretmarker%'));
+SELECT helm_test.check('attachment: the internal file is invisible',
+  NOT EXISTS (SELECT 1 FROM attachment WHERE filename LIKE 'zzsecretmarker%'));
+SELECT helm_test.check('credential: one on an internal asset is invisible',
+  NOT EXISTS (SELECT 1 FROM credential WHERE id = :n_cred));
+SELECT helm_test.check('search_document: the indexed copy is invisible',
+  NOT EXISTS (SELECT 1 FROM search_document WHERE search_text LIKE '%zzsecretmarker%'));
+
+\echo '-- rows that are ABOUT an internal node without carrying the flag --'
+-- expiration.label is the asset's hostname, so this leaked the name itself.
+SELECT helm_test.check('expiration: an internal asset''s expiry is invisible',
+  NOT EXISTS (SELECT 1 FROM expiration WHERE node_id = :n_fw));
+-- secret.label is the credential's name, and v_secret_metadata reads `secret`
+-- directly — so hiding the credential row was not enough on its own.
+SELECT helm_test.check('secret: the label of a secret on an internal asset is invisible',
+  NOT EXISTS (SELECT 1 FROM secret WHERE id = :s_dom_adm));
+
+\echo '-- views, which are security_invoker and inherited the hole --'
+SELECT helm_test.check('v_expiration_dashboard',
+  NOT EXISTS (SELECT 1 FROM v_expiration_dashboard WHERE node_id = :n_fw));
+SELECT helm_test.check('v_secret_metadata',
+  NOT EXISTS (SELECT 1 FROM v_secret_metadata WHERE id = :s_dom_adm));
+-- The projected branches of v_asset_edge_stored build an edge from a visible
+-- subtype row and a bare node id, so they leaked the internal node's uuid and
+-- its topology even though the LABELLED view came back empty.
+SELECT helm_test.check('v_asset_edge_stored: no edge names it',
+  NOT EXISTS (SELECT 1 FROM v_asset_edge_stored
+              WHERE source_node_id = :n_fw OR target_node_id = :n_fw));
+SELECT helm_test.check('v_asset_edge: nor in either direction',
+  NOT EXISTS (SELECT 1 FROM v_asset_edge WHERE from_node_id = :n_fw OR to_node_id = :n_fw));
+SELECT helm_test.check('v_asset_edge_labelled',
+  NOT EXISTS (SELECT 1 FROM v_asset_edge_labelled
+              WHERE from_node_id = :n_fw OR to_node_id = :n_fw));
+
+\echo '-- functions --'
+SELECT helm_test.check('helm.search finds nothing',
+  NOT EXISTS (SELECT 1 FROM helm.search('zzsecretmarker')));
+SELECT helm_test.check('helm.asset_graph_walk cannot reach it from a visible node',
+  NOT EXISTS (SELECT 1 FROM helm.asset_graph_walk(:n_net, 3) WHERE node_id = :n_fw));
+SELECT helm_test.check('...nor can it be walked FROM, as a root',
+  NOT EXISTS (SELECT 1 FROM helm.asset_graph_walk(:n_fw, 3)));
+
+\echo '-- and none of the above is vacuous --'
+-- A policy that returned nothing at all would satisfy every assertion above.
+-- These establish that the same client, through the same paths, still reads
+-- their own documentation.
+SELECT helm_test.check('the client still sees their non-internal assets',
+  (SELECT count(*) FROM asset_node) >= 4);
+SELECT helm_test.check('...their expirations',
+  (SELECT count(*) FROM expiration) > 0);
+SELECT helm_test.check('...their graph',
+  (SELECT count(*) FROM v_asset_edge) > 0);
+SELECT helm_test.check('...and search still returns their own documentation',
+  EXISTS (SELECT 1 FROM helm.search('acme')));
+ROLLBACK;
+
+-- Audit needs its own transaction, because helm.audit() writes a hash-chained
+-- row and the reader must see it committed.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE asset_node SET is_internal_only = true WHERE id = :n_fw;
+SELECT helm.audit('asset.updated', 'asset_node', :n_fw, 'success', :t1_acme, :n_fw, NULL,
+                  '{"label":"zzsecretmarker"}'::jsonb) IS NOT NULL AS wrote_internal;
+SELECT helm.audit('asset.updated', 'asset_node', :n_dc, 'success', :t1_acme, :n_dc, NULL,
+                  '{"label":"ACME-DC01"}'::jsonb) IS NOT NULL AS wrote_visible;
+
+SELECT helm_test.ctx(:t1, :u_acme);
+-- audit metadata quotes what changed, so this leaked the label and the change.
+SELECT helm_test.check('audit_log: events about an internal node are invisible',
+  NOT EXISTS (SELECT 1 FROM audit_log WHERE node_id = :n_fw));
+-- ...and the client's own audit trail is intact, which is the point of giving
+-- a co-managed customer audit:read in the first place.
+SELECT helm_test.check('...while events about their own assets remain readable',
+  EXISTS (SELECT 1 FROM audit_log WHERE node_id = :n_dc));
+ROLLBACK;
+
+\echo ''
+\echo '== 33. Visibility is load-bearing on the reveal path, not incidental =='
+-- helm.reveal_secret is SECURITY DEFINER, so the policies in §32 do not apply
+-- inside it. Before 0390 it never consulted visibility at all: a co-managed
+-- client was refused only because the shipped client roles hold neither
+-- secret:reveal nor a rank reaching any secret. Two coincidences, not a rule —
+-- and an MSP granting a client reveal over their own credentials would have
+-- found the flag bought them nothing.
+--
+-- Proving that end to end needs secret:reveal granted to a client role, and
+-- this suite runs as helm_app, which cannot write role_permission — correctly,
+-- since the request path must never edit the permission catalogue. So the
+-- end-to-end version lives in tests/integration/internal-only.test.ts, which
+-- has superuser access; what is asserted here is the predicate itself and the
+-- shape of the ladder that calls it.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE asset_node SET is_internal_only = true WHERE id = :n_cred;
+
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('a secret on an internal asset is not visible to a client role',
+  NOT helm.secret_node_visible(:s_dom_adm));
+
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE asset_node SET is_internal_only = false WHERE id = :n_cred;
+SELECT helm_test.ctx(:t1, :u_acme);
+-- The other half. Without it the check above is satisfied by a predicate that
+-- returns false for everything.
+SELECT helm_test.check('...and IS visible once the asset is not internal',
+  helm.secret_node_visible(:s_dom_adm));
+-- ...and a secret with no credential row at all is left to the controls that
+-- always governed it, rather than being hidden by a flag nobody set.
+SELECT helm_test.check('a secret with no credential attached is unaffected',
+  helm.secret_node_visible(:s_wifi));
+ROLLBACK;
+
+-- It must see the truth to report on it: under the caller's own RLS an internal
+-- node is invisible, the join inside would find nothing, and the function would
+-- report "visible" for exactly the credential it exists to hide.
+SELECT helm_test.check('secret_node_visible is SECURITY DEFINER',
+  (SELECT prosecdef FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'helm' AND p.proname = 'secret_node_visible'));
+
+-- The rung is FIRST in the ladder. Not cosmetic: the audit row records the
+-- reason, and "we refused because your rank is too low" is a different fact
+-- from "we refused because you may not see this at all" — the second is the
+-- one an MSP needs when a client asks why.
+SELECT helm_test.check('the reveal ladder tests visibility before permission',
+  (SELECT position('secret_node_visible' in pg_get_functiondef(p.oid))
+     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'helm' AND p.proname = 'reveal_secret')
+  < (SELECT position('has_permission(''secret:reveal'')' in pg_get_functiondef(p.oid))
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'helm' AND p.proname = 'reveal_secret'));
+
+\echo ''
+\echo '== 34. Nothing writes an internal row into a client''s reach =='
+-- The flag constrains WRITES as well as reads. Without it on the write side a
+-- client actor could not see an internal row but could still UPDATE one blind,
+-- or create a row marked internal that they would then be unable to see.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE asset_node SET is_internal_only = true WHERE id = :n_fw;
+
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check_raises('a client role cannot create an internal-only asset',
+  format($$INSERT INTO asset_node (tenant_id, organization_id, node_type, name, is_internal_only)
+           VALUES (%L, %L, 'device', 'smuggled', true)$$, :t1, :t1_acme));
+WITH touched AS (
+  UPDATE asset_node SET name = 'renamed by the client' WHERE id = :n_fw RETURNING id
+)
+SELECT helm_test.check('a client role''s UPDATE cannot reach an internal row',
+  (SELECT count(*) FROM touched) = 0);
+ROLLBACK;
+
+-- Structural, so a future table carrying the flag is not quietly exempt.
+SELECT helm_test.check('every policy on a flagged table names the flag',
+  NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename IN ('asset_node', 'attachment', 'note', 'search_document')
+      AND coalesce(qual, '') || coalesce(with_check, '') NOT LIKE '%internal_visible%'));
+-- A credential is hidden by reaching its node, whose policy carries the flag.
+-- The reach is what must not be simplified away.
+SELECT helm_test.check('...and credential still reaches its node to decide',
+  NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'credential' AND cmd IN ('SELECT', 'UPDATE')
+      AND coalesce(qual, '') NOT LIKE '%internal_visible%'));
+SELECT helm_test.check('...and secret consults the node its credential documents',
+  NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE tablename = 'secret' AND cmd = 'SELECT'
+      AND coalesce(qual, '') NOT LIKE '%secret_node_visible%'));
+SELECT helm_test.check('...and expiration and audit_log name the node check',
+  NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE (tablename = 'expiration' OR tablename LIKE 'audit_log%')
+      AND cmd = 'SELECT'
+      AND coalesce(qual, '') NOT LIKE '%node_visible%'));
 
 \echo ''
 \echo '== All security assertions passed =='

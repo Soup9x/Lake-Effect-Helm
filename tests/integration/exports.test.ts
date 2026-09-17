@@ -51,6 +51,7 @@ interface BacklogRow {
   include_secrets: boolean;
   scope: Record<string, unknown>;
   reason: string;
+  requested_by: string | null;
   requested_by_name: string | null;
   approved_by_name: string | null;
   worker_actor_id: string;
@@ -73,6 +74,7 @@ const renderFrom = (job: BacklogRow) =>
     scope: job.scope,
     reason: job.reason,
     requestedByName: job.requested_by_name,
+    requestedBy: job.requested_by,
     approvedByName: job.approved_by_name,
   });
 

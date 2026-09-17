@@ -32,6 +32,7 @@ import { describeError } from './runtime';
 interface ExportBacklogRow {
   tenant_id: string;
   worker_actor_id: string;
+  requested_by: string | null;
   export_job_id: string;
   organization_id: string;
   kind: string;
@@ -167,6 +168,7 @@ async function renderExports(ctx: JobContext): Promise<JobResult> {
         scope: job.scope ?? {},
         reason: job.reason,
         requestedByName: job.requested_by_name,
+        requestedBy: job.requested_by,
         approvedByName: job.approved_by_name,
       });
 
