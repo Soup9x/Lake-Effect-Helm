@@ -6,9 +6,9 @@
  * db/sql/0220_grants.sql. Do not import them into request-path code.
  */
 import { sql } from 'drizzle-orm';
-import { bigint, boolean, index, integer, pgTable, primaryKey, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, index, integer, pgTable, primaryKey, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { bytea, citext, inet, inetArray, textArray, tstz, uuidArray } from './_types';
-import { apiTokenType, membershipStatus } from './enums';
+import { apiTokenType, authMethod, membershipStatus } from './enums';
 import { tenant } from './tenancy';
 
 export const appRole = pgTable('app_role', {
@@ -68,6 +68,12 @@ export const authSession = pgTable('auth_session', {
   sessionToken: text('session_token').primaryKey(),
   userId: uuid('user_id').notNull().references(() => appUser.id, { onDelete: 'cascade' }),
   expires: tstz('expires').notNull(),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  // Defaults to 'sso' because the Auth.js adapter INSERTs the three columns
+  // above and nothing else; the local sign-in path sets it explicitly.
+  authMethod: authMethod('auth_method').notNull().default('sso'),
+  ip: inet('ip'),
+  userAgent: text('user_agent'),
 });
 
 export const authVerificationToken = pgTable('auth_verification_token', {
@@ -279,3 +285,43 @@ export const passwordReset = pgTable('password_reset', {
 export type LocalCredential = typeof localCredential.$inferSelect;
 export type AuthAttempt = typeof authAttempt.$inferSelect;
 export type PasswordReset = typeof passwordReset.$inferSelect;
+
+/**
+ * RADIUS server settings and the enveloped shared secret (db/sql/0360).
+ *
+ * Declared here so the drift check can see it, NOT so request-path code can
+ * query it: helm_app holds no privilege on this table at all, by design. The
+ * shared secret authenticates the RADIUS server to Helm, so it sits behind
+ * helm_auth exactly as local_credential.password_phc does.
+ *
+ * The envelope columns mirror tenant_data_key + secret_version because it is
+ * the same construction: a DEK wrapped by the master KEK, and the secret sealed
+ * under that DEK with an AAD binding it to this tenant.
+ */
+export const radiusConfig = pgTable('radius_config', {
+  tenantId: uuid('tenant_id').primaryKey().references(() => tenant.id, { onDelete: 'cascade' }),
+
+  enabled: boolean('enabled').notNull().default(false),
+  host: text('host').notNull(),
+  port: integer('port').notNull().default(1812),
+  timeoutMs: integer('timeout_ms').notNull().default(5000),
+  retries: smallint('retries').notNull().default(2),
+  nasIdentifier: text('nas_identifier').notNull().default('lake-effect-helm'),
+
+  wrapProvider: text('wrap_provider').notNull(),
+  kekId: text('kek_id').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(),
+  secretCiphertext: bytea('secret_ciphertext').notNull(),
+  secretNonce: bytea('secret_nonce').notNull(),
+  secretTag: bytea('secret_tag').notNull(),
+  secretAad: text('secret_aad').notNull(),
+
+  lastTestAt: tstz('last_test_at'),
+  lastTestOk: boolean('last_test_ok'),
+  lastTestError: text('last_test_error'),
+
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
+});

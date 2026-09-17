@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Lake Effect Helm">
+  <title>Lake Effect Helm</title>
+  <defs>
+    <!-- One rose, painted twice: lit on the west side, shaded on the east. A
+         hard vertical split rather than a gradient, because at favicon size a
+         gradient turns to mud. -->
+    <clipPath id="helm-w"><rect x="0" y="0" width="256" height="512"/></clipPath>
+    <clipPath id="helm-e"><rect x="256" y="0" width="256" height="512"/></clipPath>
+
+    <g id="helm-points">
+      <polygon points="256,4 294.59,129.77 217.41,129.77" />
+      <polygon points="324.88,89.7 322,141.68 290.16,128.5" />
+      <polygon points="396.01,115.99 366.7,184.11 327.89,145.3" />
+      <polygon points="422.3,187.12 383.5,221.84 370.32,190" />
+      <polygon points="508,256 382.23,294.59 382.23,217.41" />
+      <polygon points="422.3,324.88 370.32,322 383.5,290.16" />
+      <polygon points="396.01,396.01 327.89,366.7 366.7,327.89" />
+      <polygon points="324.88,422.3 290.16,383.5 322,370.32" />
+      <polygon points="256,508 217.41,382.23 294.59,382.23" />
+      <polygon points="187.12,422.3 190,370.32 221.84,383.5" />
+      <polygon points="115.99,396.01 145.3,327.89 184.11,366.7" />
+      <polygon points="89.7,324.88 128.5,290.16 141.68,322" />
+      <polygon points="4,256 129.77,217.41 129.77,294.59" />
+      <polygon points="89.7,187.12 141.68,190 128.5,221.84" />
+      <polygon points="115.99,115.99 184.11,145.3 145.3,184.11" />
+      <polygon points="187.12,89.7 221.84,128.5 190,141.68" />
+    </g>
+    <g id="helm-wheel">
+      <polygon points="263,212 263,132 249,132 249,212" />
+      <polygon points="269,143 269,132 243,132 243,143" />
+      <polygon points="292.06,229.84 348.63,173.27 338.73,163.37 282.16,219.94" />
+      <polygon points="345.1,185.29 352.87,177.51 334.49,159.13 326.71,166.9" />
+      <polygon points="300,263 380,263 380,249 300,249" />
+      <polygon points="369,269 380,269 380,243 369,243" />
+      <polygon points="282.16,292.06 338.73,348.63 348.63,338.73 292.06,282.16" />
+      <polygon points="326.71,345.1 334.49,352.87 352.87,334.49 345.1,326.71" />
+      <polygon points="249,300 249,380 263,380 263,300" />
+      <polygon points="243,369 243,380 269,380 269,369" />
+      <polygon points="219.94,282.16 163.37,338.73 173.27,348.63 229.84,292.06" />
+      <polygon points="166.9,326.71 159.13,334.49 177.51,352.87 185.29,345.1" />
+      <polygon points="212,249 132,249 132,263 212,263" />
+      <polygon points="143,243 132,243 132,269 143,269" />
+      <polygon points="229.84,219.94 173.27,163.37 163.37,173.27 219.94,229.84" />
+      <polygon points="185.29,166.9 177.51,159.13 159.13,177.51 166.9,185.29" />
+      <circle cx="256" cy="256" r="50"/>
+    </g>
+  </defs>
+
+  <g stroke="#12306E" stroke-width="9" stroke-linejoin="round">
+    <!-- Points first: their bases sit under the rim, so each one reads as
+         coming out from behind the wheel rather than being stuck onto it. -->
+    <g clip-path="url(#helm-w)"><use href="#helm-points" fill="#3B8AE5"/></g>
+    <g clip-path="url(#helm-e)"><use href="#helm-points" fill="#DCE1E9"/></g>
+
+    <!-- The rim, painted over those bases. -->
+    <g clip-path="url(#helm-w)">
+      <circle cx="256" cy="256" r="139" fill="none" stroke="#3B8AE5" stroke-width="22"/>
+    </g>
+    <g clip-path="url(#helm-e)">
+      <circle cx="256" cy="256" r="139" fill="none" stroke="#DCE1E9" stroke-width="22"/>
+    </g>
+    <circle cx="256" cy="256" r="150" fill="none"/>
+    <circle cx="256" cy="256" r="128" fill="#12306E"/>
+  </g>
+
+  <!-- Eight spokes and their collars, same split. -->
+  <g clip-path="url(#helm-w)"><use href="#helm-wheel" fill="#3B8AE5"/></g>
+  <g clip-path="url(#helm-e)"><use href="#helm-wheel" fill="#DCE1E9"/></g>
+
+  <!-- Hub back to navy, so the centre reads as a hole rather than a blob. -->
+  <circle cx="256" cy="256" r="28" fill="#12306E"/>
+</svg>

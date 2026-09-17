@@ -676,5 +676,6 @@ Stated plainly so they are decisions rather than surprises.
 | `docs/architecture/05-workers-and-exports.md` | Worker identities, four-eyes exports |
 | `docs/architecture/06-web-interface.md` | Pages, tenant switching, secret handling |
 | `docs/architecture/07-local-authentication.md` | Passwords, lockout, reset, the outage case |
+| `docs/architecture/08-radius-authentication.md` | Signing in against your own directory, and how it falls back |
 | `docs/deployment/docker-on-prem.md` | Step-by-step Docker install: volumes, healthchecks, TLS, backup/restore |
 | `.env.example` | Every variable, with the reasoning |

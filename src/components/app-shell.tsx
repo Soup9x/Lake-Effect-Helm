@@ -14,10 +14,8 @@ import {
 } from 'lucide-react';
 import { TenantSwitcher } from './tenant-switcher';
 import type { ServerIdentity } from '@/lib/auth/server-identity';
-import { Badge } from './ui/badge';
-import { SignOutButton } from './sign-out-button';
-import { ThemeToggle } from './theme-toggle';
-import { initials } from '@/lib/ui/format';
+import { AccountMenu } from './account-menu';
+import { HelmMark } from './ui/helm-mark';
 import { isClientRole } from '@/lib/ui/roles';
 
 interface NavItem {
@@ -59,14 +57,13 @@ export function AppShell({
 }) {
   const isClient = isClientRole(identity.roleKey);
   const items = NAV.filter((item) => !(isClient && HIDDEN_FROM_CLIENTS.has(item.href)));
+  const active = identity.memberships.find((m) => m.tenantId === identity.tenantId);
 
   return (
     <div className="flex min-h-screen bg-surface">
       <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface-raised">
         <div className="flex items-center gap-2 px-4 py-4">
-          <div className="grid size-7 place-items-center rounded-md bg-brand text-xs font-bold text-on-brand">
-            LE
-          </div>
+          <HelmMark className="size-7" />
           <span className="text-sm font-semibold tracking-tight">Helm</span>
         </div>
 
@@ -86,32 +83,24 @@ export function AppShell({
             </Link>
           ))}
         </nav>
-
-        <div className="border-t border-border p-3">
-          <div className="flex items-center gap-2">
-            <div className="grid size-8 shrink-0 place-items-center rounded-full bg-surface-sunken text-xs font-medium text-ink-muted">
-              {initials(identity.name)}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm text-ink">{identity.name}</div>
-              <div className="truncate text-xs text-ink-faint">{identity.email}</div>
-            </div>
-          </div>
-          {isClient && (
-            <div className="mt-2">
-              {/* Said plainly. A co-managed customer looking at their own
-                  documentation should know which view they are in. */}
-              <Badge tone="brand">Co-managed access</Badge>
-            </div>
-          )}
-          <div className="mt-2">
-            <ThemeToggle />
-          </div>
-          <SignOutButton />
-        </div>
       </aside>
 
-      <main className="min-w-0 flex-1">{children}</main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* The account lives top right, where every other tool an MSP uses all
+            day puts it. Slim on purpose: each page renders its own header
+            underneath, and two tall bars stacked is how a dashboard loses the
+            screen it is meant to be showing. */}
+        <header className="flex h-12 shrink-0 items-center justify-end gap-3 border-b border-border bg-surface-raised px-4">
+          <AccountMenu
+            name={identity.name}
+            email={identity.email}
+            roleName={active?.roleName ?? identity.roleKey}
+            isClient={isClient}
+          />
+        </header>
+
+        <main className="min-w-0 flex-1">{children}</main>
+      </div>
     </div>
   );
 }

@@ -1000,4 +1000,5 @@ read the old data.
 | [`../architecture/01-security-model.md`](../architecture/01-security-model.md) | Guarantees, mechanisms and stated limitations |
 | [`../architecture/03-crypto-operations.md`](../architecture/03-crypto-operations.md) | Key hierarchy and both on-premises KEK providers |
 | [`../architecture/07-local-authentication.md`](../architecture/07-local-authentication.md) | Local passwords, lockout, reset, the outage case |
+| [`../architecture/08-radius-authentication.md`](../architecture/08-radius-authentication.md) | RADIUS: the third door, shared-secret custody, graceful fallback |
 | `.env.example` | Every variable, with the reasoning |
