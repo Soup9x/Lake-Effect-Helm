@@ -36,13 +36,13 @@ jobs:
     name: Typecheck and build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No version input: package.json's `packageManager` is the single source
       # of truth, so CI cannot install a different pnpm than the Dockerfile.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # .nvmrc is the single source of truth, so CI cannot drift from what
           # a contributor's `nvm use` picks.
@@ -106,13 +106,13 @@ jobs:
       PGSUPERUSER: postgres
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No version input: package.json's `packageManager` is the single source
       # of truth, so CI cannot install a different pnpm than the Dockerfile.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # .nvmrc is the single source of truth, so CI cannot drift from what
           # a contributor's `nvm use` picks.
@@ -166,7 +166,7 @@ jobs:
     name: Docker images build and run
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build the runtime image
         run: docker build --target runtime -t helm-runtime:ci .
@@ -241,7 +241,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: sudo ./deploy/setup.sh
         run: |
@@ -308,13 +308,13 @@ jobs:
     # continue-on-error and this becomes a gate.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No version input: package.json's `packageManager` is the single source
       # of truth, so CI cannot install a different pnpm than the Dockerfile.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # .nvmrc is the single source of truth, so CI cannot drift from what
           # a contributor's `nvm use` picks.
