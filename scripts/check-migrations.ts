@@ -26,8 +26,32 @@
  * that needs `--force`, which is correct only for a migration that has never
  * been deployed anywhere, and which the CI check against origin/main will
  * reject anyway once the file has shipped.
+ *
+ * WHAT THE MANIFEST CANNOT TELL YOU, and this is not a small caveat.
+ *
+ * It records what the tree contained when somebody ran `--update`. It answers
+ * "has anything changed since we wrote this down" and nothing else. If the
+ * tree was already wrong at that moment, the manifest faithfully records the
+ * wrong thing and the check passes forever.
+ *
+ * That happened. A revert of 0340_local_authentication.sql went to the file's
+ * INTRODUCING commit rather than to the content production had actually
+ * applied — the file had been edited once BEFORE production's deploy point, so
+ * those are different bytes — and the manifest was then generated from that
+ * tree. Every check passed. The deploy failed, because the only authority on
+ * what production ran is production's own helm_migration table.
+ *
+ * `--against <ref>` exists because of that. It compares db/sql against a git
+ * ref rather than against the manifest, so "does this tree match the commit we
+ * actually deployed" becomes a question you can ask:
+ *
+ *     pnpm db:check-migrations --against 307b872
+ *
+ * Files absent from the ref are reported and not treated as failures: a
+ * migration added since that commit is expected to be missing from it.
  */
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -86,9 +110,63 @@ function writeManifest(entries: Map<string, string>): void {
   writeFileSync(MANIFEST, `${header}${body}\n`);
 }
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
 const update = args.has('--update');
 const force = args.has('--force');
+
+/** `--against <ref>`: compare the tree to a git ref instead of to the manifest. */
+const againstIndex = argv.indexOf('--against');
+const against = againstIndex >= 0 ? argv[againstIndex + 1] : undefined;
+
+if (againstIndex >= 0 && !against) {
+  console.error('✗ --against needs a git ref, e.g. --against 307b872');
+  process.exit(1);
+}
+
+if (against) {
+  const files = migrations();
+  const drifted: string[] = [];
+  const added: string[] = [];
+
+  for (const [name] of files) {
+    let atRef: string;
+    try {
+      atRef = execFileSync('git', ['show', `${against}:db/sql/${name}`], {
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024 * 1024,
+        // git writes "exists on disk, but not in <ref>" to stderr for every
+        // migration added since the ref, which is the expected case and not
+        // something to put in front of somebody running this during an incident.
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch {
+      // Not in that commit. A migration written since then, which is the
+      // normal case and not a problem.
+      added.push(name);
+      continue;
+    }
+    if (sha256(atRef) !== files.get(name)) drifted.push(name);
+  }
+
+  if (drifted.length > 0) {
+    console.error(`✗ these migrations DIFFER from ${against}:\n`);
+    for (const name of drifted) console.error(`    db/sql/${name}`);
+    console.error(
+      `\n  If ${against} is what an environment actually applied, this is the\n` +
+      '  drift that will fail its next deploy. Restore each file to its content\n' +
+      `  at that commit (git show ${against}:db/sql/<file> > db/sql/<file>) and\n` +
+      '  carry any intended change forward in a NEW migration.\n',
+    );
+    process.exit(1);
+  }
+
+  console.log(
+    `✓ ${files.size - added.length} migrations match ${against}` +
+    (added.length > 0 ? `; ${added.length} written since it` : ''),
+  );
+  process.exit(0);
+}
 
 const files = migrations();
 const manifest = readManifest();

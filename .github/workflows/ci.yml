@@ -62,6 +62,20 @@ jobs:
       - name: Migrations match their manifest
         run: pnpm db:check-migrations
 
+      # The manifest records what the tree contained when somebody last ran
+      # --update. If the tree was already wrong then, it records the wrong
+      # thing and passes forever — which is exactly how a bad revert of
+      # 0340_local_authentication.sql reached a deploy with every check green.
+      #
+      # HELM_DEPLOYED_REF is the commit an environment has actually applied.
+      # Set it as a repository variable and this step answers the question the
+      # manifest cannot: does this tree still match what that environment ran.
+      - name: Migrations match the deployed baseline
+        if: vars.HELM_DEPLOYED_REF != ''
+        run: |
+          git fetch --no-tags origin "${{ vars.HELM_DEPLOYED_REF }}" || git fetch --no-tags --unshallow origin
+          pnpm db:check-migrations --against "${{ vars.HELM_DEPLOYED_REF }}"
+
       # ...and this answers "has anything already on main been edited", which is
       # the one the manifest cannot answer on its own, because a manifest entry
       # can be re-blessed with --force. A file that has reached main has reached
