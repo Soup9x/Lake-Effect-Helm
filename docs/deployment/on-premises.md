@@ -667,6 +667,29 @@ Roll back by checking out the previous tag and rebuilding. **Migrations do not
 roll back**; a release that changes the schema is forward-only, so read the
 release notes before upgrading a system holding real client data.
 
+#### Before you upgrade: check the tree against what this server applied
+
+One command, and it turns an upgrade that fails at 3am into one you knew about
+beforehand:
+
+```bash
+sudo docker compose exec -T postgres sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" psql -U postgres -d helm -At -F" " \
+   -c "SELECT filename, sha256 FROM helm_migration ORDER BY filename"' > applied.txt
+
+pnpm db:check-migrations --expect applied.txt
+```
+
+It prints what is still pending, or names every file whose content no longer
+matches what this server ran — which is exactly what the migrate service will
+refuse on.
+
+**`helm_migration` is the authority, not a commit hash.** A commit is a guess
+about what an environment applied; this table is what it applied. Two bad
+reverts in this project came from guessing — one to a file's first commit,
+one to a commit that turned out not to be the deploy point. Either would have
+been caught in seconds by the command above.
+
 #### If an upgrade stops with "has changed since it was applied"
 
 The migrate service compares a SHA-256 of every file in `db/sql` against what

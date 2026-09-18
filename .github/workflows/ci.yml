@@ -70,6 +70,11 @@ jobs:
       # HELM_DEPLOYED_REF is the commit an environment has actually applied.
       # Set it as a repository variable and this step answers the question the
       # manifest cannot: does this tree still match what that environment ran.
+      #
+      # A commit is a PROXY for that, and the proxy has been wrong twice here.
+      # The authority is the environment's own helm_migration table; see
+      # `--expect` in scripts/check-migrations.ts and the pre-upgrade check in
+      # docs/deployment/on-premises.md.
       - name: Migrations match the deployed baseline
         if: vars.HELM_DEPLOYED_REF != ''
         run: |

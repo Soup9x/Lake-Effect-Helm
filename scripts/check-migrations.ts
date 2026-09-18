@@ -41,14 +41,25 @@
  * tree. Every check passed. The deploy failed, because the only authority on
  * what production ran is production's own helm_migration table.
  *
- * `--against <ref>` exists because of that. It compares db/sql against a git
- * ref rather than against the manifest, so "does this tree match the commit we
- * actually deployed" becomes a question you can ask:
+ * `--against <ref>` compares db/sql against a git ref rather than against the
+ * manifest, so "does this tree match the commit we deployed" is answerable:
  *
- *     pnpm db:check-migrations --against 307b872
+ *     pnpm db:check-migrations --against 95af761
  *
  * Files absent from the ref are reported and not treated as failures: a
  * migration added since that commit is expected to be missing from it.
+ *
+ * `--expect <file>` is the one that actually settles it, because it does not
+ * rely on knowing which commit an environment is on. It takes the environment's
+ * OWN record — the rows in helm_migration — and compares them to the tree:
+ *
+ *     psql -At -F' ' -c 'SELECT filename, sha256 FROM helm_migration' > applied.txt
+ *     pnpm db:check-migrations --expect applied.txt
+ *
+ * That is the authority. A commit is a guess about what an environment applied;
+ * helm_migration is what it applied. Guessing produced two bad reverts here:
+ * first to a file's introducing commit, then to a commit that turned out not to
+ * be the deploy point either. One query would have answered it both times.
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -118,6 +129,72 @@ const force = args.has('--force');
 /** `--against <ref>`: compare the tree to a git ref instead of to the manifest. */
 const againstIndex = argv.indexOf('--against');
 const against = againstIndex >= 0 ? argv[againstIndex + 1] : undefined;
+
+/** `--expect <file>`: compare the tree to an environment's helm_migration dump. */
+const expectIndex = argv.indexOf('--expect');
+const expectFile = expectIndex >= 0 ? argv[expectIndex + 1] : undefined;
+
+if (expectIndex >= 0 && !expectFile) {
+  console.error('✗ --expect needs a file of "<filename> <sha256>" lines');
+  process.exit(1);
+}
+
+if (expectFile) {
+  const files = migrations();
+  const applied = new Map<string, string>();
+
+  for (const line of readFileSync(expectFile, 'utf8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    // Accepts the psql -At -F' ' shape and the bare table output, so an
+    // operator can paste either without reformatting.
+    const match = /^([0-9a-zA-Z_.-]+\.sql)\s*\|?\s*([0-9a-f]{64})$/.exec(trimmed);
+    if (match) applied.set(match[1]!, match[2]!);
+  }
+
+  if (applied.size === 0) {
+    console.error(`✗ no "<filename> <sha256>" rows found in ${expectFile}`);
+    process.exit(1);
+  }
+
+  const drifted: string[] = [];
+  const missing: string[] = [];
+
+  for (const [name, hash] of applied) {
+    const onDisk = files.get(name);
+    if (onDisk === undefined) missing.push(name);
+    else if (onDisk !== hash) drifted.push(name);
+  }
+
+  if (drifted.length > 0 || missing.length > 0) {
+    if (drifted.length > 0) {
+      console.error('✗ the tree DIFFERS from what that environment applied:\n');
+      for (const name of drifted) {
+        console.error(`    db/sql/${name}`);
+        console.error(`      it applied  ${applied.get(name)!.slice(0, 16)}…`);
+        console.error(`      tree has    ${files.get(name)!.slice(0, 16)}…`);
+      }
+      console.error(
+        '\n  Its next deploy fails on the first of these. Restore each file to the\n' +
+        '  content it applied and carry any intended change forward in a NEW\n' +
+        '  migration.\n',
+      );
+    }
+    if (missing.length > 0) {
+      console.error('✗ it applied migrations that are not in this tree:\n');
+      for (const name of missing) console.error(`    ${name}`);
+      console.error('\n  Deleting an applied migration does not un-apply it.\n');
+    }
+    process.exit(1);
+  }
+
+  const pending = [...files.keys()].filter((name) => !applied.has(name));
+  console.log(
+    `✓ all ${applied.size} applied migrations match the tree` +
+    (pending.length > 0 ? `; ${pending.length} pending: ${pending.join(', ')}` : '; nothing pending'),
+  );
+  process.exit(0);
+}
 
 if (againstIndex >= 0 && !against) {
   console.error('✗ --against needs a git ref, e.g. --against 307b872');
