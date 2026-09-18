@@ -17,7 +17,7 @@
 --   * Protection from someone with superuser or filesystem access, who can
 --     disable triggers and recompute the chain. Tamper *evidence* requires the
 --     chain head to be witnessed somewhere Postgres cannot reach — periodically
---     anchor helm.audit_chain_head to WORM storage from your own scheduler.
+--     anchor helm.audit_chain_head to WORM storage (HELM_AUDIT_MIRROR_BUCKET).
 --     That is an operational control, and the schema is built to support it.
 -- =============================================================================
 

@@ -55,6 +55,43 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # Two different questions, so two steps.
+      #
+      # The manifest answers "does this tree match what was recorded", which is
+      # the same check the pre-commit hook runs and works with no history.
+      - name: Migrations match their manifest
+        run: pnpm db:check-migrations
+
+      # ...and this answers "has anything already on main been edited", which is
+      # the one the manifest cannot answer on its own, because a manifest entry
+      # can be re-blessed with --force. A file that has reached main has reached
+      # somebody's database. Seven had drifted before this step existed, three of
+      # them comment-only — and a comment-only edit fails a deploy exactly as
+      # hard, because the checksum covers the whole file.
+      - name: No applied migration has been edited in place
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          base="origin/${{ github.base_ref }}"
+          drifted=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            # Only files that exist on the base branch are immutable; a
+            # migration added by this PR is not yet anybody's applied migration.
+            git cat-file -e "$base:$f" 2>/dev/null || continue
+            if ! git diff --quiet "$base" -- "$f"; then
+              echo "::error file=$f::$f is on $base and has been modified. Applied migrations are immutable - write a new migration instead."
+              drifted=1
+            fi
+          done < <(git diff --name-only "$base"...HEAD -- 'db/sql/*.sql')
+          if [ "$drifted" -ne 0 ]; then
+            echo ""
+            echo "db/migrate.ts hashes the whole file, so a changed comment breaks a"
+            echo "deploy exactly as hard as a changed ALTER TABLE."
+            exit 1
+          fi
+          echo "  ok  no migration on $base was modified"
+
       # Every route is force-dynamic, so nothing is prerendered and the build
       # needs no database connection.
       - name: Build the web tier and the worker bundle

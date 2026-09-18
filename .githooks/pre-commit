@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Refuse a commit that edits a migration which has already been applied.
+#
+# db/migrate.ts hashes the whole file and refuses to run when it no longer
+# matches what helm_migration recorded — but that is deploy time, against a live
+# database, and by then the change is merged. This is the same rule, enforced
+# while the change is still being written.
+#
+# Install with: pnpm hooks:install   (sets core.hooksPath=.githooks)
+set -euo pipefail
+
+# Only when migrations are involved, so ordinary commits pay nothing.
+if ! git diff --cached --name-only --diff-filter=ACMRD | grep -q '^db/sql/'; then
+  exit 0
+fi
+
+echo "pre-commit: db/sql touched, verifying the migration manifest..."
+
+if command -v pnpm > /dev/null 2>&1; then
+  RUNNER=(pnpm --silent db:check-migrations)
+elif command -v npx > /dev/null 2>&1; then
+  RUNNER=(npx tsx scripts/check-migrations.ts)
+else
+  echo "pre-commit: neither pnpm nor npx found; skipping (CI will still check)" >&2
+  exit 0
+fi
+
+if ! "${RUNNER[@]}"; then
+  cat >&2 <<'MSG'
+
+pre-commit: REFUSING.
+
+An applied migration is immutable. Restore the file and write a new one that
+carries the change forward:
+
+    git checkout -- db/sql/<file>
+
+If this migration is genuinely new and simply needs recording:
+
+    pnpm db:check-migrations --update && git add db/sql/MANIFEST.sha256
+
+Commit anyway with --no-verify only if you know why that is safe. CI checks the
+same thing, and also checks db/sql against origin/main.
+MSG
+  exit 1
+fi

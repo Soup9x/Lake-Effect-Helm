@@ -40,22 +40,10 @@ INSERT INTO permission (key, category, description, msp_only) VALUES
   ('tenant:write',         'identity',     'Change tenant-level settings', true),
   ('integration:read',     'integration',  'View integration configuration and sync history', true),
   ('integration:manage',   'integration',  'Configure integrations and webhooks', true),
-  -- NOTE: integration:network:manage is NOT in this list. 0430 creates it, and
-  -- 0430 runs first on a fresh build — listing it here as well was a duplicate
-  -- key that broke every rebuild. The role grants below still pick it up:
-  -- super_admin takes every permission and tier3 takes everything bar three,
-  -- so both hold it without being named.
-  --
-  -- It is deliberately separate from integration:manage so a technician who
-  -- looks after a client's network can wire up their controller without also
-  -- gaining the notification webhooks and the OIDC provider.
   ('audit:read',           'audit',        'Read the audit log', false),
   ('audit:verify',         'audit',        'Verify audit chain integrity', true),
   ('export:create',        'export',       'Request an export', false),
-  -- Renamed in 0400. Two-person approval is gone; what this still grants is
-  -- the authority to revoke SOMEBODY ELSE'S export, which is a containment
-  -- action and was always bundled into the same permission.
-  ('export:revoke_any',    'export',       'Revoke an export requested by someone else', true),
+  ('export:approve',       'export',       'Approve a secret-bearing export', true),
   ('key:rotate',           'security',     'Rotate tenant data encryption keys', true),
   ('alert:manage',         'alert',        'Configure expiry alert rules', true);
 
@@ -79,7 +67,7 @@ INSERT INTO app_role (key, name, description, rank, is_tenant_wide, is_system) V
 INSERT INTO role_permission (role_key, permission_key)
 SELECT 'super_admin', key FROM permission;
 
--- tier3: everything except deleting organisations, tenant settings and keys.
+-- tier3: everything except deleting organisations and approving their own exports.
 INSERT INTO role_permission (role_key, permission_key)
 SELECT 'tier3', key FROM permission
 WHERE key NOT IN ('organization:delete', 'tenant:write', 'key:rotate');
@@ -172,18 +160,6 @@ BEGIN
     WHERE rp.permission_key = 'secret:reveal' AND NOT r.is_tenant_wide
   ) THEN
     RAISE EXCEPTION 'helm: a client-side role holds secret:reveal';
-  END IF;
-
-  -- The network permission must NOT be implied by the general one. tier2 holds
-  -- integration:read and neither manage permission; if a future edit grants
-  -- integration:manage to a role, that must not silently carry the network
-  -- scope with it — which is the whole reason 0430 made it a separate key.
-  IF EXISTS (
-    SELECT 1 FROM role_permission
-    WHERE permission_key = 'integration:network:manage'
-      AND role_key NOT IN ('super_admin', 'tier3')
-  ) THEN
-    RAISE EXCEPTION 'helm: integration:network:manage reached a role beyond super_admin and tier3';
   END IF;
 
   -- Every permission named in an RLS policy must exist, or that policy denies

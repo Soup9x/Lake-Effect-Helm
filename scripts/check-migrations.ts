@@ -1,0 +1,183 @@
+#!/usr/bin/env tsx
+/**
+ * Applied migrations are immutable. This is what notices when one changes.
+ *
+ * WHY THIS EXISTS
+ *
+ * db/migrate.ts already refuses to run when a file's sha256 no longer matches
+ * what helm_migration recorded — but it finds out at DEPLOY TIME, against a
+ * live database, on somebody's evening. By then the edit is merged, the release
+ * is cut, and the person holding the pager did not write it.
+ *
+ * Seven migrations had drifted before this file existed. Three were pure
+ * comment changes that would still have failed every deploy, because the
+ * checksum covers the whole file and does not care what the bytes mean. Two
+ * were edits to seed files, which is the quiet case: the checksum breaks AND
+ * the edit would not have worked anyway, because seeds run once and changing an
+ * INSERT literal does nothing to a row that already exists.
+ *
+ * MANIFEST.sha256 is the record of what each migration's content is. CI and the
+ * pre-commit hook compare the tree against it, so the answer arrives while the
+ * change is still being written.
+ *
+ * THE ESCAPE HATCH IS A NEW MIGRATION, ALWAYS.
+ *
+ * `--update` adds entries for NEW files. It will not rewrite an existing one:
+ * that needs `--force`, which is correct only for a migration that has never
+ * been deployed anywhere, and which the CI check against origin/main will
+ * reject anyway once the file has shipped.
+ */
+import { createHash } from 'node:crypto';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SQL_DIR = join(ROOT, 'db', 'sql');
+const MANIFEST = join(SQL_DIR, 'MANIFEST.sha256');
+
+const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
+
+function migrations(): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const name of readdirSync(SQL_DIR).filter((f) => f.endsWith('.sql')).sort()) {
+    out.set(name, sha256(readFileSync(join(SQL_DIR, name), 'utf8')));
+  }
+  return out;
+}
+
+function readManifest(): Map<string, string> {
+  const out = new Map<string, string>();
+  let raw: string;
+  try {
+    raw = readFileSync(MANIFEST, 'utf8');
+  } catch {
+    return out;
+  }
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    // `sha256sum` format: hash, two spaces, filename.
+    const match = /^([0-9a-f]{64})\s+(.+)$/.exec(trimmed);
+    if (!match) {
+      console.error(`✗ MANIFEST.sha256 has a line that is not "<sha256>  <filename>":\n  ${trimmed}`);
+      process.exit(1);
+    }
+    out.set(match[2]!, match[1]!);
+  }
+  return out;
+}
+
+function writeManifest(entries: Map<string, string>): void {
+  const header =
+    '# sha256 of every file in db/sql, in filename order.\n' +
+    '#\n' +
+    '# An applied migration is immutable: db/migrate.ts hashes the whole file and\n' +
+    '# refuses to run when it no longer matches what helm_migration recorded. This\n' +
+    '# manifest moves that failure from deploy time to commit time.\n' +
+    '#\n' +
+    '# Adding a migration:  pnpm db:check-migrations --update\n' +
+    '# Changing one:        do not. Write a new migration that alters what it did.\n' +
+    '\n';
+  const body = [...entries.keys()]
+    .sort()
+    .map((name) => `${entries.get(name)}  ${name}`)
+    .join('\n');
+  writeFileSync(MANIFEST, `${header}${body}\n`);
+}
+
+const args = new Set(process.argv.slice(2));
+const update = args.has('--update');
+const force = args.has('--force');
+
+const files = migrations();
+const manifest = readManifest();
+
+const changed: string[] = [];
+const added: string[] = [];
+const removed: string[] = [];
+
+for (const [name, hash] of files) {
+  const recorded = manifest.get(name);
+  if (recorded === undefined) added.push(name);
+  else if (recorded !== hash) changed.push(name);
+}
+for (const name of manifest.keys()) {
+  if (!files.has(name)) removed.push(name);
+}
+
+if (update) {
+  const next = new Map(manifest);
+  for (const name of added) next.set(name, files.get(name)!);
+
+  if (changed.length > 0) {
+    if (!force) {
+      console.error('✗ these migrations have CHANGED, and --update will not bless a change:\n');
+      for (const name of changed) console.error(`    ${name}`);
+      console.error(
+        '\n  An applied migration is immutable. Restore the file and write a new\n' +
+        '  migration that alters what it did.\n\n' +
+        '  If this migration has genuinely never been deployed anywhere — it was\n' +
+        '  added in a branch that has not merged — re-run with --force. The CI\n' +
+        '  check against origin/main will still refuse it once it has shipped.',
+      );
+      process.exit(1);
+    }
+    for (const name of changed) next.set(name, files.get(name)!);
+    console.warn(`⚠ --force: re-recording ${changed.length} changed migration(s):`);
+    for (const name of changed) console.warn(`    ${name}`);
+  }
+
+  for (const name of removed) next.delete(name);
+  writeManifest(next);
+
+  const summary = [
+    added.length ? `${added.length} added` : null,
+    force && changed.length ? `${changed.length} re-recorded` : null,
+    removed.length ? `${removed.length} removed` : null,
+  ].filter(Boolean);
+  console.log(`✓ MANIFEST.sha256 updated${summary.length ? ` (${summary.join(', ')})` : ' (no changes)'}`);
+  process.exit(0);
+}
+
+let failed = false;
+
+if (changed.length > 0) {
+  failed = true;
+  console.error('✗ APPLIED MIGRATIONS HAVE BEEN EDITED IN PLACE\n');
+  for (const name of changed) {
+    console.error(`    db/sql/${name}`);
+    console.error(`      recorded ${manifest.get(name)!.slice(0, 16)}…`);
+    console.error(`      on disk  ${files.get(name)!.slice(0, 16)}…`);
+  }
+  console.error(
+    '\n  db/migrate.ts hashes the WHOLE FILE, so a changed comment fails a deploy\n' +
+    '  exactly as hard as a changed ALTER TABLE — and on a seed file the edit\n' +
+    '  would not have taken effect anyway, because seeds run once.\n\n' +
+    '  Restore the file (git checkout) and write a NEW migration carrying the\n' +
+    '  change forward, guarded so it is correct on a database that ran either\n' +
+    '  version.\n',
+  );
+}
+
+if (removed.length > 0) {
+  failed = true;
+  console.error('✗ migrations in the manifest are missing from db/sql:\n');
+  for (const name of removed) console.error(`    ${name}`);
+  console.error(
+    '\n  Deleting an applied migration does not un-apply it. Every environment\n' +
+    '  that ran it still carries its effects, and a fresh build no longer\n' +
+    '  reproduces them.\n',
+  );
+}
+
+if (added.length > 0) {
+  failed = true;
+  console.error('✗ migrations are not recorded in the manifest:\n');
+  for (const name of added) console.error(`    ${name}`);
+  console.error('\n  Run: pnpm db:check-migrations --update\n');
+}
+
+if (failed) process.exit(1);
+
+console.log(`✓ ${files.size} migrations match MANIFEST.sha256`);

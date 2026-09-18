@@ -205,12 +205,8 @@ AS $$
 $$;
 
 -- Set by the app only after a fresh re-authentication (password re-entry,
--- WebAuthn assertion, or TOTP). Gates reveal of secrets flagged
--- requires_step_up.
---
--- NOTE: this is a boolean for the life of the request, with NO expiry. An
--- earlier version of this comment named a HELM_STEP_UP_TTL_MINUTES that was
--- documented in .env.example and read by nothing — see that file.
+-- WebAuthn assertion, or TOTP) within HELM_STEP_UP_TTL_MINUTES. Gates reveal of
+-- secrets flagged requires_step_up.
 CREATE OR REPLACE FUNCTION helm.step_up_verified() RETURNS boolean
   LANGUAGE sql STABLE PARALLEL SAFE
   SET search_path = pg_catalog, pg_temp

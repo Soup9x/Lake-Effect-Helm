@@ -33,29 +33,12 @@ SET search_path = public, extensions;
 -- -----------------------------------------------------------------------------
 -- Notes.
 --
--- ONE notes field per item, and getting there means removing one.
---
--- credential.notes has existed since 0070, and a credential is an asset_node
--- with a subtype row — so adding asset_node.notes would give a credential TWO
--- notes fields: the one the interface edits and the one the offboarding export
--- reads. Somebody types a note against a credential, the client's export does
--- not contain it, and nothing anywhere reports a problem. That is a worse
--- outcome than either field alone.
---
--- asset_node.notes wins because it is the field that means the same thing for
--- every asset. The content moves across first — an in-place backfill, so no
--- note is lost — and then the duplicate goes.
+-- credential.notes already exists from 0070; this brings the other three up to
+-- it so the field means the same thing everywhere it appears.
 -- -----------------------------------------------------------------------------
 ALTER TABLE organization ADD COLUMN notes text;
 ALTER TABLE site         ADD COLUMN notes text;
 ALTER TABLE asset_node   ADD COLUMN notes text;
-
-UPDATE asset_node n
-   SET notes = c.notes
-  FROM credential c
- WHERE c.id = n.id AND c.notes IS NOT NULL;
-
-ALTER TABLE credential DROP COLUMN notes;
 
 COMMENT ON COLUMN organization.notes IS
   'Informal context for whoever opens this next. Not documentation: a SOP, a '
@@ -70,6 +53,7 @@ COMMENT ON COLUMN asset_node.notes IS
 ALTER TABLE organization ADD CONSTRAINT organization_notes_length CHECK (length(notes) <= 4000);
 ALTER TABLE site         ADD CONSTRAINT site_notes_length         CHECK (length(notes) <= 4000);
 ALTER TABLE asset_node   ADD CONSTRAINT asset_node_notes_length   CHECK (length(notes) <= 4000);
+ALTER TABLE credential   ADD CONSTRAINT credential_notes_length   CHECK (length(notes) <= 4000);
 
 -- -----------------------------------------------------------------------------
 -- user_favorite — clients somebody pinned.
@@ -219,13 +203,6 @@ SELECT helm.apply_personal_rls('user_dashboard');
 -- Takes no user id. The actor comes from the session context, which is what
 -- makes "record a view against somebody else" unexpressible rather than merely
 -- unauthorised.
---
--- clock_timestamp(), not now(). now() is the TRANSACTION's start time, so two
--- things opened inside one transaction get identical timestamps and the list
--- orders them arbitrarily. One page render is one transaction today, which is
--- why this looks like it does not matter — and is exactly why it would be
--- found by somebody wondering why their recent list was in the wrong order,
--- rather than by a test.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION helm.record_view(
   p_organization_id uuid DEFAULT NULL,
@@ -250,16 +227,16 @@ BEGIN
 
   IF p_organization_id IS NOT NULL THEN
     INSERT INTO user_recent_view (tenant_id, user_id, organization_id, viewed_at)
-    VALUES (v_tenant, v_actor, p_organization_id, clock_timestamp())
+    VALUES (v_tenant, v_actor, p_organization_id, now())
     ON CONFLICT (tenant_id, user_id, organization_id)
       WHERE organization_id IS NOT NULL
-      DO UPDATE SET viewed_at = clock_timestamp();
+      DO UPDATE SET viewed_at = now();
   ELSE
     INSERT INTO user_recent_view (tenant_id, user_id, node_id, viewed_at)
-    VALUES (v_tenant, v_actor, p_node_id, clock_timestamp())
+    VALUES (v_tenant, v_actor, p_node_id, now())
     ON CONFLICT (tenant_id, user_id, node_id)
       WHERE node_id IS NOT NULL
-      DO UPDATE SET viewed_at = clock_timestamp();
+      DO UPDATE SET viewed_at = now();
   END IF;
 
   DELETE FROM user_recent_view r
@@ -388,18 +365,7 @@ BEGIN
 
   END LOOP;
 
-  -- 4. And there is still exactly one notes field per item. A future migration
-  --    re-adding credential.notes would silently split the field in two again,
-  --    with the interface writing one and the export reading the other.
-  IF EXISTS (
-    SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
-    WHERE c.relname = 'credential' AND a.attname = 'notes'
-      AND a.attnum > 0 AND NOT a.attisdropped
-  ) THEN
-    RAISE EXCEPTION 'helm: notes on a credential belong to asset_node, not to credential';
-  END IF;
-
-  -- 5. Client health must stay derived. A stored health column is a cache with
+  -- 4. Client health must stay derived. A stored health column is a cache with
   --    no invalidation: a certificate expires at 3am and the badge stays green
   --    until somebody writes to the row.
   IF EXISTS (
@@ -410,7 +376,7 @@ BEGIN
     RAISE EXCEPTION 'helm: client health is a view over expirations, not a column';
   END IF;
 
-  -- 6. And it must run as the caller. A view without security_invoker runs as
+  -- 5. And it must run as the caller. A view without security_invoker runs as
   --    its OWNER, which for everything in db/sql is the migrating role, which
   --    bypasses RLS — so the view would publish every tenant's clients to
   --    anybody granted SELECT on it. That is not hypothetical: this view
@@ -424,7 +390,7 @@ BEGIN
     RAISE EXCEPTION 'helm: v_client_health is not security_invoker and would bypass RLS';
   END IF;
 
-  -- 7. And it must be derived from the one function that defines severity.
+  -- 6. And it must be derived from the one function that defines severity.
   IF NOT EXISTS (
     SELECT 1 FROM pg_depend d
     JOIN pg_rewrite r ON r.oid = d.objid

@@ -647,6 +647,26 @@ Roll back by checking out the previous tag and rebuilding. **Migrations do not
 roll back**; a release that changes the schema is forward-only, so read the
 release notes before upgrading a system holding real client data.
 
+#### If an upgrade stops with "has changed since it was applied"
+
+The migrate service compares a SHA-256 of every file in `db/sql` against what
+`helm_migration` recorded when it ran. A mismatch stops the deploy before any
+DDL is attempted, and your database is untouched — nothing is half-applied.
+
+It means the file was edited after your system ran it, which makes the version
+you have and the version the file now describes two different schemas wearing
+one name. **Do not work around it** by deleting the `helm_migration` row or by
+re-pointing the checksum: both of those tell the runner a lie it cannot later
+detect, and the next person to debug a missing column has nothing to go on.
+
+Report it with the filename from the error. The fix belongs upstream: the
+migration is restored to what it was, and a *new* migration carries the change
+forward — which your next upgrade then applies normally.
+
+Contributors: `pnpm db:check-migrations` catches this before it is committed,
+and `pnpm hooks:install` runs it automatically on every commit that touches
+`db/sql`. CI runs the same check plus a comparison against the base branch.
+
 ---
 
 ## 11. Verifying the install
