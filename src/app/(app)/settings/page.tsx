@@ -172,6 +172,12 @@ interface UnifiRow {
   last_device_count: number | null;
   last_client_count: number | null;
   asset_count: string;
+  webhook_state: UnifiMapping['webhookState'];
+  webhook_secret_set: boolean;
+  webhook_last_event_at: Date | null;
+  webhook_last_error: string | null;
+  webhook_events_received: string;
+  webhook_events_rejected: string;
 }
 
 function toUnifiMapping(row: UnifiRow): UnifiMapping {
@@ -199,6 +205,14 @@ function toUnifiMapping(row: UnifiRow): UnifiMapping {
     lastDeviceCount: row.last_device_count,
     lastClientCount: row.last_client_count,
     assetCount: Number(row.asset_count),
+    // Receiver health (0450). Whether a secret is set, never what it is —
+    // helm.unifi_mappings() has no column that could carry it.
+    webhookState: row.webhook_state,
+    webhookSecretSet: row.webhook_secret_set,
+    webhookLastEventAt: row.webhook_last_event_at?.toISOString() ?? null,
+    webhookLastError: row.webhook_last_error,
+    webhookEventsReceived: Number(row.webhook_events_received),
+    webhookEventsRejected: Number(row.webhook_events_rejected),
   };
 }
 
@@ -400,6 +414,10 @@ export default async function SettingsPage() {
           mappings={unifi.map(toUnifiMapping)}
           organizations={organizations}
           canManage={canManageNetwork}
+          // Same origin the OIDC redirect URI is built from, and for the same
+          // reason: the only thing that knows the address a controller will
+          // reach Helm on is the request, and a stored copy would drift.
+          callbackBase={origin}
         />
 
         <OidcSettingsCard initial={toOidcSettings(oidc, origin)} />

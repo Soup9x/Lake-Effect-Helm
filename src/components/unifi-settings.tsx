@@ -40,6 +40,12 @@ export interface UnifiMapping {
   lastDeviceCount: number | null;
   lastClientCount: number | null;
   assetCount: number;
+  webhookState: 'disabled' | 'pending' | 'active' | 'unsupported' | 'failing';
+  webhookSecretSet: boolean;
+  webhookLastEventAt: string | null;
+  webhookLastError: string | null;
+  webhookEventsReceived: number;
+  webhookEventsRejected: number;
 }
 
 export interface OrganizationOption {
@@ -94,6 +100,42 @@ function healthLabel(mapping: UnifiMapping): string {
   return mapping.lastPollOk ? 'Polling' : 'Failing';
 }
 
+/**
+ * How the receiver is doing, in words that do not overstate it.
+ *
+ * `unsupported` is deliberately NOT styled as a failure. A console that does
+ * not offer webhook registration is a completely normal console; the poll is
+ * the source of truth and nothing is degraded. Showing it in red would send
+ * operators looking for a fix that does not exist.
+ */
+const WEBHOOK_COPY: Record<UnifiMapping['webhookState'], { label: string; tone: BadgeTone; detail: string }> = {
+  disabled: {
+    label: 'Live events off',
+    tone: 'neutral',
+    detail: 'Helm polls this controller on its schedule. Turning live events on shortens the gap between a device changing state and Helm noticing.',
+  },
+  pending: {
+    label: 'Live events: waiting',
+    tone: 'neutral',
+    detail: 'Configured, but nothing has arrived yet. Paste the callback URL and secret into the console if you have not already.',
+  },
+  active: {
+    label: 'Live events on',
+    tone: 'ok',
+    detail: 'Events are arriving and being applied between polls.',
+  },
+  unsupported: {
+    label: 'Live events unavailable',
+    tone: 'neutral',
+    detail: 'This controller does not offer webhook registration. Nothing is wrong and nothing is missing — polling covers everything; live events would only have been faster.',
+  },
+  failing: {
+    label: 'Live events rejected',
+    tone: 'warning',
+    detail: 'Events are arriving and being refused. Usually the secret in the console no longer matches the one here.',
+  },
+};
+
 /** Group the fingerprint so a human can actually compare it against a console. */
 function readableFingerprint(hex: string): string {
   return (hex.match(/.{2}/g) ?? []).join(':');
@@ -127,10 +169,13 @@ export function UnifiSettingsCard({
   mappings,
   organizations,
   canManage,
+  callbackBase,
 }: {
   mappings: UnifiMapping[];
   organizations: OrganizationOption[];
   canManage: boolean;
+  /** The origin a controller will reach Helm on, for the callback URL. */
+  callbackBase: string;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState<string | null>(null);
@@ -139,6 +184,79 @@ export function UnifiSettingsCard({
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [tested, setTested] = useState<Record<string, TestResult>>({});
+  // Shown once, held only in this component's state, never fetched back.
+  const [issued, setIssued] = useState<string | null>(null);
+  const [issuedFor, setIssuedFor] = useState<string | null>(null);
+  const [registrationNote, setRegistrationNote] = useState<string | null>(null);
+
+  /**
+   * Issue a signing secret, and optionally ask the controller to register.
+   *
+   * Registration is attempted rather than assumed: a console that answers 404
+   * is reported as unavailable, which is a normal outcome and leaves the
+   * operator adding the endpoint by hand with the secret above.
+   */
+  async function enableWebhook(mapping: UnifiMapping) {
+    setBusy(true);
+    setFeedback(null);
+    setIssued(null);
+    setRegistrationNote(null);
+    try {
+      const response = await fetch(`/api/network/mappings/${mapping.id}/webhook`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          attemptRegistration: true,
+          callbackUrl: `${callbackBase}/api/network/webhook/${mapping.id}`,
+        }),
+      });
+      const payload = (await response.json()) as {
+        secret?: string;
+        registration?: { attempted: boolean; ok: boolean; message: string | null };
+        error?: { message?: string };
+      };
+      if (!response.ok) {
+        setFeedback({
+          ok: false,
+          message: payload.error?.message ?? `Could not turn live events on (${response.status}).`,
+        });
+        return;
+      }
+      setIssued(payload.secret ?? null);
+      setIssuedFor(mapping.id);
+      setRegistrationNote(
+        payload.registration?.attempted && !payload.registration.ok
+          ? payload.registration.message
+          : null,
+      );
+      router.refresh();
+    } catch {
+      setFeedback({ ok: false, message: 'Could not reach the server.' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disableWebhook(mappingId: string) {
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const response = await fetch(`/api/network/mappings/${mappingId}/webhook`, { method: 'DELETE' });
+      if (!response.ok) {
+        setFeedback({ ok: false, message: `Could not turn live events off (${response.status}).` });
+        return;
+      }
+      setIssued(null);
+      setIssuedFor(null);
+      setFeedback({
+        ok: true,
+        message: 'Live events off and the signing secret revoked. Polling is unaffected.',
+      });
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function startNew() {
     setForm({ ...BLANK, organizationId: organizations[0]?.id ?? '' });
@@ -430,6 +548,76 @@ export function UnifiSettingsCard({
                     </div>
                   </div>
                 )}
+
+                <div className="mt-2 rounded border border-border-strong/60 p-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone={WEBHOOK_COPY[mapping.webhookState].tone}>
+                      {WEBHOOK_COPY[mapping.webhookState].label}
+                    </Badge>
+                    {mapping.webhookEventsReceived > 0 && (
+                      <span className="text-xs text-ink-faint">
+                        {mapping.webhookEventsReceived} received
+                        {mapping.webhookLastEventAt && (
+                          <> &middot; last {formatDateTime(mapping.webhookLastEventAt)}</>
+                        )}
+                      </span>
+                    )}
+                    {mapping.webhookEventsRejected > 0 && (
+                      <span className="text-xs text-warning">
+                        {mapping.webhookEventsRejected} rejected
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-ink-muted">
+                    {WEBHOOK_COPY[mapping.webhookState].detail}
+                  </p>
+                  {mapping.webhookLastError && mapping.webhookState !== 'unsupported' && (
+                    <p className="mt-1 text-xs text-warning">{mapping.webhookLastError}</p>
+                  )}
+
+                  {issuedFor === mapping.id && issued && (
+                    <div className="mt-2 space-y-1 rounded border border-brand/40 bg-brand/5 p-2 text-xs">
+                      <div className="font-medium text-ink">
+                        Copy these into the console now — the secret is not shown again.
+                      </div>
+                      <div className="text-ink-muted">Callback URL</div>
+                      <div className="font-mono break-all text-[11px] text-ink">
+                        {callbackBase}/api/network/webhook/{mapping.id}
+                      </div>
+                      <div className="text-ink-muted">Signing secret</div>
+                      <div className="font-mono break-all text-[11px] text-ink">{issued}</div>
+                      {registrationNote && (
+                        <div className="pt-1 text-ink-muted">{registrationNote}</div>
+                      )}
+                    </div>
+                  )}
+
+                  {canManage && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => enableWebhook(mapping)}
+                      >
+                        <Radio aria-hidden />
+                        {mapping.webhookSecretSet ? 'Issue a new secret' : 'Turn live events on'}
+                      </Button>
+                      {mapping.webhookSecretSet && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy}
+                          onClick={() => disableWebhook(mapping.id)}
+                        >
+                          Turn off
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 {canManage && editing !== mapping.id && (
                   <div className="mt-2 flex flex-wrap gap-2">

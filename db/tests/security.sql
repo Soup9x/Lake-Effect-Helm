@@ -1699,11 +1699,35 @@ SELECT helm_test.check('...but a failed one is',
 --     from the request path.
 
 \echo '-- the API key lives in the vault, like every other credential --'
-SELECT helm_test.check('the mapping has no bespoke credential column',
+-- ONE NAMED EXCEPTION, and it is worth spelling out because this assertion
+-- caught it rather than waving it through.
+--
+-- 0450 added webhook_secret_ciphertext, the INBOUND signing secret. That one is
+-- a column deliberately: the receiver is unauthenticated, so verifying the
+-- signature is what establishes whose request it is — there is no actor for
+-- reveal_secret() to attribute a read to and no tenant context to open one
+-- under, and a reveal per inbound event would write an audit row per inbound
+-- event. 0420 reached the same conclusion for the outbound signing secret.
+--
+-- The rule it does NOT get an exception from is the one that matters: the
+-- controller's API key, which a person can ask to see and which unlocks the
+-- whole inventory, is still a reference into `secret`. So the check is narrowed
+-- to its actual intent and the exception is named, rather than the pattern
+-- being loosened until it stops meaning anything.
+SELECT helm_test.check('the mapping has no bespoke credential column but the named one',
   NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name = 'unifi_site_mapping'
-      AND column_name ~ '(api_key|credential|secret|token|password)s?_(enc|ciphertext|plain)$'));
+      AND column_name ~ '(api_key|credential|secret|token|password)s?_(enc|ciphertext|plain)$'
+      AND column_name <> 'webhook_secret_ciphertext'));
+SELECT helm_test.check('...and the exception is exactly the inbound signing envelope',
+  (SELECT count(*) FROM information_schema.columns
+    WHERE table_name = 'unifi_site_mapping'
+      AND column_name ~ '(api_key|credential|secret|token|password)s?_(enc|ciphertext|plain)$') = 1);
+SELECT helm_test.check('the API KEY in particular is still a reference, not a column',
+  NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'unifi_site_mapping' AND column_name ~ '^api_key_(enc|ciphertext)'));
 SELECT helm_test.check('it references secret instead',
   EXISTS (SELECT 1 FROM pg_constraint
           WHERE conrelid = 'unifi_site_mapping'::regclass AND conname = 'unifi_mapping_secret_fk'));
@@ -1895,6 +1919,158 @@ BEGIN
   PERFORM helm_test.check('...and cannot take it by UPDATE', v_rows = 0);
 END;
 $steal$;
+ROLLBACK;
+
+\echo ''
+\echo '== 39. A webhook receiver is a door, and it is only ever a shortcut =='
+-- 0450 gave Helm its first UNAUTHENTICATED endpoint that writes tenant data.
+-- Three things had to be true for that to be acceptable, and each is asserted
+-- here rather than trusted to the route:
+--
+--   * the only lookup that crosses a tenant boundary is by primary key and
+--     hands back no credential the request path could misuse;
+--   * the fast path obeys every rule the poll obeys, because two write paths
+--     into one table is how a rule ends up enforced on only one of them;
+--   * nothing the poll does depends on any of it. Webhook support is not
+--     guaranteed on a UniFi console, so an integration that needed it would be
+--     broken on an unknown fraction of deployments with no way to tell which.
+
+\echo '-- the signing secret is not reachable, and not reported --'
+-- It is a column here rather than a vault secret because the receiver is
+-- unauthenticated: there is no actor for reveal_secret() to attribute a read
+-- to, and an audit row per inbound event would bury the threat records this
+-- exists to produce. 0420 made the same call for the outbound secret. What
+-- follows is the boundary that buys back.
+SELECT helm_test.check('the settings function reports only WHETHER a secret is set',
+  (SELECT pg_get_function_result(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'unifi_mappings')
+  !~* '(ciphertext|wrapped_dek|secret_nonce|secret_tag|secret_aad)');
+SELECT helm_test.check('...and it does report that much, so the page can say so',
+  (SELECT pg_get_function_result(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'unifi_mappings')
+  LIKE '%webhook_secret_set%');
+SELECT helm_test.check('the envelope is all-or-nothing',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'unifi_site_mapping'::regclass
+            AND conname = 'unifi_webhook_envelope_complete'));
+-- A mapping cannot claim to be listening with nothing to verify against;
+-- otherwise the receiver would be deciding what to do with an unverifiable
+-- request rather than refusing it outright.
+SELECT helm_test.check('a mapping cannot listen without a secret',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'unifi_site_mapping'::regclass
+            AND conname = 'unifi_webhook_listening_needs_secret'));
+
+\echo '-- the one cross-tenant lookup, and its limits --'
+SELECT helm_test.check('it takes a primary key, so it cannot enumerate',
+  (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'unifi_webhook_target'
+     AND p.pronargs = 1 AND p.proargtypes[0] = 'uuid'::regtype) = 1);
+SELECT helm_test.check('it hands back no controller API key',
+  (SELECT pg_get_function_result(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'unifi_webhook_target') !~* 'api_key');
+-- The real enumerator is still the worker's alone. 0430's guard said so for the
+-- poll; adding a request-path receiver must not have quietly changed it.
+SELECT helm_test.check('helm_app still cannot enumerate every tenant''s controllers',
+  NOT has_function_privilege('helm_app', 'helm.unifi_poll_backlog(integer)', 'EXECUTE'));
+
+\echo '-- the fast path obeys the slow path''s rules --'
+SELECT helm_test.check('the webhook telemetry update names no user-owned column',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'apply_webhook_telemetry')
+  !~ '(custom_name_enc|asset_tag|department|notes|maintenance_status|organization_id)\s*=');
+-- The poll enumerates a site with the controller's own authority; an event
+-- arrives over a path whose only check is a shared secret. Only one of those
+-- should be able to put a new device into a client's documentation.
+SELECT helm_test.check('...and it cannot create an asset at all',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'apply_webhook_telemetry')
+  !~* 'INSERT\s+INTO\s+network_assets');
+
+\echo '-- configuring the receiver is the same grant as the rest of the mapping --'
+SELECT helm_test.check('setting the signing secret demands integration:network:manage',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'set_unifi_webhook_secret')
+  LIKE '%integration:network:manage%');
+SELECT helm_test.check('...and so does changing its state',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'set_unifi_webhook_state')
+  LIKE '%integration:network:manage%');
+
+\echo '-- a threat record keeps its addresses out of the audit log --'
+-- audit_log.metadata is documented and trigger-enforced as non-sensitive, and
+-- an IDS alert is nothing but sensitive: source address, destination address,
+-- often a MAC. The audit row carries a DIGEST of the ciphertext instead, so the
+-- hash chain commits to the detail without the audit log ever holding it.
+SELECT helm_test.check('the threat recorder puts a digest in the audit metadata',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'record_network_threat')
+  LIKE '%detail_sha256%');
+SELECT helm_test.check('...and no address of any kind',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'record_network_threat')
+  !~ 'jsonb_build_object\([^)]*(source_ip|dest_ip|p_source_ip_enc|mac)');
+SELECT helm_test.check('the detail itself is NOT NULL, so a threat cannot be recorded empty',
+  EXISTS (SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'network_threat_event' AND column_name = 'detail_enc'
+            AND is_nullable = 'NO'));
+-- Severity and rule name stay queryable on purpose: they are how an operator
+-- finds the event and they identify neither a person nor a machine.
+SELECT helm_test.check('severity stays queryable',
+  EXISTS (SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'network_threat_event' AND column_name = 'severity'
+            AND data_type <> 'bytea'));
+SELECT helm_test.check('a replayed alert cannot be recorded twice',
+  EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+          WHERE i.indrelid = 'network_threat_event'::regclass AND i.indisunique
+            AND pg_get_indexdef(i.indexrelid) LIKE '%external_event_id%'));
+
+\echo '-- and the poll owes the receiver nothing --'
+-- The property the whole design rests on. A poll that consulted webhook state
+-- would make an optional, unguaranteed transport load-bearing.
+SELECT helm_test.check('no polling function mentions webhooks',
+  NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'helm'
+      AND p.proname IN ('unifi_poll_backlog', 'claim_unifi_poll', 'finish_unifi_poll',
+                        'upsert_network_asset', 'record_asset_ip')
+      AND pg_get_functiondef(p.oid) ~* 'webhook'));
+
+\echo '-- threat detail is tenant data like anything else --'
+SELECT helm_test.check('network_threat_event carries RLS, forced',
+  NOT EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = 'network_threat_event'
+      AND NOT (c.relrowsecurity AND c.relforcerowsecurity)));
+
+-- Behavioural, because the catalogue check proves the switch is on and says
+-- nothing about the policy being right.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO network_threat_event (
+  tenant_id, organization_id, audit_event_uid, severity, signature,
+  data_key_id, detail_enc)
+VALUES (
+  :t1, :t1_acme, gen_random_uuid(), 'critical', 'ET MALWARE probe',
+  (SELECT id FROM tenant_data_key WHERE tenant_id = :t1 AND status = 'active' LIMIT 1),
+  decode(repeat('ab', 40), 'hex'));
+SELECT helm_test.check('the writing tenant sees its own threat record',
+  (SELECT count(*) FROM network_threat_event WHERE signature = 'ET MALWARE probe') = 1);
+
+SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('the other tenant cannot see it',
+  NOT EXISTS (SELECT 1 FROM network_threat_event WHERE signature = 'ET MALWARE probe'));
+SELECT helm_test.check('...nor count it',
+  (SELECT count(*) FROM network_threat_event) = 0);
 ROLLBACK;
 
 \echo ''

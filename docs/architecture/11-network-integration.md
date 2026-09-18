@@ -307,7 +307,144 @@ rather than showing a tick that means more than it does.
 
 ---
 
-## 10. Files
+## 10. Webhooks: a shortcut, never a dependency
+
+Part 2 adds an inbound receiver so a device going offline shows up in seconds
+rather than at the next poll. Everything about its design follows from one
+constraint:
+
+**Webhook delivery is not guaranteed on a UniFi console.** Registration is not
+part of the documented Integration API surface for Network 9.x, support varies
+by build, and no version number reliably predicts it. An integration whose
+correctness depended on it would be broken on an unknown fraction of
+deployments with no way to tell which.
+
+So the poll stays the source of truth and the receiver only ever writes state
+the poll would have written anyway. A migration guard and a security assertion
+both check that no polling function so much as mentions webhooks — because the
+way this guarantee dies is somebody making the poll "smarter" by consulting
+webhook state.
+
+A controller that refuses registration is recorded as `unsupported` and the
+settings card says so in those words: *nothing is wrong and nothing is missing —
+polling covers everything; live events would only have been faster.* It is not
+styled as an error, because it is not one.
+
+### The receiver
+
+`POST /api/network/webhook/{mappingId}`
+
+Order of operations, which is the security property:
+
+1. **Read the raw body as bytes.** `request.text()`, not `request.json()`: the
+   signature covers exactly what was transmitted, and parsing then
+   re-serialising does not reproduce it — key order, whitespace and number
+   formatting all move. A receiver that verifies a round-tripped body verifies
+   something the sender never signed.
+2. **Look the mapping up by the id in the path.** One row, by primary key.
+3. **Verify HMAC-SHA256 over the body**, constant-time. Nothing is parsed,
+   decoded or written before this succeeds.
+4. **Only then** open a tenant context and act, as `system_sync` — the same
+   machine identity the poll runs as, so the audit trail has one actor for these
+   rows rather than two.
+
+An unknown mapping and a bad signature return the **same** refusal, so the
+endpoint cannot be used to discover which mapping ids exist. Refusals are `202`
+rather than `4xx`: a controller that receives an error retries, and a controller
+retrying a request Helm will never accept is a loop neither side can break.
+
+**Documented assumption.** The Integration API does not publish a webhook
+signing format. Helm therefore *defines* the one it verifies — HMAC-SHA256 over
+the exact body, hex, under any of `x-unifi-signature`, `x-ubnt-signature`,
+`x-webhook-signature`, `x-hub-signature-256` or `x-signature`, with an optional
+`sha256=` prefix. If a future console signs differently, `SIGNATURE_HEADERS` and
+`verifySignature` in `src/lib/unifi/webhook-secret.ts` are the two things to
+change, and polling keeps working meanwhile.
+
+### Why the signing secret is a column when the API key is not
+
+This looks inconsistent with §3 and is not.
+
+The receiver is **unauthenticated**. Verifying the signature is what establishes
+whose request it is, so the secret must be readable before there is an actor for
+`helm.reveal_secret()` to attribute a read to or a tenant context to open one
+under. And a reveal per inbound event would write an audit row per inbound
+event — burying the threat records this exists to produce under records of Helm
+reading its own key. `0420` reached the same conclusion for the outbound signing
+secret, and this follows its shape rather than inventing a third.
+
+What that costs is bought back elsewhere: the envelope is self-contained and
+sealed under a purpose-bound DEK, bound by AAD to `(tenant, mapping)` so a row
+copied between mappings or deployments fails to open, absent from
+`helm.unifi_mappings()` entirely, and **revoked** when the receiver is turned
+off rather than merely hidden. The controller's API key — the one a person can
+ask to see, which unlocks the whole inventory — is still a reference into
+`secret`, and a security assertion checks specifically that.
+
+### Threat records
+
+A high or critical event writes two things in one transaction:
+
+- an **audit row**, `network.threat_detected`, carrying severity, rule name and
+  category — and no address, MAC or hostname;
+- a **`network_threat_event` row** holding the source address, destination
+  address and the controller's whole original event, envelope-encrypted with the
+  tenant DEK exactly as `network_assets` encrypts a MAC.
+
+The whole original goes in sealed rather than picked over field by field,
+because a controller's event can carry addresses anywhere in its structure and
+the alternative is deciding, for every future firmware, which new key is
+sensitive.
+
+**Why not a column on `audit_log`,** which is where a threat report obviously
+belongs and where this nearly went:
+
+- `audit_log.metadata` is documented and trigger-enforced as non-sensitive, and
+  an IDS alert is nothing but sensitive. Putting addresses there would
+  contradict the column's contract in the same schema that states it.
+- `audit_log.row_hash` is computed from a canonical form pinned field by field —
+  deliberately, so adding a column does not invalidate every hash already
+  written. The flip side is that a new column would **not be covered by the
+  chain**: encrypted detail sitting in `audit_log` would be the one part of an
+  audit record alterable without detection.
+
+Instead the audit row's metadata carries `detail_sha256`. The chain commits to a
+digest of the ciphertext, so the detail is tamper-evident without the audit log
+ever holding an address. A test asserts the digest matches the stored bytes.
+
+A replayed alert is caught on the controller's own event id, not by the
+signature — a replay *is* a validly signed request, and asking signature
+verification to catch it would be asking the wrong question.
+
+### What the fast path may and may not do
+
+`helm.apply_webhook_telemetry()` names no user-owned column, exactly as
+`helm.upsert_network_asset()` does not, and **cannot create an asset at all**.
+The poll enumerates a site with the controller's own authority; an event arrives
+over a path whose only check is a shared secret. Only one of those should be
+able to put a new device into a client's documentation. An event for an unknown
+MAC updates nothing and the next poll picks the device up properly.
+
+Both rules are checked by reading the function definition, in a migration guard
+and again in the security suite, because two write paths into one table is how a
+rule ends up enforced on only one of them.
+
+### Configuration, and the absence of an environment variable
+
+There is none, and that is worth saying because this project has twice had to
+clean up variables nothing read. The signing secret is generated per mapping,
+32 bytes of CSPRNG, stored sealed and shown to the operator exactly once. The
+callback URL is built from the request origin — the same value the OIDC redirect
+URI uses, and for the same reason: the only thing that knows the address a
+controller will reach Helm on is the request.
+
+`HELM_BLIND_INDEX_KEY_B64` remains required, for the receiver as much as the
+poll: matching an event to a device is a MAC blind-index lookup.
+
+---
+
+## 11. Files
+
 
 | Path | What |
 | --- | --- |
@@ -318,6 +455,11 @@ rather than showing a tick that means more than it does.
 | `src/app/api/network/mappings/` | Configuration, deletion, connection test |
 | `src/components/unifi-settings.tsx` | The settings card |
 | `tests/support/fake-unifi.ts` | An HTTPS stub with a real self-signed certificate |
+| `db/sql/0450_unifi_webhooks.sql` | Receiver schema, threat records, eight guards |
+| `src/lib/unifi/webhook.ts` | The receiver: verify, then place, then apply |
+| `src/lib/unifi/webhook-secret.ts` | Sealing and verifying the signing secret |
+| `src/lib/unifi/events.ts` | Parsing what a console posts, tolerantly |
+| `src/app/api/network/webhook/[mappingId]/` | The unauthenticated endpoint |
 
 Removing a mapping does **not** delete the inventory. `network_assets.mapping_id`
 is `ON DELETE SET NULL`, so losing a controller and losing a year of

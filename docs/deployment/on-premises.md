@@ -138,6 +138,26 @@ which Tier 3 holds. It is deliberately separate from `tenant:write`, so a senior
 technician can be trusted with a client's network gear without also being handed
 the MSP's authentication settings and key custody.
 
+**Live events (optional).** Helm can also accept events pushed by the console,
+which shortens the gap between a device changing state and Helm noticing from
+minutes to seconds. It is a convenience and nothing depends on it:
+
+- Turn it on per controller from the settings card. Helm generates a signing
+  secret, shows it **once**, and gives you a callback URL to paste into the
+  console alongside it.
+- **There is no environment variable for the secret.** It is generated per
+  controller and stored encrypted; the callback URL is derived from the address
+  you reach Helm on.
+- The controller must be able to reach Helm over HTTPS — the reverse of the
+  polling direction, so a one-way firewall rule that allows polling may not
+  allow this.
+- If the card says **"Live events unavailable"**, that console does not offer
+  webhook registration. Nothing is wrong and nothing is missing: polling covers
+  everything and is unaffected. Some consoles have a manual webhook or
+  alert-forwarding setting you can point at the callback URL instead.
+- Turning live events off revokes the secret, so one pasted into a console
+  stops working immediately.
+
 Full design: [`../architecture/11-network-integration.md`](../architecture/11-network-integration.md).
 
 ---

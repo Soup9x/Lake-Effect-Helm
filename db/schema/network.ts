@@ -58,6 +58,39 @@ export const unifiSiteMapping = pgTable('unifi_site_mapping', {
   lastDeviceCount: integer('last_device_count'),
   lastClientCount: integer('last_client_count'),
 
+  /*
+   * The inbound webhook receiver (0450).
+   *
+   * THE SIGNING SECRET IS A COLUMN HERE AND THE API KEY IS NOT, which looks
+   * inconsistent and is not. The receiver is unauthenticated: verifying the
+   * signature is what establishes whose request it is, so there is no actor for
+   * reveal_secret() to attribute a read to and no tenant context to open one
+   * under — and a reveal per inbound event would write an audit row per inbound
+   * event. 0420 reached the same conclusion for the outbound signing secret.
+   * The envelope is self-contained and bound by AAD to this mapping.
+   */
+  webhookWrapProvider: text('webhook_wrap_provider'),
+  webhookKekId: text('webhook_kek_id'),
+  webhookWrappedDek: bytea('webhook_wrapped_dek'),
+  webhookSecretCiphertext: bytea('webhook_secret_ciphertext'),
+  webhookSecretNonce: bytea('webhook_secret_nonce'),
+  webhookSecretTag: bytea('webhook_secret_tag'),
+  webhookSecretAad: text('webhook_secret_aad'),
+
+  /**
+   * disabled | pending | active | unsupported | failing.
+   *
+   * `unsupported` records that the controller refused registration, which is
+   * expected on older consoles and affects nothing: the poll remains the source
+   * of truth and webhooks are only ever a latency improvement.
+   */
+  webhookState: text('webhook_state').notNull().default('disabled'),
+  webhookRegisteredAt: tstz('webhook_registered_at'),
+  webhookLastEventAt: tstz('webhook_last_event_at'),
+  webhookLastError: text('webhook_last_error'),
+  webhookEventsReceived: bigint('webhook_events_received', { mode: 'number' }).notNull().default(0),
+  webhookEventsRejected: bigint('webhook_events_rejected', { mode: 'number' }).notNull().default(0),
+
   createdAt: tstz('created_at').notNull().defaultNow(),
   createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
@@ -157,3 +190,64 @@ export const assetIpHistory = pgTable('asset_ip_history', {
 export type UnifiSiteMapping = typeof unifiSiteMapping.$inferSelect;
 export type NetworkAsset = typeof networkAssets.$inferSelect;
 export type AssetIpHistory = typeof assetIpHistory.$inferSelect;
+
+/**
+ * The encrypted half of a threat audit record (0450).
+ *
+ * WHY THIS IS NOT A COLUMN ON audit_log, which is where a threat report
+ * obviously belongs and where it nearly went:
+ *
+ *   * audit_log.metadata is documented and trigger-enforced as NON-SENSITIVE.
+ *     An IDS alert names source and destination addresses and often a MAC — all
+ *     of which 0430 treats as identifying and encrypts on network_assets.
+ *
+ *   * audit_log.rowHash is computed from a canonical form pinned field by
+ *     field, so a new column would not be covered by the hash chain. Encrypted
+ *     detail sitting there would be the one part of an audit record that could
+ *     be altered without detection. Instead the audit row's metadata carries
+ *     sha256(detailEnc), so the chain commits to the ciphertext without the
+ *     audit log ever holding an address.
+ *
+ * The audit row remains the record that something happened. This is the part
+ * you need a key to read.
+ */
+export const networkThreatEvent = pgTable('network_threat_event', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenant.id, { onDelete: 'cascade' }),
+  organizationId: uuid('organization_id').notNull(),
+  mappingId: uuid('mapping_id').references(() => unifiSiteMapping.id, { onDelete: 'set null' }),
+  /** Null when the threat named a device the poll has never enumerated. */
+  assetId: uuid('asset_id').references(() => networkAssets.id, { onDelete: 'set null' }),
+
+  /**
+   * The audit row this belongs to. Not a foreign key: audit_log is partitioned
+   * on occurred_at and its primary key is (id, occurred_at), so a reference by
+   * event_uid alone cannot be one. Audit rows are immutable and never deleted,
+   * which is what an FK would have been buying.
+   */
+  auditEventUid: uuid('audit_event_uid').notNull(),
+
+  /** Queryable on purpose: how an operator finds the event. Identifies nobody. */
+  severity: text('severity').notNull(),
+  signature: text('signature'),
+  category: text('category'),
+  detectedAt: tstz('detected_at').notNull().defaultNow(),
+  /** The controller's own id, used to refuse a replayed alert. */
+  externalEventId: text('external_event_id'),
+
+  dataKeyId: uuid('data_key_id').notNull().references(() => tenantDataKey.id, { onDelete: 'restrict' }),
+  sourceIpEnc: bytea('source_ip_enc'),
+  destIpEnc: bytea('dest_ip_enc'),
+  /** The controller's whole event, sealed: addresses can appear anywhere in it. */
+  detailEnc: bytea('detail_enc').notNull(),
+
+  sourceIpBlindIndex: bytea('source_ip_blind_index'),
+
+  createdAt: tstz('created_at').notNull().defaultNow(),
+}, (t) => [
+  index('network_threat_tenant_time_idx').on(t.tenantId, t.detectedAt),
+  index('network_threat_org_idx').on(t.tenantId, t.organizationId, t.detectedAt),
+  index('network_threat_audit_idx').on(t.auditEventUid),
+  uniqueIndex('network_threat_external_id_idx').on(t.tenantId, t.mappingId, t.externalEventId),
+  index('network_threat_source_idx').on(t.tenantId, t.sourceIpBlindIndex),
+]);

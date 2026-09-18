@@ -481,3 +481,137 @@ export async function inspectCertificate(
     });
   });
 }
+
+/**
+ * Ask a controller to post events to Helm.
+ *
+ * THIS IS EXPECTED TO FAIL ON A LOT OF CONSOLES, and the return type says so
+ * rather than throwing.
+ *
+ * Webhook registration is not part of the Integration API surface documented
+ * for Network 9.x. Some builds expose it, some do not, and there is no version
+ * number that reliably predicts which — so Helm tries the call and believes the
+ * answer. A 404, 405 or 501 means "this console does not do this", which is
+ * reported as `supported: false` and recorded against the mapping as
+ * `unsupported`: not an error, nothing for an operator to fix, and polling is
+ * completely unaffected.
+ *
+ * A genuine fault — unreachable, a rejected key, a pinned certificate that no
+ * longer matches — still throws UnifiError, because those are worth fixing and
+ * are the same faults the poll would hit.
+ */
+export interface WebhookRegistration {
+  /** False when the controller does not implement registration at all. */
+  readonly supported: boolean;
+  /** What to tell the operator. Never null when supported is false. */
+  readonly message: string | null;
+}
+
+export interface WebhookRegistrationTarget extends UnifiTarget {
+  readonly siteId: string;
+  readonly callbackUrl: string;
+}
+
+export async function registerWebhook(
+  target: WebhookRegistrationTarget,
+): Promise<WebhookRegistration> {
+  let origin: URL;
+  try {
+    origin = new URL(target.controllerUrl);
+  } catch {
+    throw new UnifiError(`${target.controllerUrl} is not a URL`, 'malformed');
+  }
+
+  const payload = JSON.stringify({
+    url: target.callbackUrl,
+    events: ['device.connected', 'device.disconnected', 'client.connected', 'client.disconnected', 'ids.alert'],
+  });
+
+  const agent = agentFor(target);
+  const timeoutMs = target.timeoutMs ?? 15_000;
+
+  return new Promise<WebhookRegistration>((resolve, reject) => {
+    const req = httpsRequest(
+      {
+        protocol: 'https:',
+        hostname: origin.hostname,
+        port: origin.port || 443,
+        path: `${INTEGRATION_PREFIX}/sites/${encodeURIComponent(target.siteId)}/webhooks`,
+        method: 'POST',
+        agent,
+        headers: {
+          'X-API-KEY': target.apiKey,
+          accept: 'application/json',
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(payload),
+          'user-agent': 'lake-effect-helm/1 (+network-inventory)',
+        },
+        timeout: timeoutMs,
+      } satisfies RequestOptions,
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const status = res.statusCode ?? 0;
+
+          // The expected answer on a console without the feature.
+          if (status === 404 || status === 405 || status === 501) {
+            resolve({
+              supported: false,
+              message:
+                'This controller does not offer webhook registration over the Integration API. ' +
+                'Polling continues normally. If the console has a webhook or alert-forwarding ' +
+                'setting, point it at the callback URL by hand and Helm will accept the events.',
+            });
+            return;
+          }
+
+          if (status === 401 || status === 403) {
+            reject(
+              new UnifiError(
+                `the controller rejected the API key (${status})`,
+                'unauthorized',
+                'Check the key in the console under Settings → Control Plane → Integrations → API Keys.',
+                status,
+              ),
+            );
+            return;
+          }
+
+          if (status >= 200 && status < 300) {
+            resolve({ supported: true, message: null });
+            return;
+          }
+
+          // Anything else is reported rather than guessed at. Treated as
+          // unsupported so the mapping is not left claiming to be listening.
+          resolve({
+            supported: false,
+            message:
+              `The controller answered ${status} to the registration request. ` +
+              'Polling is unaffected; add the endpoint in the console by hand if it offers one.',
+          });
+        });
+      },
+    );
+
+    req.on('error', (error: NodeJS.ErrnoException) => {
+      reject(
+        new UnifiError(
+          `could not reach ${origin.host}: ${error.message}`,
+          error.code === 'CERT_HAS_EXPIRED' || error.message.includes('certificate')
+            ? 'tls_untrusted'
+            : 'unreachable',
+          undefined,
+        ),
+      );
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new UnifiError(`${origin.host} did not answer within ${timeoutMs}ms`, 'unreachable'));
+    });
+
+    req.end(payload);
+  });
+}
