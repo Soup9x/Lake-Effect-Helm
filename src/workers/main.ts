@@ -22,6 +22,7 @@ import { integrationSyncJob } from './sync';
 import { renderExportsJob, expireExportsJob } from './exports';
 import { pruneAuthAttemptsJob } from './auth-hygiene';
 import { fanOutNotificationsJob, deliverNotificationsJob } from './notifications';
+import { unifiSyncJob } from './unifi-sync';
 import { WorkerRuntime, createLogger, type LogLevel } from './runtime';
 
 function jobs() {
@@ -38,6 +39,10 @@ function jobs() {
     // detection, so a deployment running the worker at all runs them.
     fanOutNotificationsJob(),
     deliverNotificationsJob(),
+    // Which mappings are due is decided by next_poll_at in the database, from
+    // each mapping's own interval — this job's tick is the granularity of
+    // "due", not a polling rate.
+    unifiSyncJob(),
   ];
 }
 

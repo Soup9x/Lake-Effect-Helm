@@ -746,6 +746,14 @@ $$;
 -- controller happens to see it next.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION helm.upsert_network_asset(
+  -- THE CALLER CHOOSES THE ID, AND MUST. Every encrypted column on this row is
+  -- sealed with an AAD built from (tenant, asset id, field), which means the id
+  -- has to exist BEFORE the ciphertext does. Letting the default fill it in
+  -- produced exactly one bug: the row inserted fine, and every sealed field on
+  -- it was undecryptable forever, because the AAD named an id no row had. It
+  -- is not a security boundary -- a caller-supplied id can collide and raise,
+  -- but RLS still scopes every read by tenant -- it is a correctness one.
+  p_asset_id        uuid,
   p_mapping_id      uuid,
   p_organization_id uuid,
   p_asset_type      network_asset_type,
@@ -776,13 +784,13 @@ DECLARE
   v_new    boolean;
 BEGIN
   INSERT INTO network_assets (
-    tenant_id, organization_id, mapping_id, asset_type, mac_blind_index,
+    id, tenant_id, organization_id, mapping_id, asset_type, mac_blind_index,
     data_key_id, mac_address_enc, ip_address_enc, hostname_enc, serial_enc,
     model, firmware_version, device_state, uptime_seconds, signal_dbm,
     switch_port, uplink_mac_blind_index, vlan_id, ssid, is_wired,
     is_online, last_seen_at, last_synced_at)
   VALUES (
-    v_tenant, p_organization_id, p_mapping_id, p_asset_type, p_mac_blind_index,
+    p_asset_id, v_tenant, p_organization_id, p_mapping_id, p_asset_type, p_mac_blind_index,
     p_data_key_id, p_mac_enc, p_ip_enc, p_hostname_enc, p_serial_enc,
     p_model, p_firmware_version, p_device_state, p_uptime_seconds, p_signal_dbm,
     p_switch_port, p_uplink_mac_blind_index, p_vlan_id, p_ssid, p_is_wired,
@@ -956,7 +964,7 @@ REVOKE ALL ON FUNCTION helm.forget_unifi_mapping(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION helm.unifi_poll_backlog(integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION helm.claim_unifi_poll(uuid, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION helm.upsert_network_asset(
-  uuid, uuid, network_asset_type, bytea, uuid, bytea, bytea, bytea, bytea,
+  uuid, uuid, uuid, network_asset_type, bytea, uuid, bytea, bytea, bytea, bytea,
   text, text, text, bigint, smallint, integer, bytea, integer, text, boolean,
   timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION helm.record_asset_ip(uuid, uuid, bytea, bytea, timestamptz) FROM PUBLIC;
@@ -975,7 +983,7 @@ GRANT EXECUTE ON FUNCTION helm.forget_unifi_mapping(uuid) TO helm_app;
 GRANT EXECUTE ON FUNCTION helm.unifi_poll_backlog(integer) TO helm_worker;
 GRANT EXECUTE ON FUNCTION helm.claim_unifi_poll(uuid, integer) TO helm_worker;
 GRANT EXECUTE ON FUNCTION helm.upsert_network_asset(
-  uuid, uuid, network_asset_type, bytea, uuid, bytea, bytea, bytea, bytea,
+  uuid, uuid, uuid, network_asset_type, bytea, uuid, bytea, bytea, bytea, bytea,
   text, text, text, bigint, smallint, integer, bytea, integer, text, boolean,
   timestamptz) TO helm_worker;
 GRANT EXECUTE ON FUNCTION helm.record_asset_ip(uuid, uuid, bytea, bytea, timestamptz) TO helm_worker;
@@ -1078,12 +1086,24 @@ BEGIN
     RAISE EXCEPTION 'helm: the sync upsert now overwrites a user-edited field';
   END IF;
 
-  -- 7. The cross-tenant enumerator is the worker's alone.
+  -- 7. THE ID IS THE CALLER'S. The encrypted columns are sealed against an AAD
+  --    naming this row's id, so an INSERT that lets the default generate one
+  --    writes ciphertext nothing can ever open -- silently, because an insert
+  --    that succeeds looks like an insert that worked. Checked by reading the
+  --    definition: the parameter must be there AND the INSERT must use it.
+  IF (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'helm' AND p.proname = 'upsert_network_asset')
+     !~ 'VALUES\s*\(\s*p_asset_id' THEN
+    RAISE EXCEPTION 'helm: the asset upsert no longer inserts the id its ciphertext is bound to';
+  END IF;
+
+  -- 8. The cross-tenant enumerator is the worker's alone.
   IF has_function_privilege('helm_app', 'helm.unifi_poll_backlog(integer)', 'EXECUTE') THEN
     RAISE EXCEPTION 'helm: helm_app can enumerate every tenant''s controllers';
   END IF;
 
-  -- 8. Every new table carries RLS, forced.
+  -- 9. Every new table carries RLS, forced.
   IF EXISTS (
     SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public'
