@@ -1,11 +1,10 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Network } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { AssetForm } from '@/components/asset-form';
-import { DependencyEditor, RemoveDependency, relationPhrase } from '@/components/dependency-editor';
+import { DependencyChip, DependencyEditor } from '@/components/dependency-editor';
 import { isClientRole } from '@/lib/ui/roles';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
@@ -26,6 +25,7 @@ interface NodeRow {
 interface EdgeRow {
   from_node_id: string; to_node_id: string; relation: string; direction: string;
   origin: string; other_id: string; other_name: string; other_type: string;
+  note: string | null;
 }
 
 interface SecretRow {
@@ -89,11 +89,12 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
        */
       tx<EdgeRow[]>`
         SELECT e.from_node_id, e.to_node_id, e.relation::text, e.direction::text, e.origin::text,
+               e.note,
                other.id AS other_id, other.name AS other_name, other.node_type::text AS other_type
         FROM v_asset_edge e
         JOIN asset_node other ON other.id = e.to_node_id
         WHERE e.from_node_id = ${nodeId}::uuid
-        ORDER BY e.relation, other.name
+        ORDER BY other.name
       `,
       tx<SecretRow[]>`
         SELECT m.id, m.label, m.kind::text, m.sensitivity::text, m.requires_reason,
@@ -223,40 +224,28 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
                   possible.
                 </p>
               ) : (
-                <ul className="space-y-1 text-sm">
+                /*
+                  Chips, not a labelled list. Each one IS the link to the asset
+                  it names, so the obvious click goes where the reader expects
+                  rather than to a small piece of text beside a relation label
+                  most people had to translate anyway. The note, if there is
+                  one, is the chip's tooltip.
+                */
+                <div className="flex flex-wrap gap-2">
                   {edges.map((edge) => (
-                    <li
+                    <DependencyChip
                       key={`${edge.relation}:${edge.other_id}`}
-                      className="flex items-center gap-2"
-                    >
-                      {/*
-                        Phrased rather than humanised: "is secured by" reads as
-                        a sentence about this asset, where "Secured by" reads as
-                        a column heading.
-                      */}
-                      <span className="shrink-0 text-ink-muted">{relationPhrase(edge.relation)}</span>
-                      <Link href={`/assets/${edge.other_id}`} className="truncate text-brand hover:underline">
-                        {edge.other_name}
-                      </Link>
-                      <Badge tone="neutral">{humanise(edge.other_type)}</Badge>
-                      {edge.origin !== 'manual' && <Badge tone="brand">{edge.origin}</Badge>}
-                      {/*
-                        Only a manual edge has a row to delete. An intrinsic one
-                        is projected from a foreign key, so removing it means
-                        editing the asset, not unlinking it.
-                      */}
-                      {edge.origin === 'manual' && canWrite && (
-                        <span className="ml-auto">
-                          <RemoveDependency
-                            sourceNodeId={node.id}
-                            relation={edge.relation}
-                            targetNodeId={edge.other_id}
-                          />
-                        </span>
-                      )}
-                    </li>
+                      href={`/assets/${edge.other_id}`}
+                      label={edge.other_name}
+                      kind={humanise(edge.other_type)}
+                      note={edge.note}
+                      removable={edge.origin === 'manual' && canWrite}
+                      sourceNodeId={node.id}
+                      relation={edge.relation}
+                      targetNodeId={edge.other_id}
+                    />
                   ))}
-                </ul>
+                </div>
               )}
               <DependencyEditor
                 nodeId={node.id}

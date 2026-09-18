@@ -4,9 +4,28 @@ import { ApiError } from '@/lib/api/errors';
 import { getLinkEngine } from '@/lib/services';
 import { ALL_RELATIONS } from '@/lib/graph/relations';
 
+/**
+ * `relation` is OPTIONAL and defaults to `related_to`.
+ *
+ * The interface no longer asks which kind of relationship two assets have. It
+ * asks which asset, and optionally why — because in practice the answer to
+ * "depends_on or supports?" is "it depends which end you are standing at", and
+ * making somebody choose produced a dropdown of twenty-two options in front of
+ * a question they had not asked.
+ *
+ * The vocabulary stays in the schema and in this contract. Intrinsic edges —
+ * a device's primary network, a certificate's domain — are projected from
+ * foreign keys with real relations, the impact graph traverses them, and an
+ * importer or a future integration may well want to state one. What changed is
+ * that a person no longer has to.
+ *
+ * `related_to` is its own inverse, so a link created this way canonicalises to
+ * one row whichever way round it was written, and the unique constraint on
+ * (source, target, relation) then means one link per pair.
+ */
 const linkSchema = z.object({
   sourceNodeId: z.guid(),
-  relation: z.enum(ALL_RELATIONS as [string, ...string[]]),
+  relation: z.enum(ALL_RELATIONS as [string, ...string[]]).default('related_to'),
   targetNodeId: z.guid(),
   note: z.string().max(1000).optional(),
   confidence: z.number().int().min(1).max(100).optional(),

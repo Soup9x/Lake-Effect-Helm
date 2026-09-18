@@ -41,6 +41,7 @@ import { POST as createSite, GET as listSites } from '../../src/app/api/sites/ro
 import { PATCH as patchSite } from '../../src/app/api/sites/[siteId]/route';
 import { PATCH as patchAsset } from '../../src/app/api/assets/[nodeId]/route';
 import { POST as linkRoute, DELETE as unlinkRoute } from '../../src/app/api/assets/links/route';
+import { GET as searchRoute } from '../../src/app/api/search/route';
 
 let h: Harness;
 let currentUser: SessionUser | null = null;
@@ -440,8 +441,8 @@ describe('dependencies', () => {
     return withTenant(
       { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' },
       async (tx) =>
-        tx<{ relation: string; other_id: string; other_name: string; origin: string }[]>`
-          SELECT e.relation::text, e.origin::text,
+        tx<{ relation: string; other_id: string; other_name: string; origin: string; note: string | null }[]>`
+          SELECT e.relation::text, e.origin::text, e.note,
                  other.id AS other_id, other.name AS other_name
           FROM v_asset_edge e
           JOIN asset_node other ON other.id = e.to_node_id
@@ -511,6 +512,147 @@ describe('dependencies', () => {
 
     const mine = await edgesFor(IDS.domainController);
     expect(mine.filter((e) => e.other_id === IDS.network && e.origin === 'manual')).toHaveLength(0);
+  });
+
+  it('the picker\u2019s search returns hits under the key the client reads', async () => {
+    /*
+     * THE REGRESSION. The dependency picker returned nothing for every query.
+     * The request reached /api/search, which ran correctly and returned
+     * properly scoped hits — the component read them from `payload.results`,
+     * and the response has no such key. `undefined ?? []` is an empty list, so
+     * the failure was silent and total.
+     *
+     * Asserting the key BY NAME is the point of this test. A rename on either
+     * side now fails here instead of quietly emptying the picker again.
+     */
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const response = await searchRoute(
+      request(`/api/search?q=acme&organizationId=${IDS.orgAcme}&limit=10`),
+    );
+    expect(response.status).toBe(200);
+
+    const payload = (await response.json()) as Record<string, unknown>;
+    expect(Object.keys(payload)).toContain('hits');
+    expect(payload).not.toHaveProperty('results');
+
+    const hits = payload.hits as { nodeId: string | null; title: string }[];
+    expect(hits.length).toBeGreaterThan(0);
+
+    // What the picker does with them: keep the graph nodes, drop everything
+    // else, and never offer the asset its own page is showing.
+    const linkable = hits.filter((h) => h.nodeId !== null && h.nodeId !== IDS.firewall);
+    expect(linkable.length).toBeGreaterThan(0);
+    expect(linkable.every((h) => typeof h.title === 'string' && h.title.length > 0)).toBe(true);
+  });
+
+  it('links two assets without being told what KIND of relationship it is', async () => {
+    // The form no longer asks. `relation` defaults to related_to, which is its
+    // own inverse, so the link canonicalises to one row whichever way round it
+    // was entered.
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const created = await body(
+      await linkRoute(
+        request(
+          '/api/assets/links',
+          json('POST', {
+            sourceNodeId: IDS.firewall,
+            targetNodeId: IDS.domainController,
+            note: 'both sit in rack 3',
+          }),
+        ),
+      ),
+    );
+    expect(created.created as unknown as boolean).toBe(true);
+
+    const sql = superuserSql();
+    try {
+      const rows = await sql<{ relation: string; note: string }[]>`
+        SELECT relation::text, note FROM asset_link
+        WHERE (source_node_id = ${IDS.firewall}::uuid AND target_node_id = ${IDS.domainController}::uuid)
+           OR (source_node_id = ${IDS.domainController}::uuid AND target_node_id = ${IDS.firewall}::uuid)
+      `;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.relation).toBe('related_to');
+      expect(rows[0]!.note).toBe('both sit in rack 3');
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('shows that link once from each end, and carries the note for the chip', async () => {
+    const forward = await edgesFor(IDS.firewall);
+    const back = await edgesFor(IDS.domainController);
+
+    const a = forward.filter((e) => e.other_id === IDS.domainController && e.origin === 'manual');
+    const b = back.filter((e) => e.other_id === IDS.firewall && e.origin === 'manual');
+
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+    // Symmetric, so neither end reads as the subordinate one — which is the
+    // whole reason the interface stopped asking.
+    expect(a[0]!.relation).toBe('related_to');
+    expect(b[0]!.relation).toBe('related_to');
+    expect(a[0]!.note).toBe('both sit in rack 3');
+  });
+
+  it('removes it when asked from the far end', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const removed = await body(
+      await unlinkRoute(
+        request(
+          '/api/assets/links',
+          json('DELETE', {
+            sourceNodeId: IDS.domainController,
+            targetNodeId: IDS.firewall,
+          }),
+        ),
+      ),
+    );
+    expect(removed.removed as unknown as boolean).toBe(true);
+    expect(
+      (await edgesFor(IDS.firewall)).filter(
+        (e) => e.other_id === IDS.domainController && e.origin === 'manual',
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('still removes a link that carries an older, explicit relation', async () => {
+    /*
+     * Links created before the interface stopped asking carry real relations,
+     * and DELETE resolves a row by (source, relation, target). The chip passes
+     * the edge's own relation through for exactly this reason — dropping it
+     * from the payload would leave every pre-existing link un-removable.
+     */
+    asUser(IDS.admin1, 'admin@northwind.test');
+    await linkRoute(
+      request(
+        '/api/assets/links',
+        json('POST', {
+          sourceNodeId: IDS.firewall,
+          relation: 'secures',
+          targetNodeId: IDS.domainController,
+        }),
+      ),
+    );
+
+    const shown = (await edgesFor(IDS.firewall)).find(
+      (e) => e.other_id === IDS.domainController && e.origin === 'manual',
+    );
+    expect(shown!.relation).toBe('secures');
+
+    const removed = await body(
+      await unlinkRoute(
+        request(
+          '/api/assets/links',
+          json('DELETE', {
+            sourceNodeId: IDS.firewall,
+            relation: shown!.relation,
+            targetNodeId: IDS.domainController,
+          }),
+        ),
+      ),
+    );
+    expect(removed.removed as unknown as boolean).toBe(true);
   });
 
   it('refuses a client-side role, which cannot draw the graph', async () => {

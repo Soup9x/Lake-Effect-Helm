@@ -1,73 +1,46 @@
 'use client';
 
 /**
- * Adding and removing dependencies on an asset.
+ * Linking one asset to another.
  *
- * WHY THIS COMPONENT DID NOT EXIST AND HAD TO. The link engine, its
- * canonicalisation, the bi-directional view, the API routes and their
- * integration tests were all built and all work. Nothing in the interface ever
- * called them. The Dependencies card rendered `edges` and an empty state, so
- * every asset in the product said "Nothing is linked to this asset yet" forever
- * and the only way to link anything was to POST it by hand.
+ * TWO THINGS WERE WRONG HERE, and they were unrelated.
  *
- * RELATIONS ARE OFFERED AS SENTENCES, not as enum values. "depends_on" in a
- * dropdown makes the reader translate; "This asset depends on…" tells them what
- * the row will mean when somebody else reads it in a year. The pairs are listed
- * in both directions because which way round a person thinks of a relationship
- * depends entirely on which end they are standing at — and the engine
- * canonicalises either spelling into one stored row, so offering both costs
- * nothing.
+ * THE SEARCH RETURNED NOTHING, FOR EVERY QUERY. Not a scoping bug and not a
+ * missing index: /api/search was reached, ran correctly and returned properly
+ * tenant-scoped hits. This component read them from `payload.results`, and the
+ * response has no such key — it is `{ hits, groups, limit, offset, hasMore }`.
+ * `undefined ?? []` is an empty list, so every search silently produced
+ * nothing. It now reads `hits`, and a test asserts the key by name so a rename
+ * on either side fails loudly instead of emptying the picker again.
+ *
+ * THE FORM ASKED A QUESTION NOBODY HAD. It opened with "This asset [depends on
+ * ▾] this one" and twenty-two relations to choose between — and the honest
+ * answer to most of them is "it depends which end you are standing at". What a
+ * technician wants to record is that two things are connected, and why. So the
+ * form asks for the asset and an optional note, and sends `related_to`, which
+ * is its own inverse and therefore canonicalises to one row whichever way round
+ * it was entered.
+ *
+ * The relation vocabulary is NOT gone from the product. Intrinsic edges carry
+ * real relations projected from foreign keys, and the impact graph still
+ * traverses direction. It is gone from the question a person is asked.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Link2, Loader2, Plus, Trash2 } from 'lucide-react';
+import { Link2, Loader2, Plus, X } from 'lucide-react';
 import { Button } from './ui/button';
-import { FieldHint, Input, Label, Select } from './ui/field';
+import { FieldHint, Input, Label } from './ui/field';
 import { Modal } from './ui/modal';
-
-/** How each relation reads with this asset as the subject. */
-const RELATION_PHRASING: Record<string, string> = {
-  depends_on: 'depends on',
-  supports: 'supports',
-  hosted_on: 'is hosted on',
-  hosts: 'hosts',
-  connects_to: 'connects to',
-  member_of: 'is a member of',
-  contains: 'contains',
-  secures: 'secures',
-  secured_by: 'is secured by',
-  resolves_to: 'resolves to',
-  resolved_by: 'is resolved by',
-  authenticates_to: 'authenticates to',
-  authenticates: 'authenticates',
-  backs_up: 'backs up',
-  backed_up_by: 'is backed up by',
-  licenses: 'licenses',
-  licensed_by: 'is licensed by',
-  documents: 'documents',
-  documented_by: 'is documented by',
-  replaces: 'replaces',
-  replaced_by: 'is replaced by',
-  related_to: 'is related to',
-};
-
-/** The order the picker offers them in: the ones people reach for first. */
-const RELATION_ORDER = [
-  'depends_on', 'supports', 'connects_to', 'hosted_on', 'hosts',
-  'member_of', 'contains', 'secures', 'secured_by',
-  'authenticates_to', 'authenticates', 'backs_up', 'backed_up_by',
-  'resolves_to', 'resolved_by', 'licenses', 'licensed_by',
-  'documents', 'documented_by', 'replaces', 'replaced_by', 'related_to',
-];
-
-export function relationPhrase(relation: string): string {
-  return RELATION_PHRASING[relation] ?? relation.replace(/_/g, ' ');
-}
 
 interface Candidate {
   nodeId: string;
   title: string;
   subtitle: string | null;
+}
+
+/** The shape /api/search actually returns. Named here so a drift is a type error. */
+interface SearchResponse {
+  hits?: { nodeId: string | null; title: string; subtitle: string | null }[];
 }
 
 export function DependencyEditor({
@@ -81,7 +54,6 @@ export function DependencyEditor({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [relation, setRelation] = useState('depends_on');
   const [query, setQuery] = useState('');
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [target, setTarget] = useState<Candidate | null>(null);
@@ -106,20 +78,19 @@ export function DependencyEditor({
         const params = new URLSearchParams({ q: term.trim(), organizationId, limit: '10' });
         const response = await fetch(`/api/search?${params.toString()}`);
         if (!response.ok) return;
-        const payload = (await response.json()) as {
-          results?: { nodeId?: string; node_id?: string; title: string; subtitle: string | null }[];
-        };
+        const payload = (await response.json()) as SearchResponse;
         if (seq !== searchSeq.current) return;
         setCandidates(
-          (payload.results ?? [])
-            .map((r) => ({
-              nodeId: r.nodeId ?? r.node_id ?? '',
-              title: r.title,
-              subtitle: r.subtitle,
-            }))
-            // Only things that ARE graph nodes can be linked, and an asset
-            // cannot depend on itself.
-            .filter((r) => r.nodeId && r.nodeId !== nodeId),
+          (payload.hits ?? [])
+            // Only things that ARE graph nodes can be linked — a site or a
+            // client is a search hit with no node — and an asset cannot be
+            // linked to itself.
+            .filter((hit) => hit.nodeId !== null && hit.nodeId !== nodeId)
+            .map((hit) => ({
+              nodeId: hit.nodeId as string,
+              title: hit.title,
+              subtitle: hit.subtitle,
+            })),
         );
       } finally {
         if (seq === searchSeq.current) setSearching(false);
@@ -134,7 +105,6 @@ export function DependencyEditor({
   }, [query, runSearch]);
 
   function reset() {
-    setRelation('depends_on');
     setQuery('');
     setCandidates([]);
     setTarget(null);
@@ -153,7 +123,6 @@ export function DependencyEditor({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           sourceNodeId: nodeId,
-          relation,
           targetNodeId: target.nodeId,
           ...(note.trim() ? { note: note.trim() } : {}),
         }),
@@ -196,22 +165,7 @@ export function DependencyEditor({
       >
         <form onSubmit={submit} className="space-y-4">
           <div>
-            <Label htmlFor="dep-relation">This asset…</Label>
-            <Select
-              id="dep-relation"
-              value={relation}
-              onChange={(e) => setRelation(e.target.value)}
-            >
-              {RELATION_ORDER.map((value) => (
-                <option key={value} value={value}>
-                  {relationPhrase(value)}
-                </option>
-              ))}
-            </Select>
-          </div>
-
-          <div>
-            <Label htmlFor="dep-target">…this one</Label>
+            <Label htmlFor="dep-target">Link to</Label>
             <Input
               id="dep-target"
               value={target ? target.title : query}
@@ -219,8 +173,9 @@ export function DependencyEditor({
                 setTarget(null);
                 setQuery(e.target.value);
               }}
-              placeholder="Search this client's assets"
+              placeholder="Search this client&rsquo;s assets"
               autoComplete="off"
+              autoFocus
             />
             {target ? (
               <FieldHint className="mt-1">
@@ -295,22 +250,33 @@ export function DependencyEditor({
 }
 
 /**
- * Removing one link.
+ * One dependency, as a chip that goes where it says.
  *
- * Takes the relationship as the page is displaying it — "these two, this way
- * round" — which is what DELETE /api/assets/links expects and what the person
- * clicking is looking at. The engine resolves it to whichever direction the row
- * is actually stored in.
+ * The whole chip is the link, so the target is the obvious click rather than a
+ * small piece of text beside a label. The remove control sits inside it and
+ * stops the navigation, which is the one interaction that needs to not follow
+ * the link.
  *
- * Intrinsic edges get no button: they are projected from a foreign key (a
- * device's primary network, a certificate's domain), so there is no link row to
- * delete. Unlinking one means changing the asset itself.
+ * `relation` is not rendered, but it IS passed to the delete call: an edge
+ * created before this change carries a real relation, and DELETE resolves the
+ * row by (source, relation, target). Dropping it from the payload would leave
+ * older links un-removable.
  */
-export function RemoveDependency({
+export function DependencyChip({
+  href,
+  label,
+  kind,
+  note,
+  removable,
   sourceNodeId,
   relation,
   targetNodeId,
 }: {
+  href: string;
+  label: string;
+  kind: string;
+  note: string | null;
+  removable: boolean;
   sourceNodeId: string;
   relation: string;
   targetNodeId: string;
@@ -318,7 +284,9 @@ export function RemoveDependency({
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 
-  async function remove() {
+  async function remove(event: React.MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
     setBusy(true);
     try {
       const response = await fetch('/api/assets/links', {
@@ -333,16 +301,30 @@ export function RemoveDependency({
   }
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      onClick={remove}
-      disabled={busy}
-      aria-label="Remove this dependency"
-      title="Remove this dependency"
+    <a
+      href={href}
+      title={note ?? undefined}
+      className="group inline-flex max-w-full items-center gap-2 rounded-full border border-border-strong bg-surface-raised py-1 pl-3 pr-1 text-sm text-ink transition-colors hover:border-brand hover:bg-surface-sunken"
     >
-      {busy ? <Loader2 className="animate-spin" /> : <Trash2 />}
-    </Button>
+      <span className="truncate">{label}</span>
+      <span className="shrink-0 text-xs text-ink-faint">{kind}</span>
+      {removable ? (
+        <button
+          type="button"
+          onClick={remove}
+          disabled={busy}
+          aria-label={`Remove the link to ${label}`}
+          title={`Remove the link to ${label}`}
+          className="shrink-0 rounded-full p-1 text-ink-faint transition-colors hover:bg-danger/10 hover:text-danger"
+        >
+          {busy ? <Loader2 className="size-3 animate-spin" /> : <X className="size-3" />}
+        </button>
+      ) : (
+        // Intrinsic edges are projected from a foreign key, so there is no row
+        // to delete — unlinking one means editing the asset itself. The spacer
+        // keeps the chips a consistent height.
+        <span className="w-5 shrink-0" aria-hidden />
+      )}
+    </a>
   );
 }

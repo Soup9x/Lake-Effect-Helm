@@ -92,6 +92,34 @@ reads naturally: a firewall that `secures` a network appears on the network as
 migration-time assertion fails if any enum value lacks an inverse, because a NULL
 inverse would silently drop reverse edges from the map.
 
+### The interface no longer asks which relation, and the column stays
+
+A technician adding a dependency chooses an asset and, optionally, a note. There
+is no relationship-type dropdown. The honest reason: for most of the twenty-two
+relations the right answer is "it depends which end you are standing at", and
+asking produced a long list in front of a question nobody had. Links made this
+way are `related_to`, which is its own inverse — so a link canonicalises to one
+row whichever way round it was entered, and the unique constraint on
+`(source, target, relation)` then gives one link per pair.
+
+**`asset_link.relation` was NOT dropped**, and that is a deliberate exception to
+this project's habit of deleting schema that stops being used (see
+`credential.client_visible`). Three things depend on it:
+
+- **Intrinsic edges need it.** Sixteen UNION branches in `v_asset_edge_stored`
+  project real relations from foreign keys — `member_of`, `hosted_on`, `secures`,
+  `resolves_to` and the rest. The view needs a relation column to union into
+  whether or not stored rows still vary.
+- **Existing rows carry real relations.** Anything linked before this change, or
+  by an importer, holds a relation that means something. Dropping the column
+  discards it; the rule was to drop unused schema, not schema in use.
+- **Deletion resolves a row by `(source, relation, target)`.** The chip passes
+  the edge's own relation through, so a pre-existing link stays removable.
+
+So the vocabulary is intact in the schema, in the API contract (where `relation`
+is optional and defaults to `related_to`) and in the impact graph, which still
+traverses direction. What changed is that a person is no longer asked.
+
 `helm.asset_graph_walk()` is a bounded BFS with a cycle guard (MSP topologies are
 full of cycles — a domain controller that both hosts and authenticates the thing
 that manages it). It is deliberately **not** `SECURITY DEFINER`: the walk runs
