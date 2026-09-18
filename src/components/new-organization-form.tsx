@@ -2,9 +2,9 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Building2, Loader2, Plus, X } from 'lucide-react';
+import { Building2, Loader2, Plus } from 'lucide-react';
 import { Button } from './ui/button';
-import { Card, CardContent } from './ui/card';
+import { Modal } from './ui/modal';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 
 /**
@@ -96,37 +96,28 @@ export function NewOrganizationForm() {
     }
   }
 
-  if (!open) {
-    return (
+
+  return (
+    <>
       <Button variant="primary" onClick={() => setOpen(true)} className="gap-2">
         <Plus />
         New client
       </Button>
-    );
-  }
 
-  return (
-    <Card className="mb-4">
-      <CardContent>
+      <Modal
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          // Every close discards: the X, the backdrop and Escape all land here,
+          // and a half-filled form should not survive any of them.
+          if (!next) { reset();
+      setOpen(false); }
+        }}
+        title="New client"
+        icon={Building2}
+        size="lg"
+      >
         <form onSubmit={submit} className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-medium text-ink">
-              <Building2 className="size-4" />
-              New client
-            </h2>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => {
-                reset();
-                setOpen(false);
-              }}
-              aria-label="Cancel"
-            >
-              <X />
-            </Button>
-          </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
@@ -208,7 +199,7 @@ export function NewOrganizationForm() {
             </Button>
           </div>
         </form>
-      </CardContent>
-    </Card>
+      </Modal>
+    </>
   );
 }

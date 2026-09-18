@@ -2,9 +2,9 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { KeyRound, Loader2, Plus, X } from 'lucide-react';
+import { KeyRound, Loader2, Plus } from 'lucide-react';
 import { Button } from './ui/button';
-import { Card, CardContent } from './ui/card';
+import { Modal } from './ui/modal';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 
 /**
@@ -131,28 +131,27 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
     }
   }
 
-  if (!open) {
-    return (
+
+  return (
+    <>
       <Button variant="primary" onClick={() => setOpen(true)} className="gap-2">
         <Plus />
         Store a credential
       </Button>
-    );
-  }
 
-  return (
-    <Card className="mb-4">
-      <CardContent>
+      <Modal
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          // Every close discards: the X, the backdrop and Escape all land here,
+          // and a half-filled form should not survive any of them.
+          if (!next) { close() }
+        }}
+        title="Store a credential"
+        icon={KeyRound}
+        size="lg"
+      >
         <form onSubmit={submit} className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-medium text-ink">
-              <KeyRound className="size-4" />
-              Store a credential
-            </h2>
-            <Button type="button" variant="ghost" size="icon" onClick={close} aria-label="Cancel">
-              <X />
-            </Button>
-          </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
@@ -307,7 +306,7 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
             {busy ? 'Storing…' : 'Store credential'}
           </Button>
         </form>
-      </CardContent>
-    </Card>
+      </Modal>
+    </>
   );
 }

@@ -4,7 +4,8 @@ import { Network } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
-import { RenameAsset } from '@/components/rename-asset';
+import { AssetForm } from '@/components/asset-form';
+import { DependencyEditor, RemoveDependency, relationPhrase } from '@/components/dependency-editor';
 import { isClientRole } from '@/lib/ui/roles';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
@@ -18,6 +19,7 @@ interface NodeRow {
   notes: string | null;
   status: string; tags: string[]; criticality: number;
   organization_id: string; organization_name: string;
+  site_id: string | null; is_internal_only: boolean;
   site_name: string | null; updated_at: Date;
 }
 
@@ -53,6 +55,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     const [node] = await tx<NodeRow[]>`
       SELECT n.id, n.node_type::text, n.name, n.description, n.notes, n.status::text,
              n.tags, n.criticality, n.organization_id, o.name AS organization_name,
+             n.site_id, n.is_internal_only,
              s.name AS site_name, n.updated_at
       FROM asset_node n
       JOIN organization o ON o.id = n.organization_id
@@ -69,13 +72,27 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       // The subtype row, as a flat object. The table name is derived from the
       // node_type enum, never from user input.
       detailFor(tx, node.node_type, node.id),
+      /*
+       * FROM THIS NODE ONLY, and that is the fix for a real bug rather than a
+       * narrowing.
+       *
+       * v_asset_edge emits every stored edge TWICE — once each way, with the
+       * relation inverted on the reverse pass — so that a caller can ask the
+       * question from either end. This query used to match `from = me OR to =
+       * me`, which matches both copies of every edge involving this node. One
+       * link therefore rendered as two rows saying opposite things: "member_of
+       * VLAN 10" directly above "contains VLAN 10".
+       *
+       * Asking only for rows where this node is the source gives each
+       * relationship exactly once, already expressed from this node's point of
+       * view, because the view has done the inverting.
+       */
       tx<EdgeRow[]>`
         SELECT e.from_node_id, e.to_node_id, e.relation::text, e.direction::text, e.origin::text,
                other.id AS other_id, other.name AS other_name, other.node_type::text AS other_type
         FROM v_asset_edge e
-        JOIN asset_node other
-          ON other.id = CASE WHEN e.from_node_id = ${nodeId}::uuid THEN e.to_node_id ELSE e.from_node_id END
-        WHERE e.from_node_id = ${nodeId}::uuid OR e.to_node_id = ${nodeId}::uuid
+        JOIN asset_node other ON other.id = e.to_node_id
+        WHERE e.from_node_id = ${nodeId}::uuid
         ORDER BY e.relation, other.name
       `,
       tx<SecretRow[]>`
@@ -97,11 +114,20 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       `,
     ]);
 
-    return { node, detail: detailRows, edges, secrets, expiries };
+    // The client's other sites, for the edit form's picker. Read through RLS,
+    // so it can only ever offer sites this actor may already see.
+    const sites = await tx<{ id: string; name: string }[]>`
+      SELECT id, name FROM site
+      WHERE organization_id = ${node.organization_id}::uuid AND deleted_at IS NULL
+      ORDER BY name
+    `;
+
+    return { node, detail: detailRows, edges, secrets, expiries, sites };
   });
 
   if (!data) notFound();
-  const { node, detail, edges, secrets, expiries } = data;
+  const { node, detail, edges, secrets, expiries, sites } = data;
+  const canWrite = !isClientRole(identity.roleKey);
 
   return (
     <>
@@ -116,9 +142,20 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           ...(node.site_name ? [{ label: node.site_name }] : []),
         ]}
         actions={
-          !isClientRole(identity.roleKey) ? (
-            <RenameAsset nodeId={node.id} currentName={node.name} />
-          ) : undefined
+          <AssetForm
+            nodeId={node.id}
+            canEdit={canWrite}
+            sites={sites}
+            values={{
+              name: node.name,
+              description: node.description ?? '',
+              status: node.status,
+              criticality: node.criticality,
+              siteId: node.site_id ?? '',
+              isInternalOnly: node.is_internal_only,
+              tags: node.tags,
+            }}
+          />
         }
       />
       <PageBody>
@@ -146,7 +183,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         <NotesCard
           endpoint={`/api/assets/${node.id}`}
           notes={node.notes}
-          canEdit={!isClientRole(identity.roleKey)}
+          canEdit={canWrite}
         />
 
         <div className="grid gap-4 lg:grid-cols-2">
@@ -179,26 +216,53 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
                 <Network className="size-4 text-ink-faint" aria-hidden /> Dependencies
               </CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
               {edges.length === 0 ? (
                 <p className="text-sm text-ink-faint">
                   Nothing is linked to this asset yet. Links are what make an impact assessment
                   possible.
                 </p>
               ) : (
-                <ul className="space-y-2 text-sm">
+                <ul className="space-y-1 text-sm">
                   {edges.map((edge) => (
-                    <li key={`${edge.relation}:${edge.other_id}:${edge.direction}`} className="flex items-center gap-2">
-                      <span className="shrink-0 text-ink-muted">{humanise(edge.relation)}</span>
+                    <li
+                      key={`${edge.relation}:${edge.other_id}`}
+                      className="flex items-center gap-2"
+                    >
+                      {/*
+                        Phrased rather than humanised: "is secured by" reads as
+                        a sentence about this asset, where "Secured by" reads as
+                        a column heading.
+                      */}
+                      <span className="shrink-0 text-ink-muted">{relationPhrase(edge.relation)}</span>
                       <Link href={`/assets/${edge.other_id}`} className="truncate text-brand hover:underline">
                         {edge.other_name}
                       </Link>
                       <Badge tone="neutral">{humanise(edge.other_type)}</Badge>
                       {edge.origin !== 'manual' && <Badge tone="brand">{edge.origin}</Badge>}
+                      {/*
+                        Only a manual edge has a row to delete. An intrinsic one
+                        is projected from a foreign key, so removing it means
+                        editing the asset, not unlinking it.
+                      */}
+                      {edge.origin === 'manual' && canWrite && (
+                        <span className="ml-auto">
+                          <RemoveDependency
+                            sourceNodeId={node.id}
+                            relation={edge.relation}
+                            targetNodeId={edge.other_id}
+                          />
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>
               )}
+              <DependencyEditor
+                nodeId={node.id}
+                organizationId={node.organization_id}
+                canLink={canWrite}
+              />
             </CardContent>
           </Card>
         </div>

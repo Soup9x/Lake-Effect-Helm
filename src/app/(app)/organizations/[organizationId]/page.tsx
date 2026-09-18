@@ -5,7 +5,8 @@ import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { NewSecretForm } from '@/components/new-secret-form';
-import { NewSiteForm } from '@/components/new-site-form';
+import { SiteForm } from '@/components/site-form';
+import { CredentialEditForm } from '@/components/credential-edit-form';
 import { NewAssetForm } from '@/components/new-asset-form';
 import { RenameOrganization } from '@/components/rename-organization';
 import { isClientRole } from '@/lib/ui/roles';
@@ -28,7 +29,7 @@ interface OrgRow {
 }
 
 interface SiteRow {
-  id: string; name: string; is_primary: boolean; address_line1: string | null;
+  id: string; name: string; code: string | null; is_primary: boolean; address_line1: string | null;
   city: string | null; region: string | null; main_phone: string | null;
   notes: string | null;
 }
@@ -47,6 +48,7 @@ interface CredentialRow {
   url: string | null; secret_id: string | null; sensitivity: string | null;
   requires_reason: boolean; requires_step_up: boolean; is_break_glass: boolean;
   strength_score: number | null; tags: string[];
+  notes: string | null; criticality: number; secret_label: string | null;
 }
 
 interface ExpiryRow {
@@ -90,7 +92,7 @@ export default async function OrganizationPage({
 
     const [sites, contacts, assets, credentials, expiries, health, pinned] = await Promise.all([
       tx<SiteRow[]>`
-        SELECT id, name, is_primary, address_line1, city, region, main_phone, notes
+        SELECT id, name, code, is_primary, address_line1, city, region, main_phone, notes
         FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
         ORDER BY is_primary DESC, name
       `,
@@ -108,8 +110,10 @@ export default async function OrganizationPage({
         LIMIT 300
       `,
       tx<CredentialRow[]>`
-        SELECT n.id AS node_id, n.name, n.tags, c.credential_type::text, c.username::text, c.url,
+        SELECT n.id AS node_id, n.name, n.tags, n.notes, n.criticality,
+               c.credential_type::text, c.username::text, c.url,
                c.secret_id::text, c.is_break_glass,
+               m.label AS secret_label,
                m.sensitivity::text, m.requires_reason, m.requires_step_up, m.strength_score
         FROM credential c
         JOIN asset_node n ON n.id = c.id
@@ -183,7 +187,7 @@ export default async function OrganizationPage({
         {canWrite && (
           <div className="mb-4 flex flex-wrap gap-2">
             <NewSecretForm organizationId={organization.id} />
-            <NewSiteForm organizationId={organization.id} />
+            <SiteForm organizationId={organization.id} />
             <NewAssetForm
               organizationId={organization.id}
               sites={sites.map((s) => ({ id: s.id, name: s.name }))}
@@ -206,9 +210,29 @@ export default async function OrganizationPage({
               {sites.length === 0 && <p className="text-ink-faint">No sites documented.</p>}
               {sites.map((site) => (
                 <div key={site.id}>
-                  <div className="font-medium text-ink">
-                    {site.name}
-                    {site.is_primary && <Badge tone="brand" className="ml-2">Primary</Badge>}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="font-medium text-ink">
+                      {site.name}
+                      {site.is_primary && <Badge tone="brand" className="ml-2">Primary</Badge>}
+                    </div>
+                    {canWrite && (
+                      <SiteForm
+                        organizationId={organization.id}
+                        site={{
+                          id: site.id,
+                          values: {
+                            name: site.name,
+                            code: site.code ?? '',
+                            city: site.city ?? '',
+                            region: site.region ?? '',
+                            addressLine1: site.address_line1 ?? '',
+                            mainPhone: site.main_phone ?? '',
+                            isPrimary: site.is_primary,
+                            notes: site.notes ?? '',
+                          },
+                        }}
+                      />
+                    )}
                   </div>
                   <div className="text-ink-muted">
                     {[site.address_line1, site.city, site.region].filter(Boolean).join(', ') || '—'}
@@ -288,7 +312,13 @@ export default async function OrganizationPage({
               <SelectableTable
                 target="node"
                 selectable={canWrite}
-                columns={['Credential', 'Username', 'Sensitivity', <span key="s" className="w-96">Secret</span>]}
+                columns={[
+                  'Credential',
+                  'Username',
+                  'Sensitivity',
+                  <span key="s" className="w-96">Secret</span>,
+                  <span key="e" className="sr-only">Edit</span>,
+                ]}
                 rows={credentials.map((credential) => ({
                   id: credential.node_id,
                   label: credential.name,
@@ -341,6 +371,24 @@ export default async function OrganizationPage({
                     ) : (
                       <span key="reveal" className="text-xs text-ink-faint">No stored secret</span>
                     ),
+                    <CredentialEditForm
+                      key="edit"
+                      secretId={credential.secret_id ?? ''}
+                      canEdit={canWrite && credential.secret_id !== null}
+                      values={{
+                        label: credential.secret_label ?? credential.name,
+                        name: credential.name,
+                        username: credential.username ?? '',
+                        url: credential.url ?? '',
+                        notes: credential.notes ?? '',
+                        sensitivity: credential.sensitivity ?? 'standard',
+                        credentialType: credential.credential_type,
+                        requiresStepUp: credential.requires_step_up,
+                        requiresReason: credential.requires_reason,
+                        isBreakGlass: credential.is_break_glass,
+                        criticality: credential.criticality,
+                      }}
+                    />,
                   ],
                 }))}
               />
