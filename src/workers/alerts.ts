@@ -16,8 +16,14 @@
  * The alert worker's service account holds no route to ciphertext — enforced by
  * a migration guard in 0910, not by this comment. Alert payloads are built in
  * SQL from the expiration projection, which never contains secret material.
+ *
+ * SINCE 0420 delivery prefers the shared notification queue, which gives an
+ * expiry warning the same Discord/Teams formatting and the same enveloped
+ * destination URL as every other event. The original alert_rule.target path is
+ * kept as a fallback for deployments configured before that existed; see
+ * deliverExpiryAlerts.
  */
-import { withTenant } from '../lib/db/client';
+import { withTenant, type HelmTx } from '../lib/db/client';
 import { db } from '../lib/db/client';
 import type { Job, JobContext, JobResult } from './runtime';
 import { describeError } from './runtime';
@@ -128,6 +134,51 @@ async function deliverExpiryAlerts(ctx: JobContext): Promise<JobResult> {
     for (const alert of pending) {
       if (ctx.stopping()) break;
 
+      /*
+       * 0420 gave Helm one outbound queue, with per-destination formatting and
+       * an enveloped URL. An expiry warning belongs on it like any other event.
+       *
+       * Queued rather than sent here: delivery, retry and backoff are the
+       * notification worker's job, and having two things POST to chat platforms
+       * is how one of them ends up with the retry bug.
+       *
+       * The LEGACY PATH BELOW IS KEPT and is not dead code. alert_rule.target
+       * predates webhook destinations and a deployment may still be using it;
+       * silently dropping those alerts because somebody has not yet configured
+       * a destination would be the worst possible way to migrate. So: if a
+       * destination took it, the queue owns it. If none did, the old notifier
+       * still runs.
+       */
+      const queued = await withTenant(
+        { tenantId: tenant.tenant_id, actorId: tenant.worker_actor_id, actorType: 'service_account' },
+        async (tx) => {
+          const [row] = await tx<{ enqueue_notification: number }[]>`
+            SELECT helm.enqueue_notification(
+              'expiration.warning',
+              ${alert.alert_id}::uuid,
+              ${(alert.payload.organization_id as string | undefined) ?? null}::uuid,
+              ${tx.json(toJson(alert.payload))}::jsonb)
+          `;
+          return Number(row?.enqueue_notification ?? 0);
+        },
+        { role: 'worker' },
+      );
+
+      if (queued > 0) {
+        // Handed off. Recorded as sent against the alert_event so tomorrow's
+        // evaluation does not re-fire it; whether it reached the channel is now
+        // webhook_delivery's record to keep.
+        sent += 1;
+        await withTenant(
+          { tenantId: tenant.tenant_id, actorId: tenant.worker_actor_id, actorType: 'service_account' },
+          async (tx) => tx`
+            SELECT helm.record_alert_delivery(${alert.alert_id}::uuid, 'sent', NULL)
+          `,
+          { role: 'worker' },
+        );
+        continue;
+      }
+
       const outcome = await deliverOne(notifier, tenant, alert, log);
       if (outcome.status === 'sent') sent += 1;
       else failed += 1;
@@ -175,4 +226,15 @@ async function deliverOne(
     log.warn('alert delivery failed', { alert: alert.alert_id, channel: alert.channel, ...described });
     return { status: 'failed', error: String(described.error ?? 'delivery failed') };
   }
+}
+
+/**
+ * postgres.js types its json() helper against a recursive JSONValue, which a
+ * Record<string, unknown> does not structurally satisfy. The alert payload is
+ * plain data by construction — built by helm.evaluate_alert_rules() out of the
+ * expiration projection — so this is a typing accommodation, not a claim about
+ * unchecked content. Same helper, same reasoning, as in lib/exports/service.ts.
+ */
+function toJson(value: unknown): Parameters<HelmTx['json']>[0] {
+  return JSON.parse(JSON.stringify(value)) as Parameters<HelmTx['json']>[0];
 }

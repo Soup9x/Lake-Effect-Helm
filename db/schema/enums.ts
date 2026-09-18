@@ -112,6 +112,11 @@ export const syncRunStatus = pgEnum('sync_run_status', ['queued', 'running', 'su
 
 export const webhookDeliveryStatus = pgEnum('webhook_delivery_status', ['pending', 'delivered', 'failed', 'dead']);
 
+// The payload shape a destination wants (0420). Slack and the legacy Teams
+// connector accept a bare `text`; Discord refuses one with a 400, which is why
+// this is a column rather than an assumption.
+export const webhookFormat = pgEnum('webhook_format', ['generic', 'slack', 'discord', 'teams']);
+
 export const attachmentScanStatus = pgEnum('attachment_scan_status', ['pending', 'clean', 'infected', 'failed', 'skipped']);
 
 export const exportKind = pgEnum('export_kind', [

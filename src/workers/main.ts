@@ -21,6 +21,7 @@ import { anchorAuditChainJob } from './anchor';
 import { integrationSyncJob } from './sync';
 import { renderExportsJob, expireExportsJob } from './exports';
 import { pruneAuthAttemptsJob } from './auth-hygiene';
+import { fanOutNotificationsJob, deliverNotificationsJob } from './notifications';
 import { WorkerRuntime, createLogger, type LogLevel } from './runtime';
 
 function jobs() {
@@ -32,6 +33,11 @@ function jobs() {
     renderExportsJob(),
     expireExportsJob(),
     pruneAuthAttemptsJob(),
+    // 0400 removed two-person approval from credential exports on the stated
+    // understanding that detection replaces prevention. These two jobs ARE the
+    // detection, so a deployment running the worker at all runs them.
+    fanOutNotificationsJob(),
+    deliverNotificationsJob(),
   ];
 }
 

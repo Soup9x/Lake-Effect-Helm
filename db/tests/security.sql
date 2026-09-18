@@ -1570,4 +1570,120 @@ SELECT helm_test.check('a slug is unique across the deployment, since the callba
       AND pg_get_constraintdef(oid) LIKE '%(slug)%'));
 
 \echo ''
+\echo '== 37. A notification leaves the building =='
+-- 0420 turned webhook_endpoint/webhook_delivery from 0110 scaffolding into a
+-- live path that POSTs to chat platforms. Two boundaries matter, and they are
+-- different in kind.
+
+\echo '-- the destination URL is a credential --'
+-- For Discord and Teams the URL IS the authentication: whoever holds it can
+-- post as Helm. 0110 stored it in plaintext in a table any tenant-wide role of
+-- rank 60 or more could read.
+SELECT helm_test.check('helm_app cannot read webhook_endpoint, by any column',
+  NOT EXISTS (
+    SELECT 1 FROM information_schema.columns c
+    WHERE c.table_name = 'webhook_endpoint'
+      AND has_column_privilege('helm_app', 'webhook_endpoint', c.column_name, 'SELECT')));
+SELECT helm_test.check('nor the auditor',
+  NOT has_table_privilege('helm_auditor', 'webhook_endpoint', 'SELECT'));
+SELECT helm_test.check('nor the key administrator',
+  NOT has_table_privilege('helm_key_admin', 'webhook_endpoint', 'SELECT'));
+-- helm_worker CAN, because delivering is its job. This is the one boundary in
+-- the schema where the reading role is the worker rather than helm_auth.
+SELECT helm_test.check('helm_worker can, because delivery is a background job',
+  has_table_privilege('helm_worker', 'webhook_endpoint', 'SELECT'));
+SELECT helm_test.check('the plaintext url column is gone',
+  NOT EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = 'public.webhook_endpoint'::regclass AND attname = 'url'
+      AND attnum > 0 AND NOT attisdropped));
+SELECT helm_test.check('...and so is the vault reference that signing used to go through',
+  NOT EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = 'public.webhook_endpoint'::regclass AND attname = 'signing_secret_id'
+      AND attnum > 0 AND NOT attisdropped));
+SELECT helm_test.check('the envelope is all-or-nothing',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'webhook_endpoint'::regclass
+            AND conname = 'webhook_envelope_complete'));
+
+\echo '-- ...but the application can still configure one --'
+SELECT helm_test.check('helm_app may write a destination and its sealed URL',
+  has_function_privilege('helm_app',
+    'helm.set_webhook_endpoint(uuid, text, webhook_format, boolean, uuid, text[], text, text, boolean, smallint, integer, text, text, bytea, bytea, bytea, bytea, text)',
+    'EXECUTE'));
+SELECT helm_test.check('...and read back everything EXCEPT the envelope',
+  (SELECT pg_get_function_result(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'webhook_endpoints')
+  NOT LIKE '%ciphertext%');
+
+\echo '-- what reaches a payload is an ALLOW-LIST, not a denylist --'
+-- The load-bearing control. An audit action that grows a new metadata field
+-- does not start appearing in notifications; somebody has to name it.
+SELECT helm_test.check('helm_app cannot insert a delivery directly',
+  NOT has_table_privilege('helm_app', 'webhook_delivery', 'INSERT'));
+SELECT helm_test.check('...nor update one',
+  NOT has_table_privilege('helm_app', 'webhook_delivery', 'UPDATE'));
+SELECT helm_test.check('it may READ them, for the settings page',
+  has_table_privilege('helm_app', 'webhook_delivery', 'SELECT'));
+SELECT helm_test.check('an export payload carries only the four named keys',
+  helm.notification_payload('export.requested',
+    '{"kind":"x","format":"zip","include_secrets":true,"expires_in_hours":72,
+      "scope":{"nodeIds":["a"]},"something_new":"leaked"}'::jsonb)
+  = '{"kind":"x","format":"zip","include_secrets":true,"expires_in_hours":72}'::jsonb);
+SELECT helm_test.check('a reveal payload drops data_key_id, which nobody listed',
+  NOT (helm.notification_payload('secret.revealed',
+    '{"label":"ACME Domain Admin","purpose":"export","data_key_id":"abc"}'::jsonb) ? 'data_key_id'));
+SELECT helm_test.check('an unknown event yields an empty payload, never a passthrough',
+  helm.notification_payload('not.an.event', '{"password":"hunter2"}'::jsonb) = '{}'::jsonb);
+
+\echo '-- and the trigger behind it walks nested objects --'
+-- 0110's version tested TOP-LEVEL KEYS ONLY, so {"detail":{"password":...}}
+-- passed. Survivable while nothing wrote to the table; not survivable now that
+-- these rows are POSTed to a chat platform.
+SELECT helm_test.check('the no-secrets trigger is attached',
+  EXISTS (
+    SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+    WHERE c.relname = 'webhook_delivery' AND t.tgname = 'webhook_delivery_no_secrets'
+      AND NOT t.tgisinternal));
+SELECT helm_test.check('...and it really recurses',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'reject_secret_bearing_payload')
+  LIKE '%$.**%');
+
+\echo '-- the event vocabulary is closed --'
+-- A typo in a subscription is otherwise a channel that is simply never written
+-- to, with nothing anywhere to say why.
+SELECT helm_test.check('a destination cannot subscribe to an event Helm cannot raise',
+  NOT helm.notification_events_known(ARRAY['export.requestd']));
+SELECT helm_test.check('...and the real ones are accepted',
+  helm.notification_events_known(ARRAY['export.requested', 'access.denied']));
+SELECT helm_test.check('a CHECK enforces it on the table',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'webhook_endpoint'::regclass AND conname = 'webhook_events_known'));
+SELECT helm_test.check('every audit action that maps to an event maps to a known one',
+  NOT EXISTS (
+    SELECT 1 FROM unnest(ARRAY[
+      'export.requested', 'export.rendered', 'export.downloaded', 'export.revoked',
+      'secret.revealed', 'secret.reveal_denied', 'secret.write_denied',
+      'export.download_denied', 'key.rotation_started'
+    ]) AS action
+    WHERE helm.notification_event_for(action, 'success') IS NOT NULL
+      AND NOT helm.notification_events_known(
+        ARRAY[helm.notification_event_for(action, 'success')])));
+
+\echo '-- an ordinary audit action queues nothing --'
+-- The common case, and what keeps the fan-out cheap: a tenant doing ordinary
+-- work produces hundreds of audit rows an hour and none of them are events.
+SELECT helm_test.check('an organisation edit is not a notification',
+  helm.notification_event_for('organization.updated', 'success') IS NULL);
+SELECT helm_test.check('a successful sync is not a notification',
+  helm.notification_event_for('integration.sync_finished', 'success') IS NULL);
+SELECT helm_test.check('...but a failed one is',
+  helm.notification_event_for('integration.sync_finished', 'error') = 'integration.failed');
+
+\echo ''
 \echo '== All security assertions passed =='
+

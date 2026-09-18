@@ -6,6 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { RenameTenant } from '@/components/rename-tenant';
 import { RadiusSettingsCard, type RadiusSettings } from '@/components/radius-settings';
 import { OidcSettingsCard, type OidcSettings } from '@/components/oidc-settings';
+import {
+  NotificationSettingsCard,
+  type NotificationDestination,
+  type NotificationDelivery,
+} from '@/components/notification-settings';
 import { redirectUri } from '@/lib/auth/oidc';
 import { headers } from 'next/headers';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
@@ -57,6 +62,86 @@ interface RadiusRow {
   last_test_at: Date | null;
   last_test_ok: boolean | null;
   last_test_error: string | null;
+}
+
+interface DestinationRow {
+  id: string;
+  name: string;
+  format: NotificationDestination['format'];
+  is_active: boolean;
+  organization_id: string | null;
+  organization_name: string | null;
+  events: string[];
+  url_host: string;
+  url_digest: string;
+  signing_secret_set: boolean;
+  max_attempts: number;
+  timeout_ms: number;
+  last_delivery_at: Date | null;
+  last_delivery_ok: boolean | null;
+  last_delivery_error: string | null;
+  consecutive_failures: number;
+  pending_count: string;
+  dead_count: string;
+  updated_at: Date;
+}
+
+interface DeliveryRow {
+  id: string;
+  endpoint_name: string;
+  event_type: string;
+  subject: string;
+  status: string;
+  attempts: number;
+  response_code: number | null;
+  error: string | null;
+  created_at: Date;
+  delivered_at: Date | null;
+}
+
+/** The subscribable vocabulary, mirroring helm.notification_events(). */
+const NOTIFICATION_EVENTS = [
+  'export.requested', 'export.rendered', 'export.downloaded', 'export.revoked',
+  'secret.revealed', 'access.denied', 'expiration.warning',
+  'integration.failed', 'key.rotated',
+] as const;
+
+function toDestination(row: DestinationRow): NotificationDestination {
+  return {
+    id: row.id,
+    name: row.name,
+    format: row.format,
+    isActive: row.is_active,
+    organizationId: row.organization_id,
+    organizationName: row.organization_name,
+    events: row.events,
+    urlHost: row.url_host,
+    urlDigest: row.url_digest,
+    signingSecretSet: row.signing_secret_set,
+    maxAttempts: row.max_attempts,
+    timeoutMs: row.timeout_ms,
+    lastDeliveryAt: row.last_delivery_at?.toISOString() ?? null,
+    lastDeliveryOk: row.last_delivery_ok,
+    lastDeliveryError: row.last_delivery_error,
+    consecutiveFailures: row.consecutive_failures,
+    pendingCount: Number(row.pending_count),
+    deadCount: Number(row.dead_count),
+  };
+}
+
+function toDelivery(row: DeliveryRow): NotificationDelivery {
+  return {
+    id: row.id,
+    destination: row.endpoint_name,
+    event: row.event_type,
+    subject: row.subject,
+    status: row.status,
+    attempts: row.attempts,
+    responseCode: row.response_code,
+    error: row.error,
+    createdAt: row.created_at.toISOString(),
+    deliveredAt: row.delivered_at?.toISOString() ?? null,
+  };
 }
 
 interface OidcRow {
@@ -141,8 +226,9 @@ function toRadiusSettings(row: RadiusRow | null): RadiusSettings | null {
 export default async function SettingsPage() {
   const identity = await getServerIdentity();
 
-  const { keys, integrations, workers, tenant, radius, oidc } = await withTenant(actorOf(identity), async (tx) => {
-    const [keyRows, integrationRows, workerRows, tenantRows, radiusRows, oidcRows] = await Promise.all([
+  const { keys, integrations, workers, tenant, radius, oidc, destinations, deliveries } = await withTenant(actorOf(identity), async (tx) => {
+    const [keyRows, integrationRows, workerRows, tenantRows, radiusRows, oidcRows,
+           destinationRows, deliveryRows] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -172,6 +258,10 @@ export default async function SettingsPage() {
       // Same shape, same boundary: settings without the client secret, which
       // helm_app cannot read and which is not in this result type.
       tx<OidcRow[]>`SELECT * FROM helm.oidc_settings()`,
+      // ...and again for the webhook URLs, which helm_app cannot read either.
+      // What comes back is a host and a digest.
+      tx<DestinationRow[]>`SELECT * FROM helm.webhook_endpoints()`,
+      tx<DeliveryRow[]>`SELECT * FROM helm.recent_notifications(20)`,
     ]);
     return {
       keys: keyRows,
@@ -180,6 +270,8 @@ export default async function SettingsPage() {
       tenant: tenantRows[0] ?? null,
       radius: radiusRows[0] ?? null,
       oidc: oidcRows[0] ?? null,
+      destinations: destinationRows,
+      deliveries: deliveryRows,
     };
   });
 
@@ -217,6 +309,12 @@ export default async function SettingsPage() {
             </CardContent>
           </Card>
         )}
+
+        <NotificationSettingsCard
+          destinations={destinations.map(toDestination)}
+          history={deliveries.map(toDelivery)}
+          events={NOTIFICATION_EVENTS}
+        />
 
         <OidcSettingsCard initial={toOidcSettings(oidc, origin)} />
 

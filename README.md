@@ -56,6 +56,7 @@ docs/
   architecture/07-local-authentication.md  passwords, lockout, reset, the outage case
   architecture/08-radius-authentication.md  the third door, and how it degrades
   architecture/09-oidc-authentication.md   any OpenID Connect provider, and its custody
+  architecture/10-notifications.md      what leaves the building, and what cannot
   deployment/docker-on-prem.md          step-by-step Docker install and backup/restore
   deployment/on-premises.md             docker compose, keys, TLS, rotation runbook
 deploy/
@@ -111,6 +112,7 @@ scripts/
 | `0400_single_approver_exports` | Two-person approval on credential exports removed; `credential.client_visible` dropped |
 | `0405_auth_method_oidc` | One statement: `auth_method` gains `oidc`. Separate because a new enum value cannot be used in the transaction that adds it |
 | `0410_oidc_provider` | Generic OIDC provider config and its enveloped client secret, behind `helm_auth` |
+| `0420_outbound_notifications` | Webhook destinations with per-platform payloads; the URL moved behind an envelope and the payload allow-list added |
 | `0900_seed_system_data` | Roles and permissions |
 | `0910_worker_seed` | Worker roles, their permissions, and per-tenant identities |
 

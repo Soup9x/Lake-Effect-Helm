@@ -290,6 +290,13 @@ touch:
 | `NODE_EXTRA_CA_CERTS` | empty | Your identity provider (or any https service Helm calls) uses a private CA — §6.1 |
 | `HELM_RESET_DELIVERY_URL` | empty | You want self-service password reset by email |
 
+**Outbound notifications have no environment variables either.** Discord,
+Teams, Slack and generic webhook destinations are configured under
+**Settings → Notifications**, with the webhook URL enveloped under this
+deployment's master key. Note that the `worker` service is what delivers them —
+it is the only role that can read a destination URL — so a deployment running
+`web` without `worker` gets no notifications at all.
+
 **A generic OpenID Connect provider has no environment variables.** Authentik,
 Keycloak, Okta, Zitadel and anything else that publishes a discovery document
 are configured in the application, under **Settings → OpenID Connect**, and
