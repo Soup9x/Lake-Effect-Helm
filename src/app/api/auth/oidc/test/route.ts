@@ -95,7 +95,10 @@ export const POST = tenantRoute(
 
 /** Same rule as the settings route: the origin the operator is actually on. */
 function originOf(request: Request): string {
-  const configured = process.env.AUTH_URL ?? process.env.NEXTAUTH_URL;
+  // AUTH_URL only. NEXTAUTH_URL is the Auth.js v4 name and this project is on
+  // v5; accepting it here would have added an undocumented variable that
+  // silently overrides a documented one.
+  const configured = process.env.AUTH_URL;
   if (configured) return configured.replace(/\/+$/, '');
   const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
   const proto = request.headers.get('x-forwarded-proto') ?? 'https';

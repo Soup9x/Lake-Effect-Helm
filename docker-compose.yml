@@ -80,7 +80,6 @@ x-helm-env: &helm-env
   # read that many places from the RIGHT; the leftmost entry is entirely
   # client-controlled, and trusting it defeats API token IP allowlisting.
   HELM_TRUSTED_PROXY_HOPS: "1"
-  HELM_STEP_UP_TTL_MINUTES: "15"
 
   AUTH_MICROSOFT_ENTRA_ID_ID: ${AUTH_MICROSOFT_ENTRA_ID_ID:-}
   AUTH_MICROSOFT_ENTRA_ID_SECRET: ${AUTH_MICROSOFT_ENTRA_ID_SECRET:-}
