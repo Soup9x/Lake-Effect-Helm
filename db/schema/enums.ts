@@ -130,3 +130,8 @@ export const auditOutcome = pgEnum('audit_outcome', ['success', 'denied', 'error
 // 'oidc' was added by 0405, in a file of its own: a new enum value cannot be
 // used in the transaction that adds it, and db/migrate.ts runs one per file.
 export const authMethod = pgEnum('auth_method', ['sso', 'password', 'radius', 'oidc']);
+
+// UniFi Network inventory (0430). A controller-managed device or a client seen
+// on the network; and the lifecycle a technician sets on it by hand.
+export const networkAssetType = pgEnum('network_asset_type', ['unifi_device', 'client_device']);
+export const networkAssetStatus = pgEnum('network_asset_status', ['active', 'maintenance', 'decommissioned']);
