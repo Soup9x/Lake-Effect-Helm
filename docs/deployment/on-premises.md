@@ -96,6 +96,50 @@ monthly and nothing prunes it automatically.
 that path, including `deploy/setup.sh`, which does all of §3, §4 and §6 below
 in one command.
 
+### 2.3 What the UniFi Network integration requires
+
+Optional — skip this unless you intend to document clients' UniFi networks.
+
+**`HELM_BLIND_INDEX_KEY_B64` must be set.** Everywhere else in Helm it is
+optional: leave it unset and you decline password-reuse detection along with the
+offline-verification tradeoff it carries. **This integration does not work
+without it.** A synced device is recognised between polls by the blind index of
+its MAC address, and that index is the upsert key — with no key to compute it,
+there is no way to tell a device seen before from a new one. The sync worker
+refuses to poll anything and logs why once per run, rather than filling the
+inventory with duplicates. `deploy/init-secrets.sh` generates it, so a deployment
+built with the bundled scripts already has one.
+
+**Each controller needs:**
+
+- **UniFi Network 9.x or later on UniFi OS 9.3.43 or later.** The Integration
+  API does not exist below that, and an older console answers 404 on every path
+  Helm uses. Check under Settings → System.
+- **An API key**, created on the console under Settings → Control Plane →
+  Integrations → API Keys. Paste it into Helm once; it is stored in the vault
+  with every other credential and read back through the audited reveal path, so
+  it never needs re-entering to change a setting.
+- **Network reachability from the Helm server** — same LAN, a routed link, or a
+  VPN. Helm talks to the console directly and never through Ubiquiti's cloud.
+- **Its certificate accepted, once.** A self-hosted console presents a
+  self-signed certificate; that is the product's default, not a
+  misconfiguration. Run the connection test in Helm, compare the SHA-256
+  fingerprint it shows against the console, and accept it. That pins **that one
+  certificate for that one controller**, recorded against your name — it is not
+  a global "ignore TLS" switch, and Helm does not have one. If the console is
+  later rebuilt, the next poll fails loudly rather than trusting whatever
+  answered.
+
+Helm **reads**. It never adopts, restarts or reconfigures anything, so the API
+key does not need write scope.
+
+Configuring a controller needs the `integration:network:manage` permission,
+which Tier 3 holds. It is deliberately separate from `tenant:write`, so a senior
+technician can be trusted with a client's network gear without also being handed
+the MSP's authentication settings and key custody.
+
+Full design: [`../architecture/11-network-integration.md`](../architecture/11-network-integration.md).
+
 ---
 
 ## 3. Generate keys and passwords
@@ -673,9 +717,12 @@ Stated plainly so they are decisions rather than surprises.
 | --- | --- |
 | `docs/architecture/01-security-model.md` | Guarantees, mechanisms and limitations |
 | `docs/architecture/03-crypto-operations.md` | Key hierarchy, rotation, both KEK providers |
-| `docs/architecture/05-workers-and-exports.md` | Worker identities, four-eyes exports |
+| `docs/architecture/05-workers-and-exports.md` | Worker identities, the export engine |
 | `docs/architecture/06-web-interface.md` | Pages, tenant switching, secret handling |
 | `docs/architecture/07-local-authentication.md` | Passwords, lockout, reset, the outage case |
 | `docs/architecture/08-radius-authentication.md` | Signing in against your own directory, and how it falls back |
+| `docs/architecture/09-oidc-authentication.md` | Any OpenID Connect provider, and where its client secret lives |
+| `docs/architecture/10-notifications.md` | Discord, Teams, Slack and generic webhooks |
+| `docs/architecture/11-network-integration.md` | Reading a UniFi controller: credentials, certificates, sync |
 | `docs/deployment/docker-on-prem.md` | Step-by-step Docker install: volumes, healthchecks, TLS, backup/restore |
 | `.env.example` | Every variable, with the reasoning |

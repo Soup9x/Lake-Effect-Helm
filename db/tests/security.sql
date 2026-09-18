@@ -1685,5 +1685,218 @@ SELECT helm_test.check('...but a failed one is',
   helm.notification_event_for('integration.sync_finished', 'error') = 'integration.failed');
 
 \echo ''
+\echo '== 38. A network controller is an integration, not a second vault =='
+-- 0430 gave Helm its first integration that both HOLDS a credential and WRITES
+-- tenant data on a schedule with no human present. Three things could go wrong
+-- quietly, and each has an assertion here rather than a comment somewhere:
+--
+--   * the controller's API key becomes a bespoke encrypted column, sitting
+--     outside the reveal ladder and outside the audit trail;
+--   * the permission to configure one drags tenant-wide authority along with
+--     it, so "let this technician manage the client's APs" also hands over the
+--     tenant's authentication settings;
+--   * the poller, which runs cross-tenant by construction, becomes reachable
+--     from the request path.
+
+\echo '-- the API key lives in the vault, like every other credential --'
+SELECT helm_test.check('the mapping has no bespoke credential column',
+  NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'unifi_site_mapping'
+      AND column_name ~ '(api_key|credential|secret|token|password)s?_(enc|ciphertext|plain)$'));
+SELECT helm_test.check('it references secret instead',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'unifi_site_mapping'::regclass AND conname = 'unifi_mapping_secret_fk'));
+-- Composite, so a mapping cannot be pointed at a secret belonging to another
+-- tenant: the FK itself refuses it, without depending on RLS being switched on.
+SELECT helm_test.check('...and the reference carries the tenant, so it cannot cross one',
+  (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+    WHERE conrelid = 'unifi_site_mapping'::regclass AND conname = 'unifi_mapping_secret_fk')
+  LIKE '%(api_key_secret_id, tenant_id)%');
+-- RESTRICT rather than SET NULL: deleting the credential out from under a live
+-- mapping would leave a controller configured, active, and unpollable, with
+-- nothing to say why.
+SELECT helm_test.check('deleting the secret out from under a mapping is refused',
+  (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+    WHERE conrelid = 'unifi_site_mapping'::regclass AND conname = 'unifi_mapping_secret_fk')
+  LIKE '%ON DELETE RESTRICT%');
+-- Without this the sync is refused 'not_an_integration_credential' on every
+-- poll — and the failure would be a stuck integration, not an insecure one,
+-- which is why it needs asserting rather than trusting to the first test run.
+SELECT helm_test.check('the reveal ladder recognises a UniFi key as an integration credential',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'is_integration_credential')
+  LIKE '%unifi_site_mapping%');
+
+\echo '-- managing a controller is its own grant --'
+-- The brief's central ask: grantable to a trusted technician WITHOUT handing
+-- over the tenant. tier3 holding it while not holding tenant:write is the whole
+-- proof, and it is the assertion that fails the day someone "simplifies" this
+-- back into tenant:write or a shared integration:manage.
+SELECT helm_test.check('the permission exists',
+  EXISTS (SELECT 1 FROM permission WHERE key = 'integration:network:manage'));
+SELECT helm_test.check('tier3 holds it',
+  EXISTS (SELECT 1 FROM role_permission
+          WHERE role_key = 'tier3' AND permission_key = 'integration:network:manage'));
+SELECT helm_test.check('...without holding tenant:write',
+  NOT EXISTS (SELECT 1 FROM role_permission
+              WHERE role_key = 'tier3' AND permission_key = 'tenant:write'));
+SELECT helm_test.check('...which is what makes it delegable at all',
+  EXISTS (SELECT 1 FROM role_permission WHERE permission_key = 'tenant:write'));
+SELECT helm_test.check('no client-facing role holds it',
+  NOT EXISTS (
+    SELECT 1 FROM role_permission
+    WHERE permission_key = 'integration:network:manage'
+      AND role_key IN ('client_admin', 'client_read_only', 'tier1', 'tier2', 'api_service')));
+-- The worker polls controllers; it does not configure them. Granting it this
+-- for convenience would let a stolen sync token repoint a mapping at a
+-- collector the attacker owns.
+SELECT helm_test.check('the sync service account cannot configure a controller either',
+  NOT EXISTS (SELECT 1 FROM role_permission
+              WHERE role_key = 'system_sync' AND permission_key = 'integration:network:manage'));
+
+\echo '-- the cross-tenant poller is the worker''s alone --'
+-- helm.unifi_poll_backlog returns rows for every tenant by construction: it is
+-- what the scheduler reads before any tenant context exists. Reachable from the
+-- request path it would be a complete enumeration of every MSP client's
+-- network gear.
+SELECT helm_test.check('helm_app cannot enumerate every tenant''s controllers',
+  NOT has_function_privilege('helm_app', 'helm.unifi_poll_backlog(integer)', 'EXECUTE'));
+-- Checked in its own right because helm_worker is a MEMBER of helm_app: a
+-- REVOKE naming helm_worker is a no-op, and membership only runs one way.
+SELECT helm_test.check('nor the auditor',
+  NOT has_function_privilege('helm_auditor', 'helm.unifi_poll_backlog(integer)', 'EXECUTE'));
+SELECT helm_test.check('nor the key administrator',
+  NOT has_function_privilege('helm_key_admin', 'helm.unifi_poll_backlog(integer)', 'EXECUTE'));
+SELECT helm_test.check('the worker can, because that is its job',
+  has_function_privilege('helm_worker', 'helm.unifi_poll_backlog(integer)', 'EXECUTE'));
+SELECT helm_test.check('the asset upsert is the worker''s too',
+  NOT has_function_privilege('helm_app',
+    'helm.upsert_network_asset(uuid, uuid, uuid, network_asset_type, bytea, uuid, bytea, bytea, bytea, bytea, text, text, text, bigint, smallint, integer, bytea, integer, text, boolean, timestamptz)',
+    'EXECUTE'));
+
+\echo '-- only what identifies a machine is encrypted --'
+-- Stated as an assertion because the tempting shortcut is to seal the whole
+-- telemetry payload, which protects nothing and makes "which APs are on old
+-- firmware" unanswerable in SQL. A change of mind here should have to delete a
+-- test that says why.
+SELECT helm_test.check('MAC, IP, hostname and serial are ciphertext',
+  NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'network_assets'
+      AND column_name IN ('mac_address_enc', 'ip_address_enc', 'hostname_enc', 'serial_enc')
+      AND data_type <> 'bytea'));
+SELECT helm_test.check('...and the telemetry beside them is still queryable',
+  NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'network_assets'
+      AND column_name IN ('model', 'firmware_version', 'device_state', 'ssid')
+      AND data_type = 'bytea'));
+SELECT helm_test.check('the blind index is the identity, and is mandatory',
+  EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'network_assets'
+      AND column_name = 'mac_blind_index' AND is_nullable = 'NO'));
+SELECT helm_test.check('...and is unique within a tenant, so a poll cannot duplicate a device',
+  EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'network_assets'::regclass AND contype IN ('u', 'p')
+      AND pg_get_constraintdef(oid) LIKE '%(tenant_id, mac_blind_index)%'));
+SELECT helm_test.check('an IP history row is indexed blind as well',
+  EXISTS (
+    SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+    WHERE i.indrelid = 'asset_ip_history'::regclass
+      AND pg_get_indexdef(i.indexrelid) LIKE '%ip_blind_index%'));
+
+\echo '-- a poll cannot overwrite what a person wrote --'
+-- Read out of the function definition rather than demonstrated, because the
+-- failure mode is an ADDED line in the UPDATE branch on a tired afternoon, and
+-- a behavioural test only catches the columns it happens to name.
+SELECT helm_test.check('the upsert names no user-owned column in its UPDATE branch',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'upsert_network_asset')
+  !~ '(custom_name_enc|asset_tag|department|notes|maintenance_status)\s*=\s*EXCLUDED');
+-- Every encrypted column is sealed against an AAD naming the row's id, so the
+-- id must exist before the ciphertext does. Letting the default mint it wrote
+-- rows whose every field was permanently unreadable, and the insert looked
+-- perfectly clean because nothing decrypted it.
+SELECT helm_test.check('the upsert inserts the id its ciphertext is bound to',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'upsert_network_asset')
+  ~ 'VALUES\s*\(\s*p_asset_id');
+
+\echo '-- TLS verification cannot be switched off, only narrowed --'
+-- A self-hosted controller on a private IP genuinely does present a self-signed
+-- certificate, so a flat refusal would just push operators to a global disable
+-- flag. The exception is per mapping, must name a specific fingerprint, and
+-- must record who accepted it.
+SELECT helm_test.check('verification off with nothing pinned is unrepresentable',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'unifi_site_mapping'::regclass
+            AND conname = 'unifi_mapping_no_blanket_disable'));
+SELECT helm_test.check('a pin without an acknowledgment is unrepresentable',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'unifi_site_mapping'::regclass
+            AND conname = 'unifi_mapping_pin_acknowledged'));
+SELECT helm_test.check('and the acknowledgment names a person and a time',
+  (SELECT count(*) FROM information_schema.columns
+    WHERE table_name = 'unifi_site_mapping'
+      AND column_name IN ('tls_exception_ack_by', 'tls_exception_ack_at')) = 2);
+
+\echo '-- and the inventory is tenant data like any other --'
+SELECT helm_test.check('every UniFi table carries RLS, forced',
+  NOT EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname IN ('unifi_site_mapping', 'network_assets', 'asset_ip_history')
+      AND NOT (c.relrowsecurity AND c.relforcerowsecurity)));
+
+-- Behavioural, because the catalogue check above proves the switch is on and
+-- says nothing about the policy being right. One tenant writes an asset; the
+-- other cannot see it, count it, or take it.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO network_assets (
+  tenant_id, organization_id, asset_type, mac_blind_index, data_key_id,
+  mac_address_enc, hostname_enc, model, firmware_version)
+VALUES (
+  :t1, :t1_acme, 'unifi_device',
+  decode(repeat('ab', 32), 'hex'),
+  (SELECT id FROM tenant_data_key WHERE tenant_id = :t1 AND status = 'active' LIMIT 1),
+  decode(repeat('cd', 40), 'hex'), decode(repeat('ef', 40), 'hex'),
+  'U6-Pro', '6.6.65');
+SELECT helm_test.check('the writing tenant sees its own asset',
+  (SELECT count(*) FROM network_assets WHERE model = 'U6-Pro') = 1);
+
+SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('the other tenant cannot see it',
+  NOT EXISTS (SELECT 1 FROM network_assets WHERE model = 'U6-Pro'));
+SELECT helm_test.check('...nor count it',
+  (SELECT count(*) FROM network_assets) = 0);
+-- The MAC is the join key across the whole integration, so a lookup by blind
+-- index is the query an attacker would actually write.
+SELECT helm_test.check('...nor find it by its blind index, which is the real lookup',
+  NOT EXISTS (
+    SELECT 1 FROM network_assets WHERE mac_blind_index = decode(repeat('ab', 32), 'hex')));
+-- An UPDATE that matches no row succeeds having done nothing, which is the
+-- correct RLS outcome and is worth pinning: a policy that let it through would
+-- move another tenant's device into this one.
+-- A DO block rather than a CTE: a data-modifying WITH is only legal at the top
+-- level, and this needs the row count as a value. No psql variables inside, so
+-- the dollar-quoting is safe.
+DO $steal$
+DECLARE v_rows integer;
+BEGIN
+  UPDATE network_assets SET organization_id = organization_id WHERE model = 'U6-Pro';
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  PERFORM helm_test.check('...and cannot take it by UPDATE', v_rows = 0);
+END;
+$steal$;
+ROLLBACK;
+
+\echo ''
 \echo '== All security assertions passed =='
 

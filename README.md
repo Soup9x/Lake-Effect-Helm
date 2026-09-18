@@ -57,6 +57,7 @@ docs/
   architecture/08-radius-authentication.md  the third door, and how it degrades
   architecture/09-oidc-authentication.md   any OpenID Connect provider, and its custody
   architecture/10-notifications.md      what leaves the building, and what cannot
+  architecture/11-network-integration.md   reading a UniFi controller, and its custody
   deployment/docker-on-prem.md          step-by-step Docker install and backup/restore
   deployment/on-premises.md             docker compose, keys, TLS, rotation runbook
 deploy/

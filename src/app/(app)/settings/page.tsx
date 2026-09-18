@@ -11,6 +11,11 @@ import {
   type NotificationDestination,
   type NotificationDelivery,
 } from '@/components/notification-settings';
+import {
+  UnifiSettingsCard,
+  type OrganizationOption,
+  type UnifiMapping,
+} from '@/components/unifi-settings';
 import { redirectUri } from '@/lib/auth/oidc';
 import { headers } from 'next/headers';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
@@ -144,6 +149,59 @@ function toDelivery(row: DeliveryRow): NotificationDelivery {
   };
 }
 
+/** helm.unifi_mappings(): settings and health, never the API key. */
+interface UnifiRow {
+  id: string;
+  organization_id: string;
+  organization_name: string;
+  name: string;
+  controller_url: string;
+  unifi_site_id: string;
+  is_active: boolean;
+  api_key_set: boolean;
+  tls_verify: boolean;
+  tls_pinned_sha256: string | null;
+  tls_exception_ack_at: Date | null;
+  tls_exception_ack_by_name: string | null;
+  poll_interval_seconds: number;
+  last_poll_at: Date | null;
+  last_poll_ok: boolean | null;
+  last_poll_error: string | null;
+  consecutive_failures: number;
+  next_poll_at: Date;
+  last_device_count: number | null;
+  last_client_count: number | null;
+  asset_count: string;
+}
+
+function toUnifiMapping(row: UnifiRow): UnifiMapping {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    organizationName: row.organization_name,
+    name: row.name,
+    controllerUrl: row.controller_url,
+    unifiSiteId: row.unifi_site_id,
+    isActive: row.is_active,
+    // Whether a key exists, never the key itself — helm_app cannot read secret
+    // material, so there is nothing here that could carry it.
+    apiKeySet: row.api_key_set,
+    tlsVerify: row.tls_verify,
+    tlsPinnedSha256: row.tls_pinned_sha256,
+    tlsExceptionAckAt: row.tls_exception_ack_at?.toISOString() ?? null,
+    tlsExceptionAckByName: row.tls_exception_ack_by_name,
+    pollIntervalSeconds: row.poll_interval_seconds,
+    lastPollAt: row.last_poll_at?.toISOString() ?? null,
+    lastPollOk: row.last_poll_ok,
+    lastPollError: row.last_poll_error,
+    consecutiveFailures: row.consecutive_failures,
+    nextPollAt: row.next_poll_at.toISOString(),
+    lastDeviceCount: row.last_device_count,
+    lastClientCount: row.last_client_count,
+    assetCount: Number(row.asset_count),
+  };
+}
+
 interface OidcRow {
   enabled: boolean;
   slug: string;
@@ -226,9 +284,12 @@ function toRadiusSettings(row: RadiusRow | null): RadiusSettings | null {
 export default async function SettingsPage() {
   const identity = await getServerIdentity();
 
-  const { keys, integrations, workers, tenant, radius, oidc, destinations, deliveries } = await withTenant(actorOf(identity), async (tx) => {
+  const {
+    keys, integrations, workers, tenant, radius, oidc, destinations, deliveries,
+    unifi, organizations, canManageNetwork,
+  } = await withTenant(actorOf(identity), async (tx) => {
     const [keyRows, integrationRows, workerRows, tenantRows, radiusRows, oidcRows,
-           destinationRows, deliveryRows] = await Promise.all([
+           destinationRows, deliveryRows, unifiRows, organizationRows, networkRows] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -262,6 +323,22 @@ export default async function SettingsPage() {
       // What comes back is a host and a digest.
       tx<DestinationRow[]>`SELECT * FROM helm.webhook_endpoints()`,
       tx<DeliveryRow[]>`SELECT * FROM helm.recent_notifications(20)`,
+      // Settings and health. The API key is a reference into `secret`, and this
+      // result type carries whether one is set — not what it is.
+      tx<UnifiRow[]>`SELECT * FROM helm.unifi_mappings()`,
+      // RLS scopes this to the tenant, and to the organisations this actor may
+      // see, so the picker cannot offer a client they have no access to.
+      tx<OrganizationOption[]>`SELECT id, name FROM organization ORDER BY name`,
+      // Mirrors the route's gate, so the editing controls are only offered to
+      // somebody they would work for. The route and the database both check
+      // again; this only decides what is rendered.
+      tx<{ permitted: boolean }[]>`
+        SELECT EXISTS (
+          SELECT 1 FROM membership m
+          JOIN role_permission rp ON rp.role_key = m.role_key
+          WHERE m.user_id = ${identity.actorId}::uuid
+            AND rp.permission_key = 'integration:network:manage') AS permitted
+      `,
     ]);
     return {
       keys: keyRows,
@@ -272,6 +349,9 @@ export default async function SettingsPage() {
       oidc: oidcRows[0] ?? null,
       destinations: destinationRows,
       deliveries: deliveryRows,
+      unifi: unifiRows,
+      organizations: organizationRows,
+      canManageNetwork: networkRows[0]?.permitted ?? false,
     };
   });
 
@@ -314,6 +394,12 @@ export default async function SettingsPage() {
           destinations={destinations.map(toDestination)}
           history={deliveries.map(toDelivery)}
           events={NOTIFICATION_EVENTS}
+        />
+
+        <UnifiSettingsCard
+          mappings={unifi.map(toUnifiMapping)}
+          organizations={organizations}
+          canManage={canManageNetwork}
         />
 
         <OidcSettingsCard initial={toOidcSettings(oidc, origin)} />
