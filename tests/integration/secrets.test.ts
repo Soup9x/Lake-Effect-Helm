@@ -235,6 +235,11 @@ describe('authorisation ladder', () => {
   let standardSecretId: string;
 
   const grantStepUp = async () => {
+    // A direct insert, deliberately: this suite is testing what the DATABASE
+    // does with a verification, not how one is obtained. That shortcut was the
+    // only coverage step-up had, which is why nobody noticed no user could
+    // create one — tests/integration/step-up.test.ts now drives the real route
+    // and writes no rows of its own.
     const sql = superuserSql();
     try {
       await sql`

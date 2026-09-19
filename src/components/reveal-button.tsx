@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Copy, Eye, EyeOff, Loader2, ShieldAlert } from 'lucide-react';
+import { Copy, Eye, EyeOff, Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
+import { useStepUp } from './step-up-dialog';
+import { STEP_UP_CODE, toAttemptResult, withStepUp } from '@/lib/ui/step-up';
 import { cn } from '@/lib/ui/cn';
 
 /**
@@ -30,6 +32,13 @@ import { cn } from '@/lib/ui/cn';
  *   A refusal renders its cause and its audit event id. When a technician says
  *   "it says I can't see this", support answers with one audit lookup instead
  *   of a log trawl.
+ *
+ * AND ONE REFUSAL IS NOW ACTIONABLE. `step_up_required` used to render the
+ * sentence "Re-authenticate to view this credential, then try again" — advice
+ * with nothing behind it, because the product had no step-up anywhere.
+ * helm.record_step_up() had been in the schema since 0340 and was called by
+ * nothing. The refusal now opens the prompt, and a success retries the reveal
+ * the person actually asked for; see src/lib/ui/step-up.ts for the retry rule.
  */
 const AUTO_HIDE_MS = 45_000;
 
@@ -40,6 +49,12 @@ interface RevealState {
   auditEventUid?: string;
   needsReason?: boolean;
   needsStepUp?: boolean;
+}
+
+/** The JSON a granted reveal returns. */
+interface RevealOk {
+  value: string;
+  auditEventUid?: string;
 }
 
 export function RevealButton({
@@ -53,6 +68,7 @@ export function RevealButton({
   requiresReason: boolean;
   requiresStepUp: boolean;
 }) {
+  const stepUp = useStepUp();
   const [state, setState] = useState<RevealState>({ status: 'idle' });
   const [reason, setReason] = useState('');
   const [copied, setCopied] = useState(false);
@@ -70,36 +86,46 @@ export function RevealButton({
     setCopied(false);
   };
 
+  /**
+   * One attempt at the reveal, reduced to granted-or-refused.
+   *
+   * Deliberately NOT capturing `reason` in a closure variable read later: the
+   * retry re-runs this, and it must send whatever is in the box at that moment
+   * — the person may have typed a justification while the prompt was open.
+   */
+  const attemptReveal = async () => {
+    const response = await fetch(`/api/secrets/${secretId}/reveal`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ purpose: 'view', ...(reason ? { reason } : {}) }),
+    });
+    const body = await response.json().catch(() => null);
+    return toAttemptResult<RevealOk>(response.ok, response.status, body, (b) => b as RevealOk);
+  };
+
   const reveal = async () => {
     setState({ status: 'loading' });
     try {
-      const response = await fetch(`/api/secrets/${secretId}/reveal`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ purpose: 'view', ...(reason ? { reason } : {}) }),
-      });
+      // A step-up refusal opens the prompt and, on success, retries once. Any
+      // other refusal falls straight through — a password box cannot fix a rank
+      // that is too low, and offering one would say it can.
+      const result = await withStepUp(attemptReveal, stepUp.prompt);
 
-      const body = (await response.json()) as
-        | { value: string; auditEventUid?: string }
-        | { error: { code: string; message: string; details?: { auditEventUid?: string } } };
-
-      if (!response.ok) {
-        const error = (body as { error: { code: string; message: string; details?: { auditEventUid?: string } } }).error;
+      if (!result.ok) {
         setState({
           status: 'denied',
-          message: error.message,
-          ...(error.details?.auditEventUid ? { auditEventUid: error.details.auditEventUid } : {}),
-          needsReason: error.code === 'reason_required',
-          needsStepUp: error.code === 'step_up_required',
+          message: result.message,
+          ...(result.auditEventUid ? { auditEventUid: result.auditEventUid } : {}),
+          needsReason: result.code === 'reason_required',
+          needsStepUp: result.code === STEP_UP_CODE,
         });
         return;
       }
 
-      const ok = body as { value: string; auditEventUid?: string };
       setState({
         status: 'shown',
-        value: ok.value,
-        ...(ok.auditEventUid ? { auditEventUid: ok.auditEventUid } : {}),
+        value: result.value.value,
+        ...(result.value.auditEventUid ? { auditEventUid: result.value.auditEventUid } : {}),
       });
       timer.current = setTimeout(hide, AUTO_HIDE_MS);
     } catch {
@@ -130,6 +156,7 @@ export function RevealButton({
 
   return (
     <div className="space-y-2" data-secret>
+      {stepUp.dialog}
       {needsReason && state.status !== 'shown' && (
         <div className="space-y-1">
           <Label htmlFor={`reason-${secretId}`}>Reason (recorded in the audit log)</Label>
@@ -190,9 +217,19 @@ export function RevealButton({
           <div>
             <p>{state.message}</p>
             {state.needsStepUp && (
-              <p className="mt-1 text-ink-muted">
-                Re-authenticate to view this credential, then try again.
-              </p>
+              // Reached only when the prompt was dismissed or its verification
+              // did not hold — withStepUp has already offered it once. A button
+              // rather than the old sentence, which told the person to do
+              // something the product could not do.
+              <Button
+                variant="secondary"
+                size="sm"
+                className="mt-2"
+                onClick={reveal}
+              >
+                <ShieldCheck aria-hidden />
+                Re-authenticate and retry
+              </Button>
             )}
             {state.auditEventUid && (
               <p className="mt-1 font-mono text-[11px] text-ink-faint">

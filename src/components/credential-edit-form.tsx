@@ -15,12 +15,17 @@
  *   event anybody needs to be told about.
  *
  *   THE VALUE — a rotation. It writes a new encrypted version through the same
- *   audited handshake a reveal goes through, so a credential flagged
- *   `requires_step_up` cannot be rotated by a session that has not stepped up,
- *   exactly as it cannot be read by one. That gate is enforced in the database,
- *   not here; this form only has to render the refusal honestly when it comes
- *   back, which is why a step-up denial gets its own message rather than being
- *   flattened into "failed".
+ *   audited handshake a reveal goes through. The gate is enforced in the
+ *   database, not here; this form has to render the refusal honestly and — as
+ *   of the step-up flow — offer the one thing that clears it.
+ *
+ *   WHICH GATE, PRECISELY. This comment used to say a credential flagged
+ *   `requires_step_up` could not be rotated without one. That was wrong, and
+ *   measurably so: helm.write_secret_version() gates on `sensitivity =
+ *   'critical'`, while `requires_step_up` gates the READ path in
+ *   helm.reveal_secret(). A standard-sensitivity secret flagged
+ *   requires_step_up rotates without a step-up today. The asymmetry is real and
+ *   is left as it is; documenting it wrongly is what had to stop.
  *
  * The plaintext lives in this component's state for as long as the form is open
  * and is never read back from the server — there is no endpoint that would
@@ -33,6 +38,8 @@ import { KeyRound, Loader2, Pencil, RotateCw } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
+import { useStepUp } from './step-up-dialog';
+import { toAttemptResult, withStepUp } from '@/lib/ui/step-up';
 import { changedFields, hasChanges, type FieldValue } from '@/lib/ui/form-diff';
 
 const SENSITIVITIES = ['standard', 'elevated', 'critical'] as const;
@@ -68,6 +75,7 @@ export function CredentialEditForm({
   canEdit: boolean;
 }) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<CredentialValues>(initial);
   const [busy, setBusy] = useState(false);
@@ -139,37 +147,42 @@ export function CredentialEditForm({
     }
   }
 
+  /** One rotation attempt, reduced to stored-or-refused. */
+  async function attemptRotate() {
+    const response = await fetch(`/api/secrets/${secretId}/rotate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ value: newValue, reason: reason.trim() }),
+    });
+    const body = await response.json().catch(() => null);
+    return toAttemptResult<{ version?: number }>(
+      response.ok,
+      response.status,
+      body,
+      (b) => (b ?? {}) as { version?: number },
+    );
+  }
+
   async function rotate(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError(null);
     setSaved(null);
     try {
-      const response = await fetch(`/api/secrets/${secretId}/rotate`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ value: newValue, reason: reason.trim() }),
-      });
-      const body = (await response.json().catch(() => null)) as {
-        version?: number;
-        error?: { code?: string; message?: string };
-      } | null;
+      // A step-up refusal is not a failure, it is an instruction — and now one
+      // the person can act on. The prompt opens; a success retries the rotation
+      // they already typed, so the new value is not lost to a re-auth.
+      const result = await withStepUp(attemptRotate, stepUp.prompt);
 
-      if (!response.ok) {
-        // A step-up refusal is not a failure, it is an instruction. Saying
-        // "rotation failed" would send somebody looking for a broken feature.
-        setError(
-          body?.error?.code === 'step_up_required'
-            ? 'This credential needs re-authentication before it can be changed. Sign in again, then retry.'
-            : (body?.error?.message ?? `The rotation failed (${response.status}).`),
-        );
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
 
       setNewValue('');
       setReason('');
       setRotating(false);
-      setSaved(`Stored as version ${body?.version ?? '?'}. The previous value is superseded.`);
+      setSaved(`Stored as version ${result.value.version ?? '?'}. The previous value is superseded.`);
       router.refresh();
     } catch {
       setError('The request did not reach the server.');
@@ -182,6 +195,7 @@ export function CredentialEditForm({
 
   return (
     <>
+      {stepUp.dialog}
       <Button
         variant="ghost"
         size="icon"

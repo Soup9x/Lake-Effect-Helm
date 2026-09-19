@@ -12,16 +12,25 @@ import { getSecretService } from '@/lib/services';
  * version number, and the previous version still readable for the window the
  * retention policy allows — none of which a metadata UPDATE does or should do.
  *
- * THE GATE IS THE SAME ONE THE READ PATH USES. SecretService.rotate() goes
- * through the write handshake, which re-derives the actor's authority in the
- * database: a credential flagged requires_step_up cannot be rotated by a
- * session that has not stepped up, exactly as it cannot be revealed by one.
- * That is why this route does not re-implement the check — a second copy of an
+ * THE GATE IS RE-DERIVED IN THE DATABASE, not here. SecretService.rotate() goes
+ * through helm.write_secret_version(), which checks the actor's authority
+ * itself. This route does not re-implement it — a second copy of an
  * authorisation rule is a second place for it to drift.
  *
- * A refusal surfaces through the same SecretAccessDeniedError mapping the
- * reveal route uses, so the client gets `step_up_required` and can prompt,
- * rather than a bare 403 that reads as "you may never do this".
+ * WHICH GATE, PRECISELY, because this comment used to get it wrong and the
+ * error was worth correcting rather than quietly deleting. It claimed a
+ * credential flagged `requires_step_up` could not be rotated without one.
+ * Measured: it can. helm.write_secret_version() gates on `sensitivity =
+ * 'critical'`; `requires_step_up` gates the READ path in helm.reveal_secret().
+ * So a standard-sensitivity credential with the flag set is unreadable without
+ * a step-up and rotatable without one. That asymmetry is real, predates this
+ * route, and is documented in docs/architecture/01-security-model.md §4.4 —
+ * what had to stop was a route comment asserting a control that is not there.
+ *
+ * A refusal surfaces as `step_up_required` either way: through
+ * SecretAccessDeniedError on the read side, and since 0470 through the DETAIL
+ * the write-path raise carries. So the client can prompt rather than seeing a
+ * bare 403 that reads as "you may never do this".
  */
 const rotateSchema = z.object({
   /** Bounded exactly as creation is: 64 KiB comfortably holds a private key. */

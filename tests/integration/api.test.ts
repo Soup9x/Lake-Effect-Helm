@@ -363,6 +363,9 @@ describe('secret reveal endpoint', () => {
     );
     standardSecretId = standard.secretId;
 
+    // A direct insert, deliberately: these tests are about the ROUTES above the
+    // ladder, not about obtaining a verification. tests/integration/step-up.test.ts
+    // covers the real path and inserts nothing.
     const sql = superuserSql();
     try {
       await sql`

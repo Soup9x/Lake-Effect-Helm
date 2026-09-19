@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { KeyRound, Loader2, Plus } from 'lucide-react';
 import { Button } from './ui/button';
 import { Modal } from './ui/modal';
+import { useStepUp } from './step-up-dialog';
+import { toAttemptResult, withStepUp } from '@/lib/ui/step-up';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 
 /**
@@ -24,6 +26,21 @@ import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
  * `sensitivity` and `requiresReason` are offered at creation rather than left
  * to a later edit, because the moment a credential is stored is the only moment
  * somebody is definitely thinking about what it unlocks.
+ *
+ * "CRITICAL" USED TO BE AN OPTION THAT COULD NOT BE CHOSEN, in two independent
+ * ways, both measured before they were fixed:
+ *
+ *   This form never sent `requiresStepUp`, so the CHECK that a critical
+ *   credential must require both a step-up and a reason fired on the INSERT,
+ *   nothing caught it, and the person got `500 internal error` for ticking a
+ *   box this form offered them. Choosing `critical` now turns both on, and
+ *   locks them, exactly as the edit form does.
+ *
+ *   And helm.write_secret_version() refuses to write material for a critical
+ *   secret unless the session has stepped up — which nothing in the product
+ *   could do, because helm.record_step_up() was never called by anything. So
+ *   even a correct payload was refused. The refusal now opens a prompt and
+ *   retries the store.
  */
 const KINDS = [
   ['password', 'Password'],
@@ -59,12 +76,31 @@ const MULTILINE = new Set(['private_key', 'certificate', 'ssh_key']);
 
 export function NewSecretForm({ organizationId }: { organizationId: string }) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState('');
   const [kind, setKind] = useState('password');
   const [value, setValue] = useState('');
-  const [sensitivity, setSensitivity] = useState('standard');
+  const [sensitivity, setSensitivityState] = useState('standard');
   const [requiresReason, setRequiresReason] = useState(false);
+  const [requiresStepUp, setRequiresStepUp] = useState(false);
+
+  /*
+   * `critical` is not a label, it is a policy: the schema enforces that a
+   * critical credential requires BOTH a step-up and a written reason. Choosing
+   * it turns both on rather than letting the save come back refused, and the
+   * two lock, because unticking one would make the sensitivity unsaveable for a
+   * reason the form had not explained. Same rule, same wording, as the edit
+   * form — one policy, stated the same way at both ends.
+   */
+  const critical = sensitivity === 'critical';
+  function setSensitivity(next: string) {
+    setSensitivityState(next);
+    if (next === 'critical') {
+      setRequiresStepUp(true);
+      setRequiresReason(true);
+    }
+  }
   const [credentialType, setCredentialType] = useState('standard_user');
   const [username, setUsername] = useState('');
   const [url, setUrl] = useState('');
@@ -76,8 +112,9 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
     setLabel('');
     setValue('');
     setKind('password');
-    setSensitivity('standard');
+    setSensitivityState('standard');
     setRequiresReason(false);
+    setRequiresStepUp(false);
     setCredentialType('standard_user');
     setUsername('');
     setUrl('');
@@ -86,36 +123,49 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
     setOpen(false);
   }
 
+  /**
+   * One store attempt.
+   *
+   * Reads `value` from the render closure rather than a copy taken earlier, so
+   * the step-up retry sends the same plaintext without it having to be stashed
+   * anywhere new. The `finally` below still clears it once, after both attempts
+   * — the retry happens inside the try, which is why it can.
+   */
+  async function attemptCreate() {
+    const response = await fetch('/api/secrets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        organizationId,
+        label: label.trim(),
+        kind,
+        value,
+        sensitivity,
+        requiresReason,
+        requiresStepUp,
+        credentialType,
+        ...(username.trim() ? { username: username.trim() } : {}),
+        ...(url.trim() ? { url: url.trim() } : {}),
+        ...(notes.trim() ? { notes: notes.trim() } : {}),
+      }),
+    });
+    const payload = await response.json().catch(() => null);
+    return toAttemptResult<unknown>(response.ok, response.status, payload, (b) => b);
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError(null);
 
     try {
-      const response = await fetch('/api/secrets', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          organizationId,
-          label: label.trim(),
-          kind,
-          value,
-          sensitivity,
-          requiresReason,
-          credentialType,
-          ...(username.trim() ? { username: username.trim() } : {}),
-          ...(url.trim() ? { url: url.trim() } : {}),
-          ...(notes.trim() ? { notes: notes.trim() } : {}),
-        }),
-      });
+      // Storing a `critical` credential needs a stepped-up session. The prompt
+      // opens on that refusal and the store is retried, so choosing "Critical"
+      // costs a password re-entry rather than being impossible.
+      const result = await withStepUp(attemptCreate, stepUp.prompt);
 
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(
-          payload?.error?.message ?? `The credential could not be stored (${response.status}).`,
-        );
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
 
@@ -134,6 +184,7 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
 
   return (
     <>
+      {stepUp.dialog}
       <Button variant="primary" onClick={() => setOpen(true)} className="gap-2">
         <Plus />
         Store a credential
@@ -282,18 +333,36 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
               </Select>
             </div>
 
-            <div className="flex items-end">
+            <div className="flex flex-col justify-end gap-2">
               <label className="flex items-center gap-2 text-sm text-ink">
                 <input
                   type="checkbox"
                   checked={requiresReason}
                   onChange={(e) => setRequiresReason(e.target.checked)}
-                  className="size-4 rounded border-border-strong"
+                  disabled={critical}
+                  className="size-4 rounded border-border-strong disabled:opacity-60"
                 />
                 Require a reason to reveal
               </label>
+              <label className="flex items-center gap-2 text-sm text-ink">
+                <input
+                  type="checkbox"
+                  checked={requiresStepUp}
+                  onChange={(e) => setRequiresStepUp(e.target.checked)}
+                  disabled={critical}
+                  className="size-4 rounded border-border-strong disabled:opacity-60"
+                />
+                Require re-authentication to reveal
+              </label>
             </div>
           </div>
+
+          {critical && (
+            <FieldHint>
+              Critical credentials always require both. Storing one asks you to confirm your
+              password first.
+            </FieldHint>
+          )}
 
           {error && (
             <p role="alert" className="text-sm text-danger">

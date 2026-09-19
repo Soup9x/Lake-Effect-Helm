@@ -161,6 +161,27 @@ function isInsufficientPrivilege(error: unknown): boolean {
   );
 }
 
+/**
+ * A refusal the caller can actually clear by re-authenticating.
+ *
+ * The READ path has always been able to say this: helm.reveal_secret() returns
+ * a denial_reason column, which becomes SecretAccessDeniedError and then
+ * `step_up_required` below. The WRITE path could not — helm.write_secret_version()
+ * raised a bare insufficient_privilege, so creating or rotating a `critical`
+ * secret came back as a flat 403 `forbidden`, identical to "your role is too
+ * low". The create form had no way to tell that a prompt would help, so it
+ * never offered one, and "Critical" was an option that always failed.
+ *
+ * 0470 attaches DETAIL = 'step_up_required' to that raise. Read structurally
+ * rather than by matching the message, which is prose and not a contract.
+ */
+function isStepUpRefusal(error: unknown): boolean {
+  return (
+    isInsufficientPrivilege(error) &&
+    (error as { detail?: unknown }).detail === 'step_up_required'
+  );
+}
+
 function assertPermitted(session: ResolvedSessionContext, options: TenantRouteOptions): void {
   if (options.minRoleRank !== undefined && session.roleRank < options.minRoleRank) {
     throw ApiError.forbidden('your role does not permit this operation');
@@ -220,6 +241,22 @@ export function errorResponse(error: unknown, requestId: string): Response {
   // stack trace in the log, which reads as "Helm is broken" rather than "you
   // may not do that". Routes that want a more specific message still translate
   // it themselves inside the handler; this is the floor, not the ceiling.
+  // Checked BEFORE the general insufficient_privilege branch below, which would
+  // otherwise swallow it into a flat 403 — the distinction is the whole point.
+  if (isStepUpRefusal(error)) {
+    return json(
+      toErrorBody(
+        new ApiError(
+          'step_up_required',
+          're-authentication is required before this credential can be written',
+        ),
+        requestId,
+      ),
+      403,
+      requestId,
+    );
+  }
+
   if (isInsufficientPrivilege(error)) {
     return json(
       toErrorBody(

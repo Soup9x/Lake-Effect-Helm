@@ -264,6 +264,54 @@ created through `POST /api/secrets` is written with a credential row in the same
 transaction, and every secret created through a flexible asset record is written
 with a `flexible_asset_secret` row.
 
+### 4.4.2 Step-up verification
+
+A step-up is a person proving, again, that they are the one holding the session.
+`POST /api/auth/step-up` takes the caller's **local password**, verifies it
+through the ordinary sign-in path, and calls `helm.record_step_up()` to write a
+`step_up_verification` row valid for **15 minutes**.
+
+Three properties are load-bearing:
+
+- **It reuses `attemptLocalLogin()`**, so it inherits the sign-in throttle, the
+  lockout and the `auth_attempt` ledger. Without that, a stolen session cookie
+  becomes an unthrottled password oracle at an endpoint the login form's limits
+  never see. `establishSession: false`: it proves knowledge, it does not mint a
+  session.
+- **It is refused to API tokens.** `helm.record_step_up()` rejects service
+  accounts, but a token issued to a *user* carries `actor_type = 'user'` and
+  would pass that check. The route refuses anything that did not arrive on a
+  browser session.
+- **It resolves its tenant exactly as the reveal does** (the `X-Helm-Tenant`
+  header, via `resolveIdentity()`), because `set_session_context()` matches
+  `step_up_verification` on `(user_id, tenant_id)`. A step-up recorded against
+  the wrong tenant is written, audited, and silently useless.
+
+The verification is **not a token handed back to the client**. It is a row the
+database reads when the *next* request opens its session context — which is why
+the interface retries the original action as a new request rather than replaying
+one (`src/lib/ui/step-up.ts`).
+
+RADIUS users can step up: `attemptLocalLogin()` tries the directory first, and
+the recorded method is `password` either way. An account with no local password
+and no RADIUS — SSO-only — **cannot** step up, and the route says so specifically
+rather than answering "wrong password" forever. `step_up_verification.method`
+already permits `webauthn`, `totp` and `sso_reauth`; none of those factors exists
+in this product yet.
+
+**An asymmetry worth knowing.** The two gates do not key on the same column:
+
+| | Gate | Column |
+| --- | --- | --- |
+| Reveal | `helm.reveal_secret()` | `secret.requires_step_up` |
+| Write / rotate | `helm.write_secret_version()` | `secret.sensitivity = 'critical'` |
+
+So a `standard` secret flagged `requires_step_up` cannot be read without a
+step-up but *can* be rotated without one. A `critical` secret needs one for
+both — and, because of the `CHECK`, always carries `requires_step_up` anyway.
+This is stated because two code comments previously asserted the stronger,
+untrue rule.
+
 ### 4.5 Password reuse detection
 
 `secret_version.reuse_hmac` is an HMAC of the plaintext under a per-deployment

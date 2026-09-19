@@ -150,6 +150,26 @@ export const POST = tenantRoute(
       if ((error as { code?: string }).code === '23503') {
         throw ApiError.invalid('no such client or site');
       }
+      /*
+       * The same rule PATCH already states, stated here too — and its absence
+       * was measurable: the New credential form offers "Critical" and does not
+       * send requiresStepUp, so the CHECK fired, nothing caught it, and the
+       * person received `500 internal error` for ticking a box the form put in
+       * front of them. A constraint violation is a user mistake and has to read
+       * like one.
+       *
+       * The form now turns both flags on with `critical`, so this is the floor
+       * rather than the everyday path — but an API client building the same
+       * payload by hand deserves the same sentence.
+       */
+      if (
+        (error as { constraint_name?: string }).constraint_name ===
+        'secret_critical_requires_step_up'
+      ) {
+        throw ApiError.invalid(
+          'a credential marked critical must also require re-authentication and a written reason to reveal',
+        );
+      }
       throw error;
     }
     if (!node) throw ApiError.conflict('the credential could not be created');

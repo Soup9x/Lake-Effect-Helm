@@ -123,6 +123,13 @@ COMMIT;
 
 BEGIN;
 SELECT helm_test.ctx(:t1, :u_admin1);
+-- A direct insert, deliberately. This suite runs as helm_app and tests what the
+-- LADDER does with a verification; obtaining one is an application concern it
+-- cannot reach (the password check happens outside the database). That shortcut
+-- was the only coverage step-up had anywhere, which is how a schema function
+-- nobody called went unnoticed: helm.record_step_up() was correct, granted, and
+-- unreachable from the product. tests/integration/step-up.test.ts now drives the
+-- real route and writes no step_up_verification row of its own.
 INSERT INTO step_up_verification (tenant_id, user_id, method, expires_at)
   VALUES (:t1, :u_admin1, 'webauthn', now() + interval '15 minutes');
 COMMIT;
