@@ -254,10 +254,25 @@ export class ExportService {
         : actor;
 
       let collected;
+      /*
+       * THE REQUESTER'S RANK, as the database resolves it, at render time.
+       *
+       * Taken from the session context that is already being opened to collect
+       * as them — no extra query, and no second opinion about what their
+       * authority is. It becomes the FLOOR that #fillSecrets applies below.
+       *
+       * Starts at Infinity so that a bug which skipped this assignment would
+       * fail loudly (every secret omitted) rather than silently granting
+       * everything. It is overwritten before #fillSecrets can run.
+       */
+      let requesterRank = Number.POSITIVE_INFINITY;
       try {
         collected = await withTenant(
           collector,
-          async (tx) => collectExport(tx, job.organizationId, job.scope),
+          async (tx, session) => {
+            requesterRank = session.roleRank;
+            return collectExport(tx, job.organizationId, job.scope);
+          },
           { role: 'worker' },
         );
       } catch (error) {
@@ -274,7 +289,7 @@ export class ExportService {
       let secretCount = 0;
 
       if (job.includeSecrets) {
-        secretCount = await this.#fillSecrets(actor, collected, omissions);
+        secretCount = await this.#fillSecrets(actor, collected, omissions, requesterRank);
       }
 
       const options = {
@@ -335,26 +350,72 @@ export class ExportService {
   /**
    * Decrypt each credential in the bundle, one audited reveal at a time.
    *
-   * A refusal is RECORDED, not swallowed. The two that actually happen:
+   * TWO LADDERS, NOT ONE, and the second one is the point of this method.
    *
-   *   step_up_required — a machine identity can never satisfy an interactive
-   *   re-authentication, so the most sensitive credentials are, correctly,
-   *   unreachable to an automated export. The handover says so on its cover
-   *   page and the receiving team knows to ask for those separately.
+   * The reveals below run as the export SERVICE ACCOUNT, because its reveal
+   * purposes are pinned to 'export' and a person's are not. That is correct and
+   * stays. What it cannot do is answer the question the bundle actually poses:
+   * may THIS PERSON have these credentials?
    *
-   *   insufficient_role_rank — a credential pinned above the export worker's
-   *   rank. Same treatment.
+   * Metadata is collected as the requester, so RLS answers that for the
+   * documentation. Material was not: every secret the worker could reach went
+   * into the bundle, so the worker's rank was the only ceiling. A rank-30 actor
+   * holding secret:export received, in one file, credentials up to rank 60 —
+   * including ones helm.reveal_secret() would have refused them individually,
+   * one at a time, with an audit row for each refusal. A privilege ladder that
+   * a bulk operation walks straight past is not a ladder.
    *
-   * Continuing past a refusal is deliberate: an offboarding pack that fails
-   * entirely because one break-glass credential needs step-up helps nobody.
+   * So a secret must now clear BOTH:
+   *
+   *   the requester's own rank, checked here against min_role_rank — the same
+   *   comparison helm.reveal_secret() makes for a person asking directly;
+   *
+   *   the worker's rank, still enforced inside helm.reveal_secret() by the
+   *   reveal below, unchanged.
+   *
+   * A secret whose rank cannot be determined is OMITTED. The metadata read is
+   * the worker's, so a missing row means the secret was deleted mid-render or
+   * something is wrong — neither is a reason to hand over material.
+   *
+   * A refusal is RECORDED, not swallowed, and continuing past one is
+   * deliberate: an offboarding pack that fails entirely because one break-glass
+   * credential needs step-up helps nobody. The handover names every omission on
+   * its cover page so the receiving team knows to ask for those separately.
    */
   async #fillSecrets(
     actor: ActorRef,
     collected: CollectedExport,
     omissions: ExportOmission[],
+    requesterRank: number,
   ): Promise<number> {
     const secrets = getSecretService();
     let revealed = 0;
+
+    const wanted = collected.credentials.flatMap((c) =>
+      [c.secret_id, c.totp_secret_id].filter((id): id is string => Boolean(id)),
+    );
+
+    /*
+     * One query for the whole bundle rather than one per credential. Read in
+     * the WORKER's context: this is the set the worker is about to reveal, and
+     * the floor has to be applied to all of it, not only to the rows the
+     * requester happens to be able to see the metadata for.
+     */
+    const rankById = new Map<string, number>();
+    if (wanted.length > 0) {
+      await withTenant(
+        actor,
+        async (tx) => {
+          const rows = await tx<{ id: string; min_role_rank: number }[]>`
+            SELECT id::text, min_role_rank
+            FROM v_secret_metadata
+            WHERE id = ANY(${wanted}::uuid[])
+          `;
+          for (const row of rows) rankById.set(row.id, row.min_role_rank);
+        },
+        { role: 'worker' },
+      );
+    }
 
     for (const credential of collected.credentials) {
       for (const [field, secretId] of [
@@ -362,6 +423,19 @@ export class ExportService {
         ['totp_seed', credential.totp_secret_id],
       ] as const) {
         if (!secretId) continue;
+
+        // The requester's own ladder, before the worker's. Refused here rather
+        // than by helm.reveal_secret(), which is being called by the worker and
+        // would happily grant it.
+        const minRank = rankById.get(secretId);
+        if (minRank === undefined || requesterRank < minRank) {
+          omissions.push({
+            secretId,
+            label: `${credential.name}${field === 'totp_seed' ? ' (TOTP seed)' : ''}`,
+            reason: 'insufficient_role_rank',
+          });
+          continue;
+        }
 
         try {
           const result = await secrets.reveal(actor, secretId, {

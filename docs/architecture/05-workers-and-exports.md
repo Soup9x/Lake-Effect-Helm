@@ -252,12 +252,34 @@ own reveal check.
 What was kept, and is now load-bearing:
 
 - **`secret:export`.** Still required to request an export carrying credentials,
-  still separate from `export:create`, still `msp_only` so no client-side role
-  can hold it. This is now the whole of the gate rather than the first half of
-  it.
-- **`min_role_rank`, per secret.** The render reveals each credential through
-  `helm.reveal_secret()`, which applies the rank ladder individually. An export
-  cannot carry a credential its requester could not have revealed one at a time.
+  still separate from `export:create`, still `msp_only`. This is now the whole
+  of the gate rather than the first half of it.
+
+  `msp_only` is enforced by a trigger on `role_permission` (0020), so no
+  client-side **role** can hold it. It is **not** enforced on
+  `membership_permission`, and `set_session_context()` unions the two — so a
+  single client-side **user** can be granted `secret:export` directly. That is
+  not theoretical; it is the path the regression test for the rank floor below
+  uses, because it is the only one the database permits.
+- **`min_role_rank`, per secret — against the REQUESTER and the worker.**
+
+  This entry used to read "the render reveals each credential through
+  `helm.reveal_secret()`, which applies the rank ladder individually, so an
+  export cannot carry a credential its requester could not have revealed one at
+  a time". That was not true, and the gap was exactly the shape of the sentence.
+
+  The reveals run as the export **service account** (rank 60), because its
+  reveal purposes are pinned to `export` and a person's are not. So
+  `reveal_secret()` was applying the ladder to the *worker*. Metadata was
+  collected as the requester and material was not, and nothing compared the
+  requester's rank to each secret's `min_role_rank`: a rank-30 actor holding
+  `secret:export` received every credential up to rank 60 in one file, including
+  ones a single reveal would have refused them with an audit row.
+
+  `#fillSecrets` now applies the requester's rank — resolved by the database at
+  render time, from the session context already opened to collect as them — as a
+  **floor**, in addition to the worker's ceiling. A secret must clear both, and
+  one whose rank cannot be read is omitted rather than included.
 - **Tenant and organisation scoping**, the ten-character written reason, the
   bundle expiry, mandatory encryption of any bundle containing secrets, and the
   numbered record of every download.
@@ -302,7 +324,8 @@ time. A 400-credential handover leaves 400 audit rows, not one.
 
 **Refusals are recorded, not swallowed.** Two happen in practice: a credential
 requiring step-up, which no machine identity can ever satisfy; and one pinned
-above the worker's role rank. Both are written to `export_job.omissions` and
+above a role rank — either the requester's own (checked before the reveal) or
+the worker's (checked inside it). Both are written to `export_job.omissions` and
 printed on the cover page of the PDF. Continuing past a refusal is deliberate —
 an offboarding pack that fails entirely because one break-glass credential needs
 step-up helps nobody — but a handover that silently dropped credentials is
@@ -384,7 +407,7 @@ now asserts it column by column across all five runtime roles.
 | Suite | Count |
 | --- | --- |
 | `tests/integration/workers.test.ts` | 28 — identities, purpose restriction, alert semantics, sync backoff, anchoring refusals |
-| `tests/integration/exports.test.ts` | single-approver exports, scope binding, omissions, revocation, expiry, storage mode |
+| `tests/integration/exports.test.ts` | single-approver exports, scope binding, omissions, the requester-rank floor, revocation, expiry, storage mode |
 | `tests/unit/exports.test.ts` | 21 — PDF structure and xref resolution, bundle round-trip, passphrase distribution |
 | `db/tests/security.sql` | §15 (export behaviour) and §35 (what `0400` removed, and what it kept) |
 

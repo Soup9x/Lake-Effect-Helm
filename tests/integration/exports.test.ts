@@ -34,6 +34,15 @@ const CLIENT = actor(IDS.tenant1, IDS.acmeAdmin);
 
 let exportRoot: string;
 let exportActorId: string;
+/**
+ * ONE harness for the whole file, and this is not tidiness.
+ *
+ * buildHarness() mints a fresh LocalDevKekProvider. A nested describe that
+ * built its own and called setKekProvider() would swap the provider under the
+ * tenant's already-wrapped DEK, and every write after it fails with a bare GCM
+ * authentication error that reads as data corruption rather than as two KEKs.
+ */
+let harness: ReturnType<typeof buildHarness>;
 let stepUpSecretId: string;
 let ordinarySecretId: string;
 
@@ -83,7 +92,7 @@ describe('export engine', () => {
     resetDatabase();
     connectPools();
 
-    const harness = buildHarness();
+    harness = buildHarness();
     setKekProvider(harness.kek);
     await harness.keys.provision(IDS.tenant1, IDS.admin1, { reason: 'export tests' });
 
@@ -546,6 +555,206 @@ describe('export engine', () => {
   });
 
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  describe('the requester\'s own rank is a floor, not just the worker\'s', () => {
+    /**
+     * THE BULK BYPASS. Metadata in a bundle is collected as the REQUESTER, so
+     * RLS answers "may they see this documentation". Material was not: it was
+     * revealed by the export service account, whose rank is 60 and whose
+     * purposes are pinned to 'export'. Nothing compared the requester's rank to
+     * each secret's min_role_rank.
+     *
+     * So a rank-30 client administrator holding secret:export received, in one
+     * file, every credential up to rank 60 — including ones
+     * helm.reveal_secret() would have refused them individually, one at a time,
+     * with an audit row for each refusal. The ladder was intact for single
+     * reveals and absent for the bulk operation that matters most.
+     *
+     * Five secrets, pinned across the boundary:
+     *
+     *   rank 20  under the requester's 30      → must be IN the bundle
+     *   rank 40  over 30, under the worker's 60 → the leak. Must be OUT.
+     *   rank 60  over 30, at the worker's 60    → the leak. Must be OUT.
+     *   rank 80  over both                      → out before and after
+     *   rank 100 over both                      → out before and after
+     *
+     * 40 and 60 are the two that prove it. 80 and 100 were already refused by
+     * the worker's ceiling, and a test built only on those would pass against
+     * the broken code.
+     */
+    const RANKS = [20, 40, 60, 80, 100] as const;
+    const secretIds = new Map<number, string>();
+    let jobId: string;
+    let passphrase: string;
+
+    beforeAll(async () => {
+      for (const rank of RANKS) {
+        const created = await harness.secrets.create(
+          ADMIN,
+          {
+            organizationId: IDS.orgAcme,
+            kind: 'password',
+            label: `Rank ${rank} credential`,
+            sensitivity: 'standard',
+            minRoleRank: rank,
+          },
+          `value-for-rank-${rank}`,
+        );
+        secretIds.set(rank, created.secretId);
+
+        await withTenant(ADMIN, async (tx) => {
+          const [node] = await tx<{ id: string }[]>`
+            INSERT INTO asset_node (tenant_id, organization_id, node_type, name)
+            VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'credential',
+                    ${`Rank ${rank} credential`})
+            RETURNING id
+          `;
+          await tx`
+            INSERT INTO credential (id, tenant_id, credential_type, username, secret_id)
+            VALUES (${node!.id}::uuid, ${IDS.tenant1}::uuid, 'local_admin',
+                    ${`rank${rank}`}, ${created.secretId}::uuid)
+          `;
+        });
+      }
+
+      /*
+       * THE PREMISE, AND IT IS NOT THE ONE THE AUDIT ASSUMED.
+       *
+       * secret:export is marked msp_only, and a trigger on role_permission
+       * (0020) refuses to grant an MSP-only permission to a client-side ROLE.
+       * So "a rank-30 role holding secret:export" cannot be built that way at
+       * all — the grant is rejected by the database.
+       *
+       * membership_permission is the other grant path, and it carries NO such
+       * trigger. set_session_context() unions the two, so a single client-side
+       * USER can hold secret:export today with nothing objecting. That is the
+       * route by which the escalation is actually reachable, so it is the route
+       * this test uses.
+       *
+       * (The missing trigger on membership_permission is a finding in its own
+       * right and belongs with the per-user grant work, not here — a UI over
+       * this table would turn a direct-database-access hole into a button.)
+       */
+      const sql = superuserSql();
+      try {
+        await sql`
+          INSERT INTO membership_permission (membership_id, permission_key, granted, reason, granted_by)
+          SELECT m.id, 'secret:export', true,
+                 'co-managed handover agreed in the MSA', ${IDS.admin1}::uuid
+          FROM membership m
+          WHERE m.user_id = ${IDS.acmeAdmin}::uuid AND m.tenant_id = ${IDS.tenant1}::uuid
+          ON CONFLICT DO NOTHING
+        `;
+      } finally {
+        await sql.end({ timeout: 5 });
+      }
+    }, 120_000);
+
+    afterAll(async () => {
+      const sql = superuserSql();
+      try {
+        await sql`
+          DELETE FROM membership_permission WHERE permission_key = 'secret:export'
+        `;
+      } finally {
+        await sql.end({ timeout: 5 });
+      }
+    });
+
+    it('lets the rank-30 client administrator request the bundle', async () => {
+      // If this ever starts failing, the scenario has stopped reproducing and
+      // the assertions below are proving nothing.
+      const result = await getExportService().request(CLIENT, {
+        organizationId: IDS.orgAcme,
+        kind: 'client_offboarding',
+        format: 'zip',
+        reason: 'co-managed client requesting their own credential handover',
+        includeSecrets: true,
+      });
+      jobId = result.exportJobId;
+      expect(jobId).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it('renders, with the worker still doing the decryption', async () => {
+      const job = (await backlog()).find((r) => r.export_job_id === jobId)!;
+      // The requester is carried through the backlog; that is what makes a
+      // requester-side check possible at all.
+      expect(job.requested_by).toBe(IDS.acmeAdmin);
+
+      const result = await renderFrom(job);
+      expect(result.rendered).toBe(true);
+      passphrase = result.passphrase!;
+    });
+
+    it('OMITS every credential above the requester\'s rank', async () => {
+      const [row] = await withTenant(ADMIN, async (tx) => {
+        return tx<{ omissions: { secretId: string; label: string; reason: string }[] }[]>`
+          SELECT omissions FROM export_job WHERE id = ${jobId}::uuid
+        `;
+      });
+      const omitted = new Set((row?.omissions ?? []).map((o) => o.secretId));
+
+      for (const rank of [40, 60, 80, 100] as const) {
+        expect(
+          omitted.has(secretIds.get(rank)!),
+          `rank ${rank} must be omitted for a rank-30 requester`,
+        ).toBe(true);
+      }
+      expect(omitted.has(secretIds.get(20)!)).toBe(false);
+
+      // Every omission here is a rank refusal, not a step-up one — the
+      // distinction the cover page reports to the receiving team.
+      for (const omission of row?.omissions ?? []) {
+        if (omission.label.startsWith('Rank ')) {
+          expect(omission.reason).toBe('insufficient_role_rank');
+        }
+      }
+    });
+
+    it('and the material really is absent from the bundle bytes', async () => {
+      // The assertion that cannot be satisfied by bookkeeping. An omissions
+      // list that says the right thing while the plaintext is still in the file
+      // is worse than no list at all.
+      const download = await getExportService().download(CLIENT, jobId);
+      const bundle = unpackBundle(download.bytes, passphrase);
+      const bytes = Buffer.concat(bundle.entries.map((e) => e.bytes)).toString('latin1');
+
+      expect(bytes).toContain('value-for-rank-20');
+      for (const rank of [40, 60, 80, 100] as const) {
+        expect(bytes, `rank ${rank} plaintext must not be in the bundle`).not.toContain(
+          `value-for-rank-${rank}`,
+        );
+      }
+    });
+
+    it('does not weaken the worker ceiling: an MSP requester is still capped at 60', async () => {
+      // The other half of the instruction. Adding a requester floor must not
+      // have replaced the worker's ceiling with it — a super admin (rank 100)
+      // requesting the same bundle still cannot pull rank-80 and rank-100
+      // material through a machine identity that tops out at 60.
+      const request = await getExportService().request(ADMIN, {
+        organizationId: IDS.orgAcme,
+        kind: 'client_offboarding',
+        format: 'zip',
+        reason: 'MSP-side handover covering the full credential set for Acme',
+        includeSecrets: true,
+      });
+      const job = (await backlog()).find((r) => r.export_job_id === request.exportJobId)!;
+      const result = await renderFrom(job);
+
+      const download = await getExportService().download(ADMIN, request.exportJobId);
+      const bundle = unpackBundle(download.bytes, result.passphrase!);
+      const bytes = Buffer.concat(bundle.entries.map((e) => e.bytes)).toString('latin1');
+
+      // Rank 100 clears the requester's own ladder and is still refused,
+      // because the worker's does not move.
+      expect(bytes).toContain('value-for-rank-20');
+      expect(bytes).toContain('value-for-rank-60');
+      expect(bytes).not.toContain('value-for-rank-80');
+      expect(bytes).not.toContain('value-for-rank-100');
+    });
+  });
+
   describe('scoping', () => {
     it('refuses an export for an organisation outside the actor’s scope', async () => {
       // The Acme client admin can see Acme and nothing else.

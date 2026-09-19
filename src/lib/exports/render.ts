@@ -358,7 +358,7 @@ function humaniseOmission(reason: string): string {
     case 'step_up_required':
       return 'requires interactive re-authentication, which a background render cannot perform';
     case 'insufficient_role_rank':
-      return 'above the export worker’s role rank';
+      return 'above the role rank of the person who requested this export, or of the export worker';
     case 'key_destroyed':
       return 'its encryption key has been destroyed; the value is unrecoverable';
     case 'not_found':
