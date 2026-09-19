@@ -2066,6 +2066,138 @@ $steal$;
 ROLLBACK;
 
 \echo ''
+\echo '== 40. A per-user permission grant is not a way round the role catalogue =='
+-- membership_permission is the per-person override set_session_context() unions
+-- into a role's permissions. It had a SELECT policy and an INSERT policy and
+-- nothing else, and no trigger — so it was three separate holes at once. All
+-- three were measured on a live cluster before 0480 was written.
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+-- (a) A GRANT CANNOT EXCEED THE GRANTER. The same rule 0350 enforces for roles,
+--     which membership_permission escaped entirely. tier3 holds user:write and
+--     rank 80 and does NOT hold tenant:write; it could write itself that grant
+--     here and the next session handed it over. tenant:write is the gate on
+--     editing the tenant.
+--
+--     Claiming the permission list in the GUC is what a compromised request role
+--     could do, so that is how it is tested.
+--     The membership id is resolved BEFORE the permission list is narrowed.
+--     Narrowing it first also closes membership's own SELECT policy, so an
+--     INSERT ... SELECT would match zero rows, insert nothing, and "pass" this
+--     assertion without the trigger ever running.
+SELECT id AS mid_tech FROM membership
+ WHERE user_id = :u_tech1 AND tenant_id = :t1 \gset
+SET LOCAL helm.permissions = 'user:write,tenant:write,secret:read';
+SELECT helm_test.check_raises('nobody grants a permission they do not hold',
+  format($$INSERT INTO membership_permission (membership_id, permission_key, granted, reason)
+           VALUES (%L, 'key:rotate', true, 'escalation attempt')$$,
+         :'mid_tech'));
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+-- (b) MSP-ONLY STAYS MSP-ONLY. permission.msp_only marks what no co-managed
+--     customer may hold, and 0020 enforces it on role_permission. The per-user
+--     table had no equivalent, so secret:export — the permission that turns an
+--     export request into a file of credentials — could be pinned straight onto
+--     a client_admin and was honoured in full.
+SELECT helm_test.check_raises('an MSP-only permission cannot be pinned to a client-side user',
+  format($$INSERT INTO membership_permission (membership_id, permission_key, granted, reason)
+           SELECT m.id, 'secret:export', true, 'co-managed handover'
+           FROM membership m WHERE m.user_id = %L AND m.tenant_id = %L$$,
+         :u_acme, :t1));
+
+-- ...and the same permission to an MSP-side member is fine, so the rule is
+-- about who receives it rather than refusing everything.
+INSERT INTO membership_permission (membership_id, permission_key, granted, reason)
+SELECT m.id, 'secret:export', true, 'covering the Q3 offboarding backlog'
+FROM membership m WHERE m.user_id = :u_tech1 AND m.tenant_id = :t1;
+SELECT helm_test.check('...but an MSP-side member may hold it',
+  EXISTS (SELECT 1 FROM membership_permission
+           WHERE permission_key = 'secret:export' AND granted));
+
+-- ...and a DENY of an MSP-only permission is allowed, because a deny only ever
+-- subtracts. Refusing it would mean an administrator could not withdraw a
+-- permission they may not hand out.
+INSERT INTO membership_permission (membership_id, permission_key, granted, reason)
+SELECT m.id, 'secret:delete', false, 'not while they are on the service desk'
+FROM membership m WHERE m.user_id = :u_acme AND m.tenant_id = :t1;
+SELECT helm_test.check('a DENY is never an escalation, so it is never refused',
+  EXISTS (SELECT 1 FROM membership_permission
+           WHERE permission_key = 'secret:delete' AND NOT granted));
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+-- (c) A GRANT CAN BE TAKEN BACK. There were no UPDATE or DELETE policies, so
+--     both affected zero rows and reported success — a revoke button over that
+--     would have said "done" and changed nothing, which is the worst possible
+--     outcome for a control whose job is removing access.
+INSERT INTO membership_permission (membership_id, permission_key, granted, reason)
+SELECT m.id, 'secret:reveal', true, 'temporary access for the migration weekend'
+FROM membership m WHERE m.user_id = :u_acme AND m.tenant_id = :t1;
+
+UPDATE membership_permission SET granted = false
+WHERE permission_key = 'secret:reveal';
+SELECT helm_test.check('a grant can be flipped to a deny',
+  (SELECT NOT granted FROM membership_permission WHERE permission_key = 'secret:reveal'));
+
+DELETE FROM membership_permission WHERE permission_key = 'secret:reveal';
+SELECT helm_test.check('...and removed outright',
+  NOT EXISTS (SELECT 1 FROM membership_permission WHERE permission_key = 'secret:reveal'));
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+-- (d) AND THE GATE IS tenant:write, NOT user:write. Raised deliberately in
+--     0480: writing a per-user override changes what the role catalogue MEANS
+--     for one person, which is a change to the authority model rather than to
+--     somebody's job.
+SELECT id AS mid_tech2 FROM membership
+ WHERE user_id = :u_tech1 AND tenant_id = :t1 \gset
+SET LOCAL helm.permissions = 'user:write,secret:reveal';
+SELECT helm_test.check_raises('user:write alone no longer opens this table',
+  format($$INSERT INTO membership_permission (membership_id, permission_key, granted, reason)
+           VALUES (%L, 'secret:reveal', true, 'holding user:write only')$$,
+         :'mid_tech2'));
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+-- (e) A grant belongs to one tenant. Both new policies carry the tenant test,
+--     so the second MSP cannot reach into the first one's overrides — and
+--     adding UPDATE and DELETE must not have added a way across the boundary
+--     that INSERT never had.
+INSERT INTO membership_permission (membership_id, permission_key, granted, reason)
+SELECT m.id, 'secret:reveal', true, 'scoped to this tenant'
+FROM membership m WHERE m.user_id = :u_acme AND m.tenant_id = :t1;
+
+SELECT helm_test.ctx(:t2, :u_admin2);
+UPDATE membership_permission SET granted = false WHERE permission_key = 'secret:reveal';
+DELETE FROM membership_permission WHERE permission_key = 'secret:reveal';
+
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check('another tenant can neither edit nor remove this grant',
+  (SELECT granted FROM membership_permission WHERE permission_key = 'secret:reveal'));
+ROLLBACK;
+
+-- (f) The rules live beside the data, not in a route. Asserted structurally so
+--     that deleting the trigger fails the suite rather than quietly widening
+--     every writer's authority.
+SELECT helm_test.check('the per-user grant guard is installed on INSERT and UPDATE',
+  EXISTS (SELECT 1 FROM pg_trigger
+           WHERE tgrelid = 'membership_permission'::regclass
+             AND tgname = 'membership_permission_authority'
+             AND NOT tgisinternal
+             AND (tgtype & 4) <> 0 AND (tgtype & 16) <> 0 AND (tgtype & 2) <> 0));
+
+SELECT helm_test.check('membership_permission has a policy for all four commands',
+  (SELECT count(DISTINCT polcmd) FROM pg_policy
+    WHERE polrelid = 'membership_permission'::regclass) = 4);
+
+\echo ''
 \echo '== 39. A webhook receiver is a door, and it is only ever a shortcut =='
 -- 0450 gave Helm its first UNAUTHENTICATED endpoint that writes tenant data.
 -- Three things had to be true for that to be acceptable, and each is asserted

@@ -99,6 +99,7 @@ export default async function PeoplePage() {
               lastLoginAt: m.last_login_at?.toISOString() ?? null,
               // Nobody edits a membership that outranks them, or their own.
               editable: m.rank <= data.myRank && m.user_id !== identity.actorId,
+              isSelf: m.user_id === identity.actorId,
             }))}
             grantableRoles={data.roles.map((r) => ({
               key: r.key,

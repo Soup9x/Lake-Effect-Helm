@@ -107,6 +107,63 @@ Organisation scope uses an explicit sentinel rather than NULL:
 
 "NULL means everything" is one accidental outer join away from a breach.
 
+### 3.1 Per-user permission overrides
+
+A role carries a permission set. `membership_permission` adds to it or subtracts
+from it for one person: `set_session_context()` unions the grants, subtracts the
+denies and honours `expires_at`. Each row carries a reason and who wrote it.
+
+Three acts, deliberately distinct, because they read differently six months
+later:
+
+| | Effect |
+| --- | --- |
+| **Grant** | Adds a permission the role does not carry. |
+| **Deny** | Removes one the role does carry. The row stays, pinned off. |
+| **Remove** | Deletes the override, so the role decides again. |
+
+A deny and a removal look identical from outside and are opposite intentions.
+
+**Who may write one: `tenant:write`**, raised from `user:write` in 0480.
+`user:write` is "manage the people in this tenant" — invite somebody, change
+their role, end their membership. An override changes what the role catalogue
+*means* for one person, which is a change to the authority model rather than to
+somebody's job. In the shipped catalogue `tenant:write` belongs to `super_admin`
+alone.
+
+**Two rules the API does not enforce**, because they belong beside the data
+where they hold for every writer — a route, a maintenance script, a psql
+session (the argument 0350 makes for `membership`):
+
+- **Nobody grants a permission they do not hold themselves.** Without this,
+  `tier3` (rank 80, holds `user:write`, does not hold `tenant:write`) could
+  write itself a `tenant:write` grant here and be rank-100 in effect on its next
+  request. That was live until 0480 and is reproduced in `db/tests/security.sql`
+  §40.
+- **An MSP-only permission never reaches a client-side role.** `permission.msp_only`
+  marks the fifteen a co-managed customer may never hold, and a trigger on
+  `role_permission` (0020) has always enforced it there. `membership_permission`
+  had no equivalent, so `secret:export` could be pinned straight onto a
+  `client_admin` and was honoured in full — which is exactly the precondition for
+  the export escalation described in
+  [05-workers-and-exports.md](./05-workers-and-exports.md).
+
+Both are enforced by `helm.enforce_membership_permission_authority()`, which
+fires `BEFORE INSERT OR UPDATE` on every column and is deliberately **not**
+`SECURITY DEFINER` — it reads the caller's own context. Denies are exempt from
+both rules: a deny only ever subtracts, and refusing one would mean an
+administrator could not withdraw a permission they may not hand out.
+
+The table carries policies for all four commands. Until 0480 it had SELECT and
+INSERT only, so `UPDATE` and `DELETE` matched zero rows and reported success —
+a grant could be made and never taken back through the request path, and a
+revoke button over that would have said "done" and changed nothing.
+
+The write path is `/api/users/[userId]/permissions` (GET, POST, DELETE), surfaced
+on the People page. You cannot edit your own overrides, for the same reason you
+cannot edit your own membership: the useful things you could do are the ones
+that lock you out.
+
 ---
 
 ## 4. Secrets

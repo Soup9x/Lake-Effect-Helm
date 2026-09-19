@@ -2,8 +2,9 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2, Plus, ShieldOff, UserPlus, X } from 'lucide-react';
+import { KeyRound, Loader2, Plus, ShieldOff, UserPlus, X } from 'lucide-react';
 import { Button } from './ui/button';
+import { MemberPermissionsDialog } from './member-permissions-dialog';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { FieldHint, Input, Label, Select } from './ui/field';
@@ -21,6 +22,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
  * Rows the caller may not act on carry no controls at all, including their own.
  * An administrator cannot change their own access here — somebody else does it,
  * so a mistake cannot leave a tenant nobody can administer.
+ *
+ * PERMISSIONS ARE A SEPARATE DIALOG, not a column. A role is one value and fits
+ * in a picker; the per-person exceptions on top of it are a list with a reason
+ * and an expiry on each, and flattening that into a cell would say "three
+ * overrides" without saying which or why. The button is offered on every row,
+ * including ones this caller cannot edit — seeing that somebody holds an
+ * exception is part of reading the access model, and the dialog decides for
+ * itself whether to show the controls.
  */
 interface Member {
   userId: string;
@@ -34,6 +43,8 @@ interface Member {
   orgScope: string[];
   lastLoginAt: string | null;
   editable: boolean;
+  /** The caller's own row. A different question from `editable`. */
+  isSelf: boolean;
 }
 
 interface Role {
@@ -61,6 +72,7 @@ export function PeopleManager({
 }) {
   const router = useRouter();
   const [inviting, setInviting] = useState(false);
+  const [permissionsFor, setPermissionsFor] = useState<Member | null>(null);
   const [busyRow, setBusyRow] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -147,7 +159,7 @@ export function PeopleManager({
                 <TableHead>Role</TableHead>
                 <TableHead>Scope</TableHead>
                 <TableHead>Status</TableHead>
-                {canWrite && <TableHead />}
+                <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -193,9 +205,19 @@ export function PeopleManager({
                   <TableCell>
                     <Badge tone={m.status === 'active' ? 'ok' : 'danger'}>{m.status}</Badge>
                   </TableCell>
-                  {canWrite && (
-                    <TableCell className="text-right">
-                      {m.editable && m.status === 'active' && (
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setPermissionsFor(m)}
+                        className="gap-1.5"
+                        title="Exceptions to what this person's role carries"
+                      >
+                        <KeyRound />
+                        Permissions
+                      </Button>
+                      {canWrite && m.editable && m.status === 'active' && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -211,14 +233,29 @@ export function PeopleManager({
                           Revoke
                         </Button>
                       )}
-                    </TableCell>
-                  )}
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+
+      {permissionsFor && (
+        <MemberPermissionsDialog
+          userId={permissionsFor.userId}
+          label={permissionsFor.name ?? permissionsFor.email}
+          // `editable` is false for your own row AND for one that outranks you.
+          // Only the first is what the permissions route refuses, so it is
+          // derived here rather than reused.
+          isSelf={permissionsFor.isSelf}
+          open
+          onOpenChange={(next) => {
+            if (!next) setPermissionsFor(null);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -564,23 +564,31 @@ describe('export engine', () => {
      * purposes are pinned to 'export'. Nothing compared the requester's rank to
      * each secret's min_role_rank.
      *
-     * So a rank-30 client administrator holding secret:export received, in one
-     * file, every credential up to rank 60 — including ones
-     * helm.reveal_secret() would have refused them individually, one at a time,
-     * with an audit row for each refusal. The ladder was intact for single
-     * reveals and absent for the bulk operation that matters most.
+     * So any requester holding secret:export received, in one file, every
+     * credential up to rank 60 — including ones helm.reveal_secret() would have
+     * refused them individually, one at a time, with an audit row for each
+     * refusal. The ladder was intact for single reveals and absent for the bulk
+     * operation that matters most.
+     *
+     * THE REQUESTER IS A TIER 1 TECHNICIAN (rank 40), not the audit's rank-30
+     * client administrator. secret:export is msp_only: 0020 has always refused
+     * it to a client-side ROLE, and 0480 now refuses it to a client-side USER
+     * too, so that actor cannot be constructed at all any more. A rank-40
+     * MSP-side technician is the lowest requester that can still exist, and it
+     * straddles the worker's ceiling exactly as well.
      *
      * Five secrets, pinned across the boundary:
      *
-     *   rank 20  under the requester's 30      → must be IN the bundle
-     *   rank 40  over 30, under the worker's 60 → the leak. Must be OUT.
-     *   rank 60  over 30, at the worker's 60    → the leak. Must be OUT.
+     *   rank 20  under the requester's 40       → must be IN the bundle
+     *   rank 40  at the requester's 40          → must be IN the bundle
+     *   rank 60  over 40, AT the worker's 60    → the leak. Must be OUT.
      *   rank 80  over both                      → out before and after
      *   rank 100 over both                      → out before and after
      *
-     * 40 and 60 are the two that prove it. 80 and 100 were already refused by
-     * the worker's ceiling, and a test built only on those would pass against
-     * the broken code.
+     * Rank 60 is the one that proves it: the worker can reach it and the
+     * requester cannot. 80 and 100 were already refused by the worker's
+     * ceiling, and a test built only on those would pass against the broken
+     * code.
      */
     const RANKS = [20, 40, 60, 80, 100] as const;
     const secretIds = new Map<number, string>();
@@ -618,31 +626,22 @@ describe('export engine', () => {
       }
 
       /*
-       * THE PREMISE, AND IT IS NOT THE ONE THE AUDIT ASSUMED.
+       * A rank-40 technician who may queue a credential-bearing export. Neither
+       * permission is on tier1's role; both are per-user overrides, which is
+       * the realistic shape — "Sam covers offboardings this quarter" — and the
+       * only way to get a low-rank requester past the request gate.
        *
-       * secret:export is marked msp_only, and a trigger on role_permission
-       * (0020) refuses to grant an MSP-only permission to a client-side ROLE.
-       * So "a rank-30 role holding secret:export" cannot be built that way at
-       * all — the grant is rejected by the database.
-       *
-       * membership_permission is the other grant path, and it carries NO such
-       * trigger. set_session_context() unions the two, so a single client-side
-       * USER can hold secret:export today with nothing objecting. That is the
-       * route by which the escalation is actually reachable, so it is the route
-       * this test uses.
-       *
-       * (The missing trigger on membership_permission is a finding in its own
-       * right and belongs with the per-user grant work, not here — a UI over
-       * this table would turn a direct-database-access hole into a button.)
+       * Written as a superuser because the point of the test is downstream of
+       * how the grant was made. The route that makes one legitimately is
+       * covered in tests/integration/member-permissions.test.ts.
        */
       const sql = superuserSql();
       try {
         await sql`
           INSERT INTO membership_permission (membership_id, permission_key, granted, reason, granted_by)
-          SELECT m.id, 'secret:export', true,
-                 'co-managed handover agreed in the MSA', ${IDS.admin1}::uuid
-          FROM membership m
-          WHERE m.user_id = ${IDS.acmeAdmin}::uuid AND m.tenant_id = ${IDS.tenant1}::uuid
+          SELECT m.id, k, true, 'covering the Q3 offboarding backlog', ${IDS.admin1}::uuid
+          FROM membership m, unnest(ARRAY['export:create', 'secret:export']) AS k
+          WHERE m.user_id = ${IDS.tech1}::uuid AND m.tenant_id = ${IDS.tenant1}::uuid
           ON CONFLICT DO NOTHING
         `;
       } finally {
@@ -651,24 +650,24 @@ describe('export engine', () => {
     }, 120_000);
 
     afterAll(async () => {
+      // Tier 1 goes back to holding no export permission at all — the 'scoping'
+      // tests below assert exactly that.
       const sql = superuserSql();
       try {
-        await sql`
-          DELETE FROM membership_permission WHERE permission_key = 'secret:export'
-        `;
+        await sql`DELETE FROM membership_permission`;
       } finally {
         await sql.end({ timeout: 5 });
       }
     });
 
-    it('lets the rank-30 client administrator request the bundle', async () => {
+    it('lets the rank-40 technician request the bundle', async () => {
       // If this ever starts failing, the scenario has stopped reproducing and
       // the assertions below are proving nothing.
-      const result = await getExportService().request(CLIENT, {
+      const result = await getExportService().request(TECH, {
         organizationId: IDS.orgAcme,
         kind: 'client_offboarding',
         format: 'zip',
-        reason: 'co-managed client requesting their own credential handover',
+        reason: 'offboarding handover for Acme, covering the credential set',
         includeSecrets: true,
       });
       jobId = result.exportJobId;
@@ -679,7 +678,7 @@ describe('export engine', () => {
       const job = (await backlog()).find((r) => r.export_job_id === jobId)!;
       // The requester is carried through the backlog; that is what makes a
       // requester-side check possible at all.
-      expect(job.requested_by).toBe(IDS.acmeAdmin);
+      expect(job.requested_by).toBe(IDS.tech1);
 
       const result = await renderFrom(job);
       expect(result.rendered).toBe(true);
@@ -694,13 +693,14 @@ describe('export engine', () => {
       });
       const omitted = new Set((row?.omissions ?? []).map((o) => o.secretId));
 
-      for (const rank of [40, 60, 80, 100] as const) {
+      for (const rank of [60, 80, 100] as const) {
         expect(
           omitted.has(secretIds.get(rank)!),
-          `rank ${rank} must be omitted for a rank-30 requester`,
+          `rank ${rank} must be omitted for a rank-40 requester`,
         ).toBe(true);
       }
       expect(omitted.has(secretIds.get(20)!)).toBe(false);
+      expect(omitted.has(secretIds.get(40)!)).toBe(false);
 
       // Every omission here is a rank refusal, not a step-up one — the
       // distinction the cover page reports to the receiving team.
@@ -715,12 +715,13 @@ describe('export engine', () => {
       // The assertion that cannot be satisfied by bookkeeping. An omissions
       // list that says the right thing while the plaintext is still in the file
       // is worse than no list at all.
-      const download = await getExportService().download(CLIENT, jobId);
+      const download = await getExportService().download(TECH, jobId);
       const bundle = unpackBundle(download.bytes, passphrase);
       const bytes = Buffer.concat(bundle.entries.map((e) => e.bytes)).toString('latin1');
 
       expect(bytes).toContain('value-for-rank-20');
-      for (const rank of [40, 60, 80, 100] as const) {
+      expect(bytes).toContain('value-for-rank-40');
+      for (const rank of [60, 80, 100] as const) {
         expect(bytes, `rank ${rank} plaintext must not be in the bundle`).not.toContain(
           `value-for-rank-${rank}`,
         );
