@@ -280,6 +280,30 @@ describe('authorisation ladder', () => {
       'printer-admin',
     );
     standardSecretId = standard.secretId;
+
+    // Document the printer password on an ordinary, client-visible credential.
+    //
+    // Since 0460 the reveal ladder's visibility rung runs FIRST and a secret no
+    // asset documents is invisible to a client-side role, so without this the
+    // two tests below get `internal_only` and never reach the permission rung
+    // they exist to probe. h.secrets.create() writes the `secret` row alone;
+    // POST /api/secrets always pairs it with a credential, and that is the
+    // shape being reproduced here.
+    const sql = superuserSql();
+    try {
+      const [node] = await sql<{ id: string }[]>`
+        INSERT INTO asset_node (tenant_id, organization_id, node_type, name)
+        VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'credential', 'ACME Printer')
+        RETURNING id
+      `;
+      await sql`
+        INSERT INTO credential (id, tenant_id, credential_type, username, secret_id)
+        VALUES (${node!.id}::uuid, ${IDS.tenant1}::uuid, 'standard_user', 'printer',
+                ${standardSecretId}::uuid)
+      `;
+    } finally {
+      await sql.end();
+    }
   });
 
   it('refuses to CREATE a critical secret without step-up', async () => {

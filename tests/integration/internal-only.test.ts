@@ -191,19 +191,69 @@ describe('the reveal ladder', () => {
     expect((await reveal()).granted).toBe(false);
   });
 
-  it('leaves a secret with no credential row to the controls that always governed it', async () => {
+  it('withholds a secret no asset documents from a client-side actor', async () => {
     await grantReveal();
     await markInternal(credentialNode, true);
 
-    // Material without a documented account: never part of the credential
-    // model, and it must not be swept up by a flag nobody set on it.
+    // 0390 answered `true` here, reasoning that material with no documented
+    // account "was never part of the credential model". That premise was
+    // already false when it was written — flexible_asset_secret existed — so
+    // the default stood for two different things at once: "genuinely
+    // unattached" and "attached by a path this function does not know about".
+    // 0460 closed it. See that migration's header for the full argument.
     const visible = await withTenant(asClient, async (tx) => {
       const [row] = await tx<{ v: boolean }[]>`
         SELECT helm.secret_node_visible(${secretWithoutCredential}::uuid) AS v
       `;
       return row!.v;
     });
-    expect(visible).toBe(true);
+    expect(visible).toBe(false);
+
+    const refusal = await withTenant(asClient, async (tx) => {
+      const [row] = await tx<{ granted: boolean; denial_reason: string | null }[]>`
+        SELECT granted, denial_reason
+        FROM helm.reveal_secret(${secretWithoutCredential}::uuid,
+                                'an explicit reason of sufficient length', 'view')
+      `;
+      return row!;
+    });
+    expect(refusal.granted).toBe(false);
+    expect(refusal.denial_reason).toBe('internal_only');
+  });
+
+  it('...and still hands it to the MSP, because the rung is gated on tenant-wide', async () => {
+    // The cost of the flip, measured. Fail-closed is only defensible if it
+    // costs the operator nothing: the visibility rung is gated on
+    // helm.is_tenant_wide() and never runs for an MSP-side actor. If this ever
+    // fails, 0460 has locked an MSP out of its own material and the default
+    // must be revisited.
+    //
+    // The assertion is about the RUNG, not the outcome: this secret carries no
+    // version (nothing ever wrote material to it), so the MSP's own refusal is
+    // `no_such_version`. What matters is that it is not `internal_only`.
+    await grantReveal();
+    await markInternal(credentialNode, true);
+
+    const result = await withTenant(asMsp, async (tx) => {
+      const [row] = await tx<{ granted: boolean; denial_reason: string | null }[]>`
+        SELECT granted, denial_reason
+        FROM helm.reveal_secret(${secretWithoutCredential}::uuid,
+                                'an explicit reason of sufficient length', 'view')
+      `;
+      return row!;
+    });
+    expect(result.denial_reason).not.toBe('internal_only');
+
+    // ...and the predicate itself agrees, read directly under the MSP's own
+    // context: the answer is the same `false` the client got, so the rung's
+    // tenant-wide gate is doing the work rather than the predicate.
+    const visibleToMsp = await withTenant(asMsp, async (tx) => {
+      const [row] = await tx<{ v: boolean }[]>`
+        SELECT helm.secret_node_visible(${secretWithoutCredential}::uuid) AS v
+      `;
+      return row!.v;
+    });
+    expect(visibleToMsp).toBe(false);
   });
 });
 

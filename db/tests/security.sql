@@ -22,6 +22,8 @@
 \set n_net     '''1d000000-0000-0000-0000-000000000002'''
 \set n_cred    '''1d000000-0000-0000-0000-000000000004'''
 \set n_dc      '''1d000000-0000-0000-0000-000000000003'''
+\set n_ssl     '''1d000000-0000-0000-0000-000000000005'''
+\set n_wifi    '''1d000000-0000-0000-0000-000000000008'''
 \set k1        '''1c000000-0000-0000-0000-000000000001'''
 \set sa1       '''1f000000-0000-0000-0000-000000000001'''
 
@@ -78,8 +80,9 @@ SELECT helm_test.check('client admin sees the ACME organisation specifically',
                        (SELECT slug FROM organization) = 'acme');
 SELECT helm_test.check('client admin cannot see the Globex server',
                        NOT EXISTS (SELECT 1 FROM device WHERE hostname = 'globex-app-01'));
+-- 7: network, firewall, DC, domain, certificate, and two credentials.
 SELECT helm_test.check('client admin sees ACME assets',
-                       (SELECT count(*) FROM asset_node) = 6);
+                       (SELECT count(*) FROM asset_node) = 7);
 SELECT helm_test.check('client admin cannot see the Globex secret',
                        NOT EXISTS (SELECT 1 FROM secret WHERE id = :s_gx));
 SELECT helm_test.check('client admin CAN see that the ACME credential exists',
@@ -1279,11 +1282,145 @@ SELECT helm_test.ctx(:t1, :u_acme);
 -- returns false for everything.
 SELECT helm_test.check('...and IS visible once the asset is not internal',
   helm.secret_node_visible(:s_dom_adm));
--- ...and a secret with no credential row at all is left to the controls that
--- always governed it, rather than being hidden by a flag nobody set.
-SELECT helm_test.check('a secret with no credential attached is unaffected',
-  helm.secret_node_visible(:s_wifi));
+-- ...and a secret referenced by NOTHING is now not visible either. 0390 left
+-- this permissive, reasoning that such a secret "was never part of the
+-- credential model". That premise was already false when it was written —
+-- flexible_asset_secret existed — and the default was quietly doing two jobs:
+-- standing for "genuinely unattached" AND for "attached by a path this function
+-- does not know about". 0460 covers every path and closes the default; see its
+-- header for the full argument.
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO secret (id, tenant_id, organization_id, kind, sensitivity, label)
+VALUES ('1e000000-0000-0000-0000-0000000000f0', :t1, :t1_acme, 'generic', 'standard', 'zz orphan');
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('a secret referenced by nothing is NOT visible to a client',
+  NOT helm.secret_node_visible('1e000000-0000-0000-0000-0000000000f0'));
+-- ...and an MSP-side role still reaches it, because the rung is gated on
+-- helm.is_tenant_wide(). Fail-closed costs the internal user nothing; if this
+-- check ever fails, the flip has locked the MSP out of its own material.
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check('...while an internal role is unaffected by the flip',
+  (SELECT granted FROM helm.reveal_secret('1e000000-0000-0000-0000-0000000000f0',
+                                          NULL, 'view')) IS NOT NULL);
+SELECT helm_test.check('...and the refusal it would get is never internal_only',
+  coalesce((SELECT denial_reason FROM helm.reveal_secret('1e000000-0000-0000-0000-0000000000f0',
+                                                         NULL, 'view')), '') <> 'internal_only');
 ROLLBACK;
+
+\echo '-- every path to a secret, not just the credential one --'
+-- THE GAP 0460 CLOSED. A secret reached by anything other than a credential
+-- produced zero rows, and the coalesce turned that into "visible" — so the
+-- label, kind, sensitivity and rotation state of a secret explicitly marked
+-- internal-only were readable by a client-side actor.
+--
+-- Three paths had the hole. The report named one; the catalogue named the
+-- other two, and a TLS private key and a licence key were exposed by exactly
+-- the same mechanism. Each gets its own secret here so no assertion can pass
+-- by borrowing another path's reference.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+INSERT INTO secret (id, tenant_id, organization_id, kind, sensitivity, label) VALUES
+  ('1e000000-0000-0000-0000-0000000000f1', :t1, :t1_acme, 'api_key',     'standard', 'zz flexible field'),
+  ('1e000000-0000-0000-0000-0000000000f2', :t1, :t1_acme, 'private_key', 'standard', 'zz cert key'),
+  ('1e000000-0000-0000-0000-0000000000f3', :t1, :t1_acme, 'license_key', 'standard', 'zz licence key');
+
+-- (a) A flexible asset record, marked internal, with a secret field.
+INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name, is_internal_only)
+VALUES ('1d000000-0000-0000-0000-0000000000f1', :t1, :t1_acme, 'flexible_asset', 'zz internal record', true);
+INSERT INTO flexible_asset_type (id, tenant_id, key, name)
+VALUES ('1f000000-0000-0000-0000-0000000000f2', :t1, 'zz_probe', 'ZZ probe');
+INSERT INTO flexible_asset_type_version (id, tenant_id, type_id, version, status, published_at,
+                                         json_schema, secret_fields)
+VALUES ('1f000000-0000-0000-0000-0000000000f3', :t1, '1f000000-0000-0000-0000-0000000000f2',
+        1, 'published', now(), '{"type":"object"}'::jsonb, ARRAY['/api_key']);
+INSERT INTO flexible_asset_record (id, tenant_id, type_id, type_version_id)
+VALUES ('1d000000-0000-0000-0000-0000000000f1', :t1,
+        '1f000000-0000-0000-0000-0000000000f2', '1f000000-0000-0000-0000-0000000000f3');
+INSERT INTO flexible_asset_secret (record_id, tenant_id, field_path, secret_id)
+VALUES ('1d000000-0000-0000-0000-0000000000f1', :t1, '/api_key', '1e000000-0000-0000-0000-0000000000f1');
+
+-- (b) The fixture certificate, marked internal, holding a private key.
+UPDATE asset_node SET is_internal_only = true WHERE id = :n_ssl;
+UPDATE ssl_certificate SET private_key_secret_id = '1e000000-0000-0000-0000-0000000000f2'
+ WHERE id = :n_ssl;
+
+-- (c) A licence, marked internal, holding a licence key.
+INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name, is_internal_only)
+VALUES ('1d000000-0000-0000-0000-0000000000f4', :t1, :t1_acme, 'license', 'zz internal licence', true);
+INSERT INTO license (id, tenant_id, license_key_secret_id)
+VALUES ('1d000000-0000-0000-0000-0000000000f4', :t1, '1e000000-0000-0000-0000-0000000000f3');
+
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('flexible asset: a secret on an internal record is invisible',
+  NOT helm.secret_node_visible('1e000000-0000-0000-0000-0000000000f1'));
+SELECT helm_test.check('certificate: a private key on an internal cert is invisible',
+  NOT helm.secret_node_visible('1e000000-0000-0000-0000-0000000000f2'));
+SELECT helm_test.check('licence: a key on an internal licence is invisible',
+  NOT helm.secret_node_visible('1e000000-0000-0000-0000-0000000000f3'));
+-- ...and the policy that calls it agrees, which is the fact that matters: the
+-- predicate could be right while nothing consulted it.
+SELECT helm_test.check('...and none of the three is selectable under RLS',
+  (SELECT count(*) FROM secret
+    WHERE id IN ('1e000000-0000-0000-0000-0000000000f1',
+                 '1e000000-0000-0000-0000-0000000000f2',
+                 '1e000000-0000-0000-0000-0000000000f3')) = 0);
+
+-- The other half, so none of the above is satisfied by a predicate that just
+-- says false. Un-mark each node and the secret comes back.
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE asset_node SET is_internal_only = false
+ WHERE id IN ('1d000000-0000-0000-0000-0000000000f1', :n_ssl, '1d000000-0000-0000-0000-0000000000f4');
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('...and each is visible once its node is not internal',
+  helm.secret_node_visible('1e000000-0000-0000-0000-0000000000f1')
+  AND helm.secret_node_visible('1e000000-0000-0000-0000-0000000000f2')
+  AND helm.secret_node_visible('1e000000-0000-0000-0000-0000000000f3'));
+SELECT helm_test.check('...and all three become selectable under RLS',
+  (SELECT count(*) FROM secret
+    WHERE id IN ('1e000000-0000-0000-0000-0000000000f1',
+                 '1e000000-0000-0000-0000-0000000000f2',
+                 '1e000000-0000-0000-0000-0000000000f3')) = 3);
+ROLLBACK;
+
+\echo '-- the credential rule is preserved: one non-internal reference wins --'
+-- 0390's behaviour, restated because 0460 rewrote the function around it. A
+-- secret documented on BOTH an internal and an ordinary asset stays visible:
+-- the ordinary one is a legitimate reason for the client to know it exists.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name, is_internal_only)
+VALUES ('1d000000-0000-0000-0000-0000000000f5', :t1, :t1_acme, 'credential', 'zz second ref', false);
+INSERT INTO credential (id, tenant_id, username, secret_id)
+VALUES ('1d000000-0000-0000-0000-0000000000f5', :t1, 'zz', :s_dom_adm);
+UPDATE asset_node SET is_internal_only = true WHERE id = :n_cred;
+
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('two references, one of them not internal: still visible',
+  helm.secret_node_visible(:s_dom_adm));
+
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE asset_node SET is_internal_only = true WHERE id = '1d000000-0000-0000-0000-0000000000f5';
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('...and invisible once EVERY reference is internal',
+  NOT helm.secret_node_visible(:s_dom_adm));
+ROLLBACK;
+
+\echo '-- a new reference path cannot be added without teaching the function --'
+-- The guard that matters. This exact bug arrived twice by somebody adding a
+-- foreign key into `secret` that helm.secret_node_visible() never learned
+-- about. 0460 reads the catalogue at migration time; this asserts the reading
+-- is still correct.
+SELECT helm_test.check('every table referencing secret is named in the function',
+  NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    WHERE c.contype = 'f' AND c.confrelid = 'secret'::regclass
+      AND t.relname NOT IN ('secret_version', 'unifi_site_mapping')
+      AND position(t.relname IN (
+        SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'helm' AND p.proname = 'secret_node_visible')) = 0));
 
 -- It must see the truth to report on it: under the caller's own RLS an internal
 -- node is invisible, the join inside would find nothing, and the function would

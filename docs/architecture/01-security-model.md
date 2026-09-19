@@ -198,16 +198,71 @@ instead, so "every denied attempt is logged" holds on both paths.
 
 Evaluated in order, most specific refusal first:
 
-1. `secret:reveal` permission
-2. `current_role_rank() >= secret.min_role_rank`
-3. Step-up verification, if `requires_step_up`
-4. A justification of at least 10 characters, if `requires_reason`
-5. `secret:export` for export purposes
-6. Sensitivity gate for autofill — elevated and critical credentials are never
+1. Visibility — `helm.secret_node_visible()`, for client-side actors only
+2. `secret:reveal` permission
+3. `current_role_rank() >= secret.min_role_rank`
+4. Step-up verification, if `requires_step_up`
+5. A justification of at least 10 characters, if `requires_reason`
+6. `secret:export` for export purposes
+7. Sensitivity gate for autofill — elevated and critical credentials are never
    auto-filled into a browser
 
 A `critical` secret is constrained by `CHECK` to always require both step-up and
 a reason. That is an invariant, not a default an admin can quietly clear.
+
+Visibility leads rather than trails because the audit row records the reason,
+and "your rank is too low" is a different fact from "you may not see this at
+all" — the second is the one an MSP needs when a client asks why.
+
+### 4.4.1 Which secrets a client-side actor may know exist
+
+`helm.secret_node_visible(secret_id)` answers one question: may a client-side
+role know this secret exists at all? It gates both the ladder's first rung and
+`secret`'s own SELECT policy, and it is skipped entirely for MSP-side actors —
+the caller short-circuits on `helm.is_tenant_wide()` first, so nothing below
+applies to the operator's own view of their data.
+
+The rule is `bool_or(NOT is_internal_only)` across **every** asset node that
+references the secret. One ordinary reference is enough: a secret documented on
+both an internal-only asset and a client-visible one stays visible, because the
+client-visible one is a legitimate reason for the client to know it exists.
+
+Four reference paths reach a secret, and all four are resolved:
+
+| Path | Column |
+| --- | --- |
+| Credential, and its TOTP seed | `credential.secret_id`, `credential.totp_secret_id` |
+| Secret field on a flexible asset record | `flexible_asset_secret.secret_id` |
+| Certificate private key | `ssl_certificate.private_key_secret_id` |
+| Licence key | `license.license_key_secret_id` |
+
+**A secret with no referencing node is not visible.** 0390 defaulted the other
+way, reasoning that such a secret was never part of the credential model and
+stayed governed by organisation scope, `secret:reveal`, rank and step-up. 0460
+flipped it, for two reasons:
+
+- That premise was false even when written — `flexible_asset_secret` already
+  existed — so the permissive default was standing for two different things at
+  once: "genuinely unattached" and "attached by a path the function does not
+  know about". The second is a silent leak of an internal-only secret's label,
+  kind, sensitivity and rotation state.
+- The failure mode has now happened twice (flexible assets, then the UniFi
+  integration). A permissive default turns a forgotten reference path into an
+  exposure nobody sees; a fail-closed one turns it into "why can't the client
+  see this", which is the direction this class of mistake should fail in.
+
+The default is not relied on to be remembered: 0460 carries a migration-time
+guard that reads `pg_constraint`, and a **new** foreign key into `secret` from a
+table the function does not name fails the migration. Two references are exempt
+by name — `secret_version` (a secret's own versions, not a reference to it) and
+`unifi_site_mapping.api_key_secret_id` (integration configuration with no asset
+node behind it, so there is no flag to consult; it falls to the default and is
+therefore MSP-side only, which is what it should be).
+
+In practice the flip affects legacy and integration material only. Every secret
+created through `POST /api/secrets` is written with a credential row in the same
+transaction, and every secret created through a flexible asset record is written
+with a `flexible_asset_secret` row.
 
 ### 4.5 Password reuse detection
 

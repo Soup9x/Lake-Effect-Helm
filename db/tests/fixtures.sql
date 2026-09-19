@@ -30,6 +30,7 @@
 \set n_ssl     '''1d000000-0000-0000-0000-000000000005'''
 \set n_dom     '''1d000000-0000-0000-0000-000000000006'''
 \set n_gx_srv  '''1d000000-0000-0000-0000-000000000007'''
+\set n_wifi    '''1d000000-0000-0000-0000-000000000008'''
 \set n_t2_fw   '''2d000000-0000-0000-0000-000000000001'''
 
 \set s_dom_adm '''1e000000-0000-0000-0000-000000000001'''
@@ -83,6 +84,7 @@ INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name, critica
   (:n_dom,  :t1, :t1_acme,   'domain',          'acme.test',               5),
   (:n_ssl,  :t1, :t1_acme,   'ssl_certificate', 'wildcard acme.test',      4),
   (:n_cred, :t1, :t1_acme,   'credential',      'ACME Domain Admin',       5),
+  (:n_wifi, :t1, :t1_acme,   'credential',      'ACME Guest WiFi',         2),
   (:n_gx_srv, :t1, :t1_globex, 'device',        'globex-app-01',           3),
   (:n_t2_fw,  :t2, :t2_contoso, 'device',       'contoso-fw-01',           5);
 
@@ -137,6 +139,13 @@ WHERE id IN (:s_dom_adm, :s_wifi, :s_gx, :s_t2);
 
 INSERT INTO credential (id, tenant_id, credential_type, username, secret_id, url) VALUES
   (:n_cred, :t1, 'domain_admin', 'ACME\\Administrator', :s_dom_adm, 'https://dc01.acme.test');
+
+-- The guest WiFi password is documented on an ordinary, client-visible
+-- credential. Leaving it attached to nothing — as this fixture did until
+-- 0460 — made it invisible to every client-side role, which is the new
+-- fail-closed default and not what the reveal-ladder tests below are probing.
+INSERT INTO credential (id, tenant_id, credential_type, username, secret_id) VALUES
+  (:n_wifi, :t1, 'standard_user', 'guest', :s_wifi);
 
 INSERT INTO credential_domain (tenant_id, credential_id, host, match_type, allow_autofill) VALUES
   (:t1, :n_cred, 'dc01.acme.test', 'exact_host', false);
