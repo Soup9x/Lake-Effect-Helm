@@ -1,5 +1,7 @@
 import Link from 'next/link';
-import { Building2, Clock, ScrollText, Star } from 'lucide-react';
+import {
+  Building2, Clock, Gauge, KeyRound, MapPin, Radio, ScrollText, Star, Users,
+} from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
 import { HealthDot, type ClientHealth } from '@/components/ui/health-dot';
@@ -7,6 +9,7 @@ import {
   Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { formatDate, formatDateTime, humanise, relativeDays } from '@/lib/ui/format';
+import { syncLabel, syncState, syncTone, type SyncMapping } from '@/lib/ui/sync-health';
 import type { FavoriteClient, RecentItem } from '@/lib/workspace/queries';
 
 /**
@@ -236,6 +239,153 @@ export function ClientHealthWidget({ clients }: { clients: ClientHealthRow[] }) 
           <Link href="/organizations" className="block pt-1 text-xs text-brand hover:underline">
             All {sorted.length} clients
           </Link>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+export interface UsageTotals {
+  organizations: number;
+  secrets: number;
+  assets: number;
+  sites: number;
+  contacts: number;
+  attachments: number;
+}
+
+/**
+ * What is documented, at a glance.
+ *
+ * SCOPED BY RLS LIKE EVERYTHING ELSE, which is the whole reason this is a
+ * per-actor query rather than a cached global total: a co-managed client user
+ * sees their own organisation's counts from the same statement a super admin
+ * runs across every client. A "total documents in the system" figure would
+ * either leak the size of the tenant to a customer or need a second query with
+ * a different WHERE, and the second query is the one that eventually gets its
+ * condition backwards.
+ *
+ * Deliberately not a breakdown. The counter strip at the top of the dashboard
+ * already carries the numbers that mean somebody has to act today; this is the
+ * shape of the estate, which is a different question and a calmer one.
+ */
+export function UsageSummaryWidget({ totals }: { totals: UsageTotals }) {
+  const tiles = [
+    { icon: Building2, label: 'Clients', value: totals.organizations, href: '/organizations' },
+    { icon: KeyRound, label: 'Credentials', value: totals.secrets },
+    { icon: Gauge, label: 'Assets', value: totals.assets },
+    { icon: MapPin, label: 'Sites', value: totals.sites },
+    { icon: Users, label: 'Contacts', value: totals.contacts },
+    { icon: ScrollText, label: 'Attachments', value: totals.attachments },
+  ] as const;
+
+  return (
+    <Card className="h-full">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Gauge className="size-4 text-ink-faint" aria-hidden /> What is documented
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <dl className="grid grid-cols-3 gap-3">
+          {tiles.map(({ icon: Icon, label, value, ...rest }) => {
+            const body = (
+              <div className="rounded-md border border-border px-3 py-2">
+                <dt className="flex items-center gap-1.5 text-xs text-ink-muted">
+                  <Icon className="size-3.5 shrink-0 text-ink-faint" aria-hidden />
+                  {label}
+                </dt>
+                <dd className="mt-1 text-xl font-semibold tabular-nums tracking-tight text-ink">
+                  {value}
+                </dd>
+              </div>
+            );
+            const href = 'href' in rest ? (rest as { href?: string }).href : undefined;
+            return (
+              <div key={label}>
+                {href ? (
+                  <Link href={href} className="block transition-colors hover:opacity-80">
+                    {body}
+                  </Link>
+                ) : (
+                  body
+                )}
+              </div>
+            );
+          })}
+        </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+export interface SyncMappingRow extends SyncMapping {
+  id: string;
+  name: string;
+  organizationName: string;
+  lastPollError: string | null;
+}
+
+/**
+ * Every UniFi controller Helm polls, and when it last answered.
+ *
+ * The state comes from src/lib/ui/sync-health.ts rather than from the helpers
+ * in unifi-settings.tsx, and the difference between them is the point: the
+ * settings card reports a mapping whose last poll SUCCEEDED as "Polling",
+ * however long ago that was. This one calls it stale after three missed
+ * intervals, because "nothing is red and the documentation is three weeks old"
+ * is the failure that hides.
+ *
+ * Takes rows rather than fetching, like every other widget here: a dashboard
+ * without this widget does not query helm.unifi_mappings().
+ */
+export function SyncStatusWidget({ mappings }: { mappings: SyncMappingRow[] }) {
+  return (
+    <Card className="h-full">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Radio className="size-4 text-ink-faint" aria-hidden /> Network sync
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-1 text-sm">
+        {mappings.length === 0 ? (
+          <p className="text-ink-faint">
+            No UniFi controllers are configured.{' '}
+            <Link href="/settings" className="text-brand hover:underline">
+              Settings
+            </Link>{' '}
+            adds one.
+          </p>
+        ) : (
+          mappings.map((mapping) => {
+            const state = syncState(mapping);
+            return (
+              <div key={mapping.id} className="flex items-start justify-between gap-3 py-1">
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-ink">{mapping.name}</div>
+                  <div className="truncate text-xs text-ink-faint">
+                    {mapping.organizationName}
+                    {mapping.lastPollAt
+                      ? ` · last answered ${formatDateTime(mapping.lastPollAt)}`
+                      : ' · not yet polled'}
+                  </div>
+                  {/*
+                    The error, when there is one. A badge saying "Erroring" with
+                    no cause sends somebody to the settings page to find out
+                    what this line already knows.
+                  */}
+                  {state === 'erroring' && mapping.lastPollError && (
+                    <div className="truncate text-xs text-danger">{mapping.lastPollError}</div>
+                  )}
+                </div>
+                <Badge tone={syncTone(state)}>{syncLabel(state)}</Badge>
+              </div>
+            );
+          })
         )}
       </CardContent>
     </Card>

@@ -8,7 +8,11 @@ import { DashboardCustomise } from '@/components/dashboard-customise';
 import {
   ActivityWidget, ClientHealthWidget, ExpirationsWidget, FavoritesWidget, RecentlyViewedWidget,
   type ActivityRow, type ClientHealthRow, type UpcomingRow,
+  SyncStatusWidget,
+  UsageSummaryWidget,
 } from '@/components/widgets';
+import { QuickActionsWidget } from '@/components/widgets/quick-actions';
+import { isClientRole } from '@/lib/ui/roles';
 import { getLayout, listFavorites, listRecent } from '@/lib/workspace/queries';
 import type { WidgetKey } from '@/lib/workspace/widgets';
 
@@ -53,6 +57,21 @@ interface HealthRow {
  * widget does not read the audit log on every dashboard load, and that is
  * visible here rather than buried in five components that each fetch their own.
  */
+interface UsageRow {
+  organizations: string; secrets: string; assets: string;
+  sites: string; contacts: string; attachments: string;
+}
+
+interface QuickClientRow {
+  id: string; name: string; sites: { id: string; name: string }[];
+}
+
+interface UnifiSyncRow {
+  id: string; name: string; organization_name: string; is_active: boolean;
+  last_poll_at: Date | null; last_poll_ok: boolean | null; last_poll_error: string | null;
+  poll_interval_seconds: number; consecutive_failures: number;
+}
+
 export default async function DashboardPage() {
   const identity = await getServerIdentity();
 
@@ -81,7 +100,8 @@ export default async function DashboardPage() {
             AND created_at > now() - interval '7 days') AS secret_exports_7d
     `;
 
-    const [favorites, recent, upcoming, activity, health] = await Promise.all([
+    const [favorites, recent, upcoming, activity, health, usage, quickClients, mappings] =
+      await Promise.all([
       wants('favorites') ? listFavorites(tx) : [],
       wants('recently_viewed') ? listRecent(tx, 8) : [],
       wants('expirations')
@@ -111,12 +131,56 @@ export default async function DashboardPage() {
             FROM v_client_health h
           `
         : [],
+      // Every count RLS lets this actor see. One statement rather than six,
+      // and only when the widget asking for it is on the layout.
+      wants('usage_summary')
+        ? tx<UsageRow[]>`
+            SELECT
+              (SELECT count(*) FROM organization WHERE deleted_at IS NULL) AS organizations,
+              (SELECT count(*) FROM v_secret_metadata) AS secrets,
+              (SELECT count(*) FROM asset_node WHERE archived_at IS NULL) AS assets,
+              (SELECT count(*) FROM site WHERE deleted_at IS NULL) AS sites,
+              (SELECT count(*) FROM contact) AS contacts,
+              (SELECT count(*) FROM attachment WHERE deleted_at IS NULL) AS attachments
+          `
+        : [],
+      // The clients and their sites, so the quick-action panel can hand the
+      // REAL create forms exactly what they expect. Archived clients are left
+      // out: starting new work on one is not a thing somebody means to do.
+      wants('quick_actions')
+        ? tx<QuickClientRow[]>`
+            SELECT o.id, o.name,
+                   coalesce(
+                     jsonb_agg(jsonb_build_object('id', s.id, 'name', s.name)
+                               ORDER BY s.name) FILTER (WHERE s.id IS NOT NULL),
+                     '[]'::jsonb) AS sites
+            FROM organization o
+            LEFT JOIN site s ON s.organization_id = o.id AND s.deleted_at IS NULL
+            WHERE o.deleted_at IS NULL AND o.archived_at IS NULL
+            GROUP BY o.id, o.name
+            ORDER BY o.is_msp_internal, o.name
+          `
+        : [],
+      wants('sync_status')
+        ? tx<UnifiSyncRow[]>`
+            SELECT id, name, organization_name, is_active, last_poll_at, last_poll_ok,
+                   last_poll_error, poll_interval_seconds, consecutive_failures
+            FROM helm.unifi_mappings()
+            ORDER BY organization_name, name
+          `
+        : [],
     ]);
 
-    return { layout, counts: countRow, favorites, recent, upcoming, activity, health };
+    return {
+      layout, counts: countRow, favorites, recent, upcoming, activity, health,
+      usage: usage[0], quickClients, mappings,
+    };
   });
 
-  const { layout, counts, favorites, recent, upcoming, activity, health } = data;
+  const {
+    layout, counts, favorites, recent, upcoming, activity, health,
+    usage, quickClients, mappings,
+  } = data;
   const expired = Number(counts?.expired ?? 0);
   const secretExports = Number(counts?.secret_exports_7d ?? 0);
 
@@ -132,7 +196,7 @@ export default async function DashboardPage() {
 
   // Two columns of widgets, except the expirations table, which is a five
   // column table and unreadable in half the width.
-  const WIDE = new Set<WidgetKey>(['expirations']);
+  const WIDE = new Set<WidgetKey>(['expirations', 'quick_actions']);
 
   function render(key: WidgetKey) {
     switch (key) {
@@ -146,6 +210,42 @@ export default async function DashboardPage() {
         return <ActivityWidget activity={activity} />;
       case 'client_health':
         return <ClientHealthWidget clients={clients} />;
+      case 'quick_actions':
+        return (
+          <QuickActionsWidget
+            canWrite={!isClientRole(identity.roleKey)}
+            clients={quickClients.map((c) => ({ id: c.id, name: c.name, sites: c.sites }))}
+          />
+        );
+      case 'usage_summary':
+        return (
+          <UsageSummaryWidget
+            totals={{
+              organizations: Number(usage?.organizations ?? 0),
+              secrets: Number(usage?.secrets ?? 0),
+              assets: Number(usage?.assets ?? 0),
+              sites: Number(usage?.sites ?? 0),
+              contacts: Number(usage?.contacts ?? 0),
+              attachments: Number(usage?.attachments ?? 0),
+            }}
+          />
+        );
+      case 'sync_status':
+        return (
+          <SyncStatusWidget
+            mappings={mappings.map((m) => ({
+              id: m.id,
+              name: m.name,
+              organizationName: m.organization_name,
+              isActive: m.is_active,
+              lastPollAt: m.last_poll_at,
+              lastPollOk: m.last_poll_ok,
+              lastPollError: m.last_poll_error,
+              pollIntervalSeconds: m.poll_interval_seconds,
+              consecutiveFailures: m.consecutive_failures,
+            }))}
+          />
+        );
     }
   }
 

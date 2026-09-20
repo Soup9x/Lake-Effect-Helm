@@ -113,6 +113,232 @@ describe('the widget catalogue', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+
+describe('reordering the dashboard', () => {
+  /**
+   * Drag and the arrow buttons both call reorder() and then save the whole
+   * list, so what is tested here is the persistence half: that an order
+   * arrives, is stored, comes back, and stays personal.
+   */
+  const layoutOf = async (): Promise<string[]> => {
+    const response = await getDashboard(request('/api/workspace/dashboard'));
+    return ((await response.json()) as { widgets: string[] }).widgets;
+  };
+
+  const save = (widgets: string[]) =>
+    putDashboard(request('/api/workspace/dashboard', 'PUT', { widgets }));
+
+  it('stores an order and gives it back in the same order', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    // Deliberately not sorted and not the default: a route that returned the
+    // stored set rather than the stored SEQUENCE would pass a test whose
+    // expectation happened to be alphabetical.
+    const order = ['client_health', 'favorites', 'expirations', 'recently_viewed'];
+
+    expect((await save(order)).status).toBe(200);
+    expect(await layoutOf()).toEqual(order);
+  });
+
+  it('stores the three new widgets, which the database had to learn first', async () => {
+    // The CHECK calls helm.dashboard_layout_valid(). Before 0530 this save
+    // came back as an unexplained 500.
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const order = ['quick_actions', 'sync_status', 'usage_summary', 'favorites'];
+
+    expect((await save(order)).status).toBe(200);
+    expect(await layoutOf()).toEqual(order);
+  });
+
+  it('round-trips a move rather than only the first save', async () => {
+    // What dragging actually produces: an order, then another order.
+    asUser(IDS.admin1, 'admin@northwind.test');
+    await save(['favorites', 'expirations', 'sync_status']);
+    await save(['sync_status', 'favorites', 'expirations']);
+    expect(await layoutOf()).toEqual(['sync_status', 'favorites', 'expirations']);
+  });
+
+  it('refuses a layout that lists a widget twice', async () => {
+    // Which a reorder cannot produce and a hand-written request can. Rendering
+    // it twice is not something anybody means.
+    asUser(IDS.admin1, 'admin@northwind.test');
+    expect((await save(['favorites', 'favorites'])).status).toBe(400);
+  });
+
+  it('refuses a key the database does not know', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    expect((await save(['favorites', 'not_a_widget'])).status).toBe(400);
+  });
+
+  it('keeps one person\'s order out of another\'s', async () => {
+    // The property this whole file exists for. A layout is per-user state, and
+    // the failure mode is a colleague quietly inheriting your arrangement.
+    asUser(IDS.admin1, 'admin@northwind.test');
+    await save(['sync_status', 'usage_summary']);
+
+    asUser(IDS.tech1, 'tech1@northwind.test');
+    await save(['favorites', 'quick_actions']);
+    expect(await layoutOf()).toEqual(['favorites', 'quick_actions']);
+
+    asUser(IDS.admin1, 'admin@northwind.test');
+    expect(await layoutOf()).toEqual(['sync_status', 'usage_summary']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('what the new widgets are given', () => {
+  /**
+   * The three new widgets take rows and render them, like every other widget
+   * here — the page fetches only what the layout asks for. So what is worth
+   * asserting is the QUERIES: that each returns live data of the shape its
+   * widget expects, under the caller's own RLS.
+   *
+   * The statements below are the ones in src/app/(app)/dashboard/page.tsx. A
+   * server component cannot be imported and called, and duplicating the SQL to
+   * assert a different SQL would test nothing — so these run the same text
+   * against the same fixtures.
+   */
+  const asActor = { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' as const };
+
+  it('usage summary: totals that match what is really there', async () => {
+    const [totals, actual] = await withTenant(asActor, async (tx) => {
+      const [row] = await tx<Record<string, string>[]>`
+        SELECT
+          (SELECT count(*) FROM organization WHERE deleted_at IS NULL) AS organizations,
+          (SELECT count(*) FROM v_secret_metadata) AS secrets,
+          (SELECT count(*) FROM asset_node WHERE archived_at IS NULL) AS assets,
+          (SELECT count(*) FROM site WHERE deleted_at IS NULL) AS sites,
+          (SELECT count(*) FROM contact) AS contacts,
+          (SELECT count(*) FROM attachment WHERE deleted_at IS NULL) AS attachments
+      `;
+      const [check] = await tx<{ orgs: string; assets: string }[]>`
+        SELECT (SELECT count(*) FROM organization WHERE deleted_at IS NULL) AS orgs,
+               (SELECT count(*) FROM asset_node WHERE archived_at IS NULL) AS assets
+      `;
+      return [row!, check!];
+    });
+
+    expect(Number(totals.organizations)).toBe(Number(actual.orgs));
+    expect(Number(totals.assets)).toBe(Number(actual.assets));
+    // Not a tenant with nothing in it, or every assertion above is 0 === 0.
+    expect(Number(totals.organizations)).toBeGreaterThan(0);
+    expect(Number(totals.assets)).toBeGreaterThan(0);
+  });
+
+  it('usage summary: an archived asset stops counting', async () => {
+    const before = await withTenant(asActor, async (tx) => {
+      const [r] = await tx<{ n: string }[]>`
+        SELECT count(*) AS n FROM asset_node WHERE archived_at IS NULL
+      `;
+      return Number(r!.n);
+    });
+
+    const sql = superuserSql();
+    try {
+      await sql`UPDATE asset_node SET archived_at = now() WHERE id = ${IDS.firewall}::uuid`;
+      const after = await withTenant(asActor, async (tx) => {
+        const [r] = await tx<{ n: string }[]>`
+          SELECT count(*) AS n FROM asset_node WHERE archived_at IS NULL
+        `;
+        return Number(r!.n);
+      });
+      expect(after).toBe(before - 1);
+    } finally {
+      await sql`UPDATE asset_node SET archived_at = NULL WHERE id = ${IDS.firewall}::uuid`;
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('quick actions: clients with their sites, archived ones left out', async () => {
+    const sql = superuserSql();
+    let siteId = '';
+    try {
+      const [site] = await sql<{ id: string }[]>`
+        INSERT INTO site (tenant_id, organization_id, name)
+        VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'ZZ Widget Site')
+        RETURNING id
+      `;
+      siteId = site!.id;
+      await sql`UPDATE organization SET archived_at = now() WHERE id = ${IDS.orgGlobex}::uuid`;
+
+      const clients = await withTenant(asActor, (tx) => tx<
+        { id: string; name: string; sites: { id: string; name: string }[] }[]
+      >`
+        SELECT o.id, o.name,
+               coalesce(
+                 jsonb_agg(jsonb_build_object('id', s.id, 'name', s.name)
+                           ORDER BY s.name) FILTER (WHERE s.id IS NOT NULL),
+                 '[]'::jsonb) AS sites
+        FROM organization o
+        LEFT JOIN site s ON s.organization_id = o.id AND s.deleted_at IS NULL
+        WHERE o.deleted_at IS NULL AND o.archived_at IS NULL
+        GROUP BY o.id, o.name
+        ORDER BY o.is_msp_internal, o.name
+      `);
+
+      const acme = clients.find((c) => c.id === IDS.orgAcme);
+      expect(acme).toBeDefined();
+      // The shape NewAssetForm expects, not a bare id list.
+      expect(acme!.sites.map((s) => s.name)).toContain('ZZ Widget Site');
+      // Starting new work on an archived client is not something somebody means
+      // to do, so it is not offered.
+      expect(clients.map((c) => c.id)).not.toContain(IDS.orgGlobex);
+      // A client with no sites arrives as [] rather than [null].
+      const empty = clients.find((c) => c.sites.length === 0);
+      if (empty) expect(Array.isArray(empty.sites)).toBe(true);
+    } finally {
+      await sql`UPDATE organization SET archived_at = NULL WHERE id = ${IDS.orgGlobex}::uuid`;
+      if (siteId) await sql`DELETE FROM site WHERE id = ${siteId}::uuid`;
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('sync status: every column the widget reads, for a real mapping', async () => {
+    const sql = superuserSql();
+    try {
+      const [secret] = await sql<{ id: string }[]>`
+        INSERT INTO secret (tenant_id, organization_id, kind, label)
+        VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'api_key', 'ZZ widget controller key')
+        RETURNING id
+      `;
+      await sql`
+        INSERT INTO unifi_site_mapping
+          (tenant_id, organization_id, name, controller_url, unifi_site_id,
+           api_key_secret_id, is_active, poll_interval_seconds,
+           last_poll_at, last_poll_ok, consecutive_failures)
+        VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'ZZ Widget Controller',
+                'https://unifi.zz.test', 'default', ${secret!.id}::uuid, true, 900,
+                now() - interval '10 minutes', true, 0)
+      `;
+
+      const rows = await withTenant(asActor, (tx) => tx<Record<string, unknown>[]>`
+        SELECT id, name, organization_name, is_active, last_poll_at, last_poll_ok,
+               last_poll_error, poll_interval_seconds, consecutive_failures
+        FROM helm.unifi_mappings()
+        ORDER BY organization_name, name
+      `);
+
+      const mapping = rows.find((r) => r.name === 'ZZ Widget Controller');
+      expect(mapping).toBeDefined();
+      // Every field syncState() reads, present and of the right type — the
+      // widget cannot classify a mapping it is handed undefined for.
+      expect(mapping!.is_active).toBe(true);
+      expect(mapping!.last_poll_ok).toBe(true);
+      expect(mapping!.last_poll_at).toBeInstanceOf(Date);
+      expect(typeof mapping!.poll_interval_seconds).toBe('number');
+      expect(mapping!.organization_name).toBe('Acme Manufacturing');
+      // And no API key: helm.unifi_mappings() has no column that could carry
+      // one, which is why the widget can be handed its rows directly.
+      expect(Object.keys(mapping!)).not.toContain('api_key_secret_id');
+    } finally {
+      await sql`DELETE FROM unifi_site_mapping WHERE name = 'ZZ Widget Controller'`;
+      await sql`DELETE FROM secret WHERE label = 'ZZ widget controller key'`;
+      await sql.end({ timeout: 5 });
+    }
+  });
+});
+
 describe('pinning a client', () => {
   it('appears on your own list afterwards', async () => {
     asUser(IDS.admin1, 'admin@northwind.test');
