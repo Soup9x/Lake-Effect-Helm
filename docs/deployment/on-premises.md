@@ -682,7 +682,10 @@ pnpm db:check-migrations --expect applied.txt
 
 It prints what is still pending, or names every file whose content no longer
 matches what this server ran — which is exactly what the migrate service will
-refuse on.
+refuse on. It also names any migration this server **applied** that is no longer
+in the tree at all, which is the quieter half of the same problem: deleting a
+migration does not un-apply it, so your database still carries its effects while
+a freshly built one no longer reproduces them.
 
 **`helm_migration` is the authority, not a commit hash.** A commit is a guess
 about what an environment applied; this table is what it applied. Two bad
@@ -706,9 +709,24 @@ Report it with the filename from the error. The fix belongs upstream: the
 migration is restored to what it was, and a *new* migration carries the change
 forward — which your next upgrade then applies normally.
 
-Contributors: `pnpm db:check-migrations` catches this before it is committed,
-and `pnpm hooks:install` runs it automatically on every commit that touches
-`db/sql`. CI runs the same check plus a comparison against the base branch.
+#### If a migration has gone missing from `db/sql`
+
+The same rule, and the same answer: an applied migration is immutable, and that
+includes existing. Restore the file — `git checkout <ref> -- db/sql/<file>` —
+and, if it must stop doing what it did, write a *new* migration that undoes it.
+Never remove the file: two systems built from the same commit would then have
+different schemas depending on when each was built, and nothing in the tree
+would say so.
+
+Contributors: `pnpm db:check-migrations` catches both an edit and a deletion
+before they are committed — it compares the tree to `MANIFEST.sha256` for
+content and to `HEAD` for existence — and `pnpm hooks:install` runs it
+automatically on every commit that touches `db/sql`. CI runs the same check
+against the merge base with the default branch on **every** event, push
+included, plus a diff annotation on pull requests. `--deleted-since <ref>` asks
+the existence question alone, for cases where a content comparison against a
+recent reference would flag a legitimate revision of a migration that has never
+shipped.
 
 ---
 

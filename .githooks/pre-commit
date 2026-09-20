@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
-# Refuse a commit that edits a migration which has already been applied.
+# Refuse a commit that edits — or deletes — a migration which has already been
+# applied.
 #
 # db/migrate.ts hashes the whole file and refuses to run when it no longer
 # matches what helm_migration recorded — but that is deploy time, against a live
 # database, and by then the change is merged. This is the same rule, enforced
 # while the change is still being written.
+#
+# A DELETION is the case this used to miss entirely. Removing a migration
+# together with its MANIFEST.sha256 entry satisfied the manifest — the manifest
+# no longer mentioned the file, so nothing looked for it — and the check walked
+# the files on disk, where a deleted file is simply not present. The check now
+# asks git what SHOULD be in db/sql, and HEAD still has the file a staged `git
+# rm` is about to remove. See scripts/check-migrations.ts.
 #
 # Install with: pnpm hooks:install   (sets core.hooksPath=.githooks)
 set -euo pipefail
@@ -30,10 +38,15 @@ if ! "${RUNNER[@]}"; then
 
 pre-commit: REFUSING.
 
-An applied migration is immutable. Restore the file and write a new one that
-carries the change forward:
+An applied migration is immutable, and that includes existing. Restore the file
+and write a new one that carries the change forward:
 
-    git checkout -- db/sql/<file>
+    git checkout -- db/sql/<file>          # edited
+    git checkout HEAD -- db/sql/<file>     # deleted
+
+Deleting a migration does not un-apply it: every environment that ran it still
+carries its effects, and a fresh build no longer reproduces them. If it must
+stop doing what it did, write a NEW migration that undoes it.
 
 If this migration is genuinely new and simply needs recording:
 

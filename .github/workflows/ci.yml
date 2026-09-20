@@ -55,12 +55,60 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # Two different questions, so two steps.
+      # Three different questions, so three steps.
       #
       # The manifest answers "does this tree match what was recorded", which is
       # the same check the pre-commit hook runs and works with no history.
       - name: Migrations match their manifest
         run: pnpm db:check-migrations
+
+      # ...and this answers "is anything MISSING", which the manifest cannot.
+      #
+      # Deleting an applied migration together with its MANIFEST.sha256 entry
+      # used to pass every check in this workflow. The manifest no longer
+      # mentioned the file, the script walked the files on disk, and a name that
+      # is absent from both leaves nothing to look up. Only the PR-diff step
+      # below noticed — and it runs on pull_request, while this workflow also
+      # triggers on `push: branches: ['**']`. A direct push to a branch went
+      # green.
+      #
+      # So it runs unconditionally, against TWO references, because neither one
+      # covers every event on its own:
+      #
+      #   the merge base with the default branch — everything that was on main
+      #   when this branch was cut must still be here, content included. A
+      #   migration merged to main AFTER the branch point is legitimately absent
+      #   and is not considered, which is why the merge base rather than the tip.
+      #
+      #   the branch's previous tip (github.event.before) — the case the merge
+      #   base cannot see, a push to the default branch itself. Existence only:
+      #   comparing content to the last push would flag a force-pushed revision
+      #   of a migration that has never shipped, which --force exists to allow.
+      #
+      # Unset or all-zeros `before` means a brand-new branch, where there is no
+      # previous tip and the merge base is the whole answer.
+      - name: No applied migration has been deleted
+        run: |
+          default_branch='${{ github.event.repository.default_branch }}'
+
+          # actions/checkout clones at depth 1, so HEAD has no parents and no
+          # merge base is computable until the history is actually here.
+          git fetch --no-tags --unshallow origin 2>/dev/null || git fetch --no-tags origin
+          git fetch --no-tags origin \
+            "+refs/heads/$default_branch:refs/remotes/origin/$default_branch"
+
+          base=$(git merge-base "origin/$default_branch" HEAD)
+          echo "  merge base with $default_branch: $base"
+          pnpm db:check-migrations --against "$base"
+
+          before='${{ github.event.before }}'
+          if [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$before^{commit}" 2>/dev/null; then
+            echo "  previous tip of this branch: $before"
+            pnpm db:check-migrations --deleted-since "$before"
+          else
+            echo "  no reachable previous tip for this event; the merge base is the whole check"
+          fi
 
       # The manifest records what the tree contained when somebody last ran
       # --update. If the tree was already wrong then, it records the wrong
@@ -87,6 +135,11 @@ jobs:
       # somebody's database. Seven had drifted before this step existed, three of
       # them comment-only — and a comment-only edit fails a deploy exactly as
       # hard, because the checksum covers the whole file.
+      #
+      # The step above now covers this on every event, including push. This one
+      # stays because it annotates the offending FILE in the pull request diff,
+      # which is where a reviewer is looking, and a second opinion on
+      # immutability is not the redundancy worth economising on.
       - name: No applied migration has been edited in place
         if: github.event_name == 'pull_request'
         run: |
