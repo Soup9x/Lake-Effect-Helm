@@ -3,21 +3,38 @@ import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getSecretService } from '@/lib/services';
 
+/**
+ * The same rule normaliseTags() applies in lib/bulk/service.ts, minus its
+ * "at least one" requirement: a credential with no tags is ordinary.
+ */
+function normaliseOptionalTags(raw: string[]): string[] {
+  const cleaned = raw
+    .map((t) => t.trim().toLowerCase().replace(/\s+/g, ' '))
+    .filter((t) => t.length > 0 && t.length <= 60);
+  return [...new Set(cleaned)].sort();
+}
+
 const createSchema = z.object({
   organizationId: z.guid('organizationId must be a UUID'),
   label: z.string().trim().min(1).max(200),
-  kind: z.enum([
-    'password',
-    'api_key',
-    'private_key',
-    'certificate',
-    'totp_seed',
-    'connection_string',
-    'ssh_key',
-    'recovery_code',
-    'license_key',
-    'generic',
-  ]),
+  /*
+   * NO LONGER ASKED FOR, and no longer defaulted here either. Omitting it lets
+   * secret.kind's own DEFAULT apply (0540), so there is one place that decides
+   * what an unspecified kind is. Still accepted, because an importer or a
+   * script may genuinely know — the credential form does not.
+   */
+  kind: z
+    .enum([
+      'password', 'api_key', 'private_key', 'certificate', 'totp_seed',
+      'connection_string', 'ssh_key', 'recovery_code', 'license_key', 'generic',
+    ])
+    .optional(),
+  /**
+   * Freeform labels, on the credential's asset_node. Deliberately unrelated to
+   * `kind`: nothing reads these back to infer what the material is, so tagging
+   * a credential can never change what reveal or export do with it.
+   */
+  tags: z.array(z.string().trim().min(1).max(60)).max(20).default([]),
   /**
    * The credential itself. Bounded because an unbounded body on the one
    * endpoint that encrypts its input is a cheap way to make the server do
@@ -119,7 +136,7 @@ export const POST = tenantRoute(
         },
         {
           organizationId: body.organizationId,
-          kind: body.kind,
+          ...(body.kind ? { kind: body.kind } : {}),
           label: body.label,
           sensitivity: body.sensitivity,
           requiresStepUp: body.requiresStepUp,
@@ -136,13 +153,17 @@ export const POST = tenantRoute(
       [node] = await tx<{ id: string }[]>`
         INSERT INTO asset_node (
           tenant_id, organization_id, site_id, node_type, name, notes,
-          criticality, created_by, updated_by
+          criticality, created_by, updated_by, tags
         )
         VALUES (
           ${identity.tenantId}::uuid, ${body.organizationId}::uuid,
           ${body.siteId ?? null}, 'credential'::node_type, ${body.label},
           ${body.notes ?? null},
-          ${body.criticality}, ${identity.actorId}::uuid, ${identity.actorId}::uuid
+          ${body.criticality}, ${identity.actorId}::uuid, ${identity.actorId}::uuid,
+          -- Lowercased, deduplicated and sorted the way every other tag write
+          -- normalises them, so a tag typed here and one added from the bulk
+          -- toolbar are the same tag.
+          ${normaliseOptionalTags(body.tags)}
         )
         RETURNING id
       `;

@@ -415,6 +415,8 @@ export default async function OrganizationPage({
                 <CredentialEditForm
                   key="edit"
                   secretId={credential.secret_id ?? ''}
+                  nodeId={credential.node_id}
+                  tags={credential.tags}
                   canEdit={canWrite && credential.secret_id !== null}
                   values={{
                     label: credential.secret_label ?? credential.name,

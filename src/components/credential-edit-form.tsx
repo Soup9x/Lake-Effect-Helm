@@ -38,6 +38,7 @@ import { KeyRound, Loader2, Pencil, RotateCw } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
+import { TagEditor } from './tag-editor';
 import { useStepUp } from './step-up-dialog';
 import { toAttemptResult, withStepUp } from '@/lib/ui/step-up';
 import { changedFields, hasChanges, type FieldValue } from '@/lib/ui/form-diff';
@@ -67,10 +68,19 @@ export interface CredentialValues extends Record<string, FieldValue> {
 
 export function CredentialEditForm({
   secretId,
+  nodeId,
+  tags,
   values: initial,
   canEdit,
 }: {
   secretId: string;
+  /**
+   * The credential's asset_node. Tags live there, not on `secret` — a
+   * credential IS an asset_node, so the column the client tag control already
+   * writes to is the same one, and no new table was needed.
+   */
+  nodeId: string;
+  tags: string[];
   values: CredentialValues;
   canEdit: boolean;
 }) {
@@ -214,6 +224,19 @@ export function CredentialEditForm({
         description="Changing the stored value is a rotation, further down — it is audited differently from a correction."
         size="lg"
       >
+        {/*
+          Tags, where the Kind dropdown used to be in spirit. Outside the form
+          rather than inside it, and deliberately: TagEditor writes immediately
+          through /api/bulk/tags, so a tag is added or removed on click and does
+          not wait for Save. Putting it inside the form would imply the two
+          commit together, and a tag silently discarded by a cancelled edit is
+          the kind of thing somebody only notices much later.
+        */}
+        <div className="space-y-1 pb-4">
+          <Label>Tags</Label>
+          <TagEditor target="node" id={nodeId} tags={tags} canWrite={canEdit} />
+        </div>
+
         <form onSubmit={saveMetadata} className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div>

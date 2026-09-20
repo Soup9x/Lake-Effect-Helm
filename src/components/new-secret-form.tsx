@@ -8,6 +8,7 @@ import { Modal } from './ui/modal';
 import { useStepUp } from './step-up-dialog';
 import { toAttemptResult, withStepUp } from '@/lib/ui/step-up';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
+import { parseTagDraft } from '@/lib/ui/tags';
 
 /**
  * Storing a credential.
@@ -42,22 +43,24 @@ import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
  *   even a correct payload was refused. The refusal now opens a prompt and
  *   retries the store.
  */
-const KINDS = [
-  ['password', 'Password'],
-  ['api_key', 'API key'],
-  ['ssh_key', 'SSH key'],
-  ['private_key', 'Private key'],
-  ['certificate', 'Certificate'],
-  ['connection_string', 'Connection string'],
-  ['totp_seed', 'TOTP seed'],
-  ['recovery_code', 'Recovery code'],
-  ['license_key', 'Licence key'],
-  ['generic', 'Other'],
-] as const;
+/*
+ * THE KIND CATALOGUE IS GONE, along with the MULTILINE set that keyed off it.
+ * Both existed to serve a dropdown of ten fixed options that nobody asked for
+ * and that does not survive contact with what an MSP stores — "Account type" on
+ * a licence key, a username on a certificate. secret.kind still exists and
+ * still matters to the reveal and export paths; it simply defaults (0540)
+ * instead of being a question.
+ */
 
-/** Kinds whose value is realistically multi-line. */
-/** Matches the credential_type enum in 0070. */
+/*
+ * Account type STAYS, unlike Kind, and the difference is worth stating: this
+ * describes the ACCOUNT the credential opens, which is documentation somebody
+ * reads, whereas Kind described the material, which only the reveal and export
+ * paths read. "Other" leads the list because it is now the default — an honest
+ * absence rather than a wrong answer nobody typed.
+ */
 const CREDENTIAL_TYPES = [
+  ['other', '—'],
   ['standard_user', 'Standard user'],
   ['local_admin', 'Local admin'],
   ['domain_admin', 'Domain admin'],
@@ -69,17 +72,13 @@ const CREDENTIAL_TYPES = [
   ['root', 'Root'],
   ['recovery', 'Recovery'],
   ['shared_mailbox', 'Shared mailbox'],
-  ['other', 'Other'],
 ] as const;
-
-const MULTILINE = new Set(['private_key', 'certificate', 'ssh_key']);
 
 export function NewSecretForm({ organizationId }: { organizationId: string }) {
   const router = useRouter();
   const stepUp = useStepUp();
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState('');
-  const [kind, setKind] = useState('password');
   const [value, setValue] = useState('');
   const [sensitivity, setSensitivityState] = useState('standard');
   const [requiresReason, setRequiresReason] = useState(false);
@@ -101,7 +100,13 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
       setRequiresReason(true);
     }
   }
-  const [credentialType, setCredentialType] = useState('standard_user');
+  const [tagText, setTagText] = useState('');
+  /*
+   * 'other', not 'standard_user'. A licence key silently recorded as a standard
+   * user account is worse than one recorded as "other" — the first is a wrong
+   * answer nobody typed, the second is an honest absence.
+   */
+  const [credentialType, setCredentialType] = useState('other');
   const [username, setUsername] = useState('');
   const [url, setUrl] = useState('');
   const [notes, setNotes] = useState('');
@@ -111,11 +116,11 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
   function close() {
     setLabel('');
     setValue('');
-    setKind('password');
+    setTagText('');
     setSensitivityState('standard');
     setRequiresReason(false);
     setRequiresStepUp(false);
-    setCredentialType('standard_user');
+    setCredentialType('other');
     setUsername('');
     setUrl('');
     setNotes('');
@@ -138,8 +143,8 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
       body: JSON.stringify({
         organizationId,
         label: label.trim(),
-        kind,
         value,
+        tags: parseTagDraft(tagText),
         sensitivity,
         requiresReason,
         requiresStepUp,
@@ -220,20 +225,33 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
             </div>
 
             <div>
-              <Label htmlFor="secret-kind">Kind</Label>
-              <Select id="secret-kind" value={kind} onChange={(e) => setKind(e.target.value)}>
-                {KINDS.map(([v, l]) => (
-                  <option key={v} value={v}>
-                    {l}
-                  </option>
-                ))}
-              </Select>
+              <Label htmlFor="secret-tags">Tags</Label>
+              <Input
+                id="secret-tags"
+                value={tagText}
+                onChange={(e) => setTagText(e.target.value)}
+                placeholder="Optional — ssh key, vendor portal"
+                maxLength={400}
+              />
+              <FieldHint>
+                Separate with commas. Whatever you would actually search for.
+              </FieldHint>
             </div>
           </div>
 
           <div>
             <Label htmlFor="secret-value">Credential</Label>
-            {MULTILINE.has(kind) ? (
+            {/*
+              MULTILINE USED TO BE CHOSEN BY THE KIND DROPDOWN — a private key
+              or a certificate got a textarea, everything else a password box.
+              With no kind to read, the trigger is the value itself: a newline
+              means multi-line material, and it can only arrive by paste, which
+              is how a key gets into this field in the first place.
+
+              This is the one place a shape is inferred, and it infers only how
+              to DISPLAY the field. Nothing about what is stored changes.
+            */}
+            {value.includes('\n') ? (
               <Textarea
                 id="secret-value"
                 value={value}
@@ -261,11 +279,29 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
           </div>
 
           {/*
-            The ACCOUNT, as opposed to the material above. These land on the
-            credential node — the row that makes it appear on the client and in
-            search — and a credential recorded without them is a password with
-            no record of what it opens.
+            THE ACCOUNT, as opposed to the material above — and all of it
+            optional, which is the point of this section rather than an
+            oversight.
+
+            The field audit found these three are the ones that do not apply
+            universally: "Account type" is meaningless on a licence key, a
+            username on a certificate, a URL on an SSH key. With the Kind
+            dropdown gone there is no signal left to condition on — tags must
+            never be read back to infer what the material is, and the only other
+            candidate would be inspecting the plaintext to decide which inputs
+            to draw, which couples the form to the secret. So they are marked
+            plainly optional rather than conditionally hidden: a heading that
+            says so, an "—" option on the one control that had no way to express
+            "does not apply", and no required attribute on any of them.
           */}
+          <div className="space-y-1 border-t border-border pt-4">
+            <p className="text-xs font-medium text-ink-faint">
+              About the account — all optional
+            </p>
+            <FieldHint>
+              Leave anything blank that does not apply. A licence key has no username.
+            </FieldHint>
+          </div>
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <Label htmlFor="secret-credential-type">Account type</Label>

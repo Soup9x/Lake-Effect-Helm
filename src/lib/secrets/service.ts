@@ -112,7 +112,14 @@ export interface SecretServiceDeps {
 
 export interface CreateSecretInput {
   organizationId: string;
-  kind: string;
+  /**
+   * What the material IS — for the reveal and export paths, not for the person
+   * storing it. Optional since 0540: the credential form no longer asks, and
+   * omitting it lets the column's own default ('generic') apply rather than
+   * having the application pick a value the database already has an opinion
+   * about. Callers that genuinely know — the TOTP path, an importer — still say.
+   */
+  kind?: string;
   label: string;
   sensitivity?: 'standard' | 'elevated' | 'critical';
   requiresStepUp?: boolean;
@@ -181,7 +188,7 @@ export class SecretService {
       )
       VALUES (
         ${actor.tenantId}::uuid, ${input.organizationId}::uuid,
-        ${input.kind}::secret_kind,
+        ${input.kind ? tx`${input.kind}::secret_kind` : tx`DEFAULT`},
         ${input.sensitivity ?? 'standard'}::secret_sensitivity,
         ${input.label},
         ${input.requiresStepUp ?? input.sensitivity === 'critical'},
