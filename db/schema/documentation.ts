@@ -300,6 +300,14 @@ export const searchDocument = pgTable('search_document', {
   nodeId: uuid('node_id'),
   isInternalOnly: boolean('is_internal_only').notNull().default(false),
   clientVisible: boolean('client_visible').notNull().default(false),
+  /**
+   * Whether this document's client is archived. Derived on write by
+   * helm.derive_search_archived() and never set by a projector, so a new
+   * projector cannot forget it; helm.search() excludes it. Archiving a client
+   * does not archive its assets, so without this every asset and credential
+   * under an archived client stayed findable.
+   */
+  organizationArchived: boolean('organization_archived').notNull().default(false),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
   /**
    * Database-generated weighted vector. Declared so drift detection can see it;

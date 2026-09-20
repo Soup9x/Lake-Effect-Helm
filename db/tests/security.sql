@@ -1083,6 +1083,54 @@ SELECT helm_test.check('restoring puts it back in the index',
           WHERE entity_type = 'organization' AND entity_id = :t1_globex));
 ROLLBACK;
 
+-- THE CASCADE, which is what was missing. The client row left the index
+-- correctly and everything underneath it stayed: archiving a client does not
+-- set archived_at on its assets, so its credentials and devices remained
+-- findable and a search for the client's name still returned them. Measured
+-- before 0490: eight documents, one removed, seven left behind.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check('a live client is findable, and so is its documentation',
+  (SELECT count(*) FROM helm.search('acme')) = 8);
+
+UPDATE organization SET archived_at = now() WHERE id = :t1_acme;
+SELECT helm_test.check('archiving takes the whole client out of search, not just its row',
+  (SELECT count(*) FROM helm.search('acme')) = 0);
+-- Named individually, because a count reaching zero could equally mean the
+-- search broke. These are the rows that were left behind.
+SELECT helm_test.check('...including an asset under it',
+  (SELECT count(*) FROM helm.search('ACME-DC01')) = 0);
+SELECT helm_test.check('...and a credential under it',
+  (SELECT count(*) FROM helm.search('ACME Domain Admin')) = 0);
+
+-- A document written while the client is archived is born excluded. This is
+-- the case a per-projector fix would have missed: the flag is derived where the
+-- row is written, so a projector added later cannot forget it.
+INSERT INTO asset_node (tenant_id, organization_id, node_type, name)
+VALUES (:t1, :t1_acme, 'device', 'zz-switch-added-while-archived');
+SELECT helm_test.check('a NEW item under an archived client is excluded too',
+  (SELECT count(*) FROM helm.search('zz-switch-added-while-archived')) = 0);
+
+UPDATE organization SET archived_at = NULL WHERE id = :t1_acme;
+SELECT helm_test.check('...and unarchiving brings all of it back',
+  (SELECT count(*) FROM helm.search('acme')) = 8);
+SELECT helm_test.check('...including the one added while it was archived',
+  (SELECT count(*) FROM helm.search('zz-switch-added-while-archived')) = 1);
+ROLLBACK;
+
+-- The rule lives where the row is written, so it cannot be skipped by a
+-- projector that does not know about it.
+SELECT helm_test.check('the archived flag is derived on every search_document write',
+  EXISTS (SELECT 1 FROM pg_trigger
+           WHERE tgrelid = 'search_document'::regclass
+             AND tgname = 'search_document_archived'
+             AND NOT tgisinternal
+             AND (tgtype & 2) <> 0 AND (tgtype & 4) <> 0 AND (tgtype & 16) <> 0));
+SELECT helm_test.check('...and helm.search() actually applies it',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'helm' AND p.proname = 'search') ~ 'NOT d\.organization_archived');
+
 \echo ''
 \echo '== 31. A bulk action cannot outrank the actor doing it =='
 -- Bulk endpoints issue one UPDATE over a set of ids. The protection is that
