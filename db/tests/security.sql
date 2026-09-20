@@ -2517,5 +2517,124 @@ SELECT helm_test.check('...nor count it',
 ROLLBACK;
 
 \echo ''
+\echo '== 42. The catalogue cannot forget a table =='
+-- 0200 ends with a DO block asserting that nothing carrying tenant_id has RLS
+-- switched off. It was true when 0200 ran, and false from 0360 onwards: a
+-- one-time check cannot see a table a later migration creates, which is the
+-- only case it was written for. radius_config (0360), oidc_provider (0410) and
+-- notification_cursor (0420) each walked past it.
+--
+-- This is the same query against the FINAL schema, on every CI run. The block
+-- stays in 0200 because an applied migration is immutable; it is harmless
+-- there, and it is not the backstop. helm_test.rls_catalogue_gaps() is, and
+-- db/tests/tamper.sql proves it catches a table by creating one.
+SELECT helm_test.check_rls_catalogue();
+
+\echo '-- 0550: the three that had slipped past it --'
+SELECT helm_test.check('all three now enforce RLS',
+  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public'
+     AND c.relname IN ('oidc_provider', 'radius_config', 'notification_cursor')
+     AND c.relrowsecurity AND c.relforcerowsecurity) = 3);
+
+SELECT helm_test.check('...with the full set of four policies each',
+  (SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+   JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public'
+     AND c.relname IN ('oidc_provider', 'radius_config', 'notification_cursor')) = 12);
+
+-- MSP-only, not organisation-scoped. None of the three has an organization_id
+-- and none should: an identity provider, a RADIUS server and a fan-out cursor
+-- are tenant-wide facts. apply_tenant_rls takes org-scoping as a parameter, so
+-- the wrong argument widens the policy silently rather than failing.
+SELECT helm_test.check('every one of the twelve policies is MSP-only',
+  NOT EXISTS (
+    SELECT 1 FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname IN ('oidc_provider', 'radius_config', 'notification_cursor')
+      AND pg_get_expr(coalesce(p.polqual, p.polwithcheck), p.polrelid) NOT LIKE '%is_tenant_wide%'));
+
+SELECT helm_test.check('...and none of them is organisation-scoped',
+  NOT EXISTS (
+    SELECT 1 FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname IN ('oidc_provider', 'radius_config', 'notification_cursor')
+      AND pg_get_expr(coalesce(p.polqual, p.polwithcheck), p.polrelid) LIKE '%org_in_scope%'));
+
+-- The write floor matches what the functions already demand. set_oidc_provider,
+-- update_oidc_settings, forget_oidc_provider and the RADIUS three all begin
+-- with helm.has_permission('tenant:write'), which super_admin alone holds, and
+-- super_admin is rank 100. A policy admitting rank 80 would say something the
+-- product does not mean.
+SELECT helm_test.check('configuring authentication is a rank-100 write in the policy too',
+  (SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+   WHERE c.relname IN ('oidc_provider', 'radius_config')
+     AND p.polcmd IN ('a', 'w', 'd')
+     AND pg_get_expr(coalesce(p.polwithcheck, p.polqual), p.polrelid)
+         LIKE '%current_role_rank() >= 100%') = 6);
+
+SELECT helm_test.check('the fan-out cursor is worker state, at rank 80',
+  (SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+   WHERE c.relname = 'notification_cursor'
+     AND p.polcmd IN ('a', 'w', 'd')
+     AND pg_get_expr(coalesce(p.polwithcheck, p.polqual), p.polrelid)
+         LIKE '%current_role_rank() >= 80%') = 3);
+
+\echo '-- RLS was ADDED to the grants, not traded for them --'
+-- The grants are the first layer and remain the narrow one. A migration that
+-- quietly swapped one for the other would be worse than the gap it closed:
+-- the whole argument for adding RLS is that a single future GRANT should not
+-- be enough to expose every tenant's row.
+SELECT helm_test.check('helm_app still holds nothing on any of the three',
+  NOT EXISTS (
+    SELECT 1 FROM unnest(ARRAY['oidc_provider', 'radius_config', 'notification_cursor']) t,
+                unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) priv
+    WHERE has_table_privilege('helm_app', t, priv)));
+SELECT helm_test.check('nor does the auditor or the key admin',
+  NOT EXISTS (
+    SELECT 1 FROM unnest(ARRAY['oidc_provider', 'radius_config', 'notification_cursor']) t,
+                unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) priv,
+                unnest(ARRAY['helm_auditor', 'helm_key_admin']) r
+    WHERE has_table_privilege(r, t, priv)));
+SELECT helm_test.check('helm_auth keeps the grant the sign-in path needs',
+  has_table_privilege('helm_auth', 'oidc_provider', 'SELECT')
+  AND has_table_privilege('helm_auth', 'radius_config', 'SELECT'));
+SELECT helm_test.check('...and the worker keeps its cursor',
+  has_table_privilege('helm_worker', 'notification_cursor', 'SELECT'));
+
+\echo '-- ...and that is why enabling it changed nothing at runtime --'
+-- Every reader and writer of the three is SECURITY DEFINER owned by a
+-- superuser, and a superuser bypasses row security outright, FORCE included.
+-- That is the reason these policies cannot break the sign-in path — so it is
+-- asserted rather than believed. If one of these were ever redefined as
+-- SECURITY INVOKER, this fails here instead of at 3am on a sign-in.
+SELECT helm_test.check('all sixteen readers and writers are SECURITY DEFINER, superuser-owned',
+  (SELECT count(*) FROM pg_proc p
+   JOIN pg_namespace n ON n.oid = p.pronamespace
+   JOIN pg_roles o ON o.oid = p.proowner
+   WHERE n.nspname = 'helm'
+     AND p.proname IN ('fan_out_notifications', 'forget_oidc_provider', 'forget_radius_config',
+                       'oidc_provider_by_slug', 'oidc_provider_for_tenant', 'oidc_settings',
+                       'oidc_signin_options', 'radius_config_for_email', 'radius_config_for_tenant',
+                       'radius_settings', 'record_oidc_test', 'record_radius_test',
+                       'set_oidc_provider', 'set_radius_config', 'update_oidc_settings',
+                       'update_radius_settings')
+     AND p.prosecdef AND o.rolsuper) = 16);
+
+-- Behavioural, because the catalogue says the switch is on and nothing about
+-- the door still opening. Both of these read a table helm_app cannot touch.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check('helm_app can still ask for the RADIUS settings',
+  (SELECT count(*) FROM helm.radius_settings()) = 0);
+SELECT helm_test.check('...and for the OIDC settings',
+  (SELECT count(*) FROM helm.oidc_settings()) = 0);
+SELECT helm_test.check_raises('...but still cannot read the table itself',
+  $$SELECT count(*) FROM radius_config$$);
+ROLLBACK;
+
+\echo ''
 \echo '== All security assertions passed =='
 
