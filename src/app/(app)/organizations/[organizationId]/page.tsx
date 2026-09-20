@@ -9,6 +9,7 @@ import { SiteForm } from '@/components/site-form';
 import { CredentialEditForm } from '@/components/credential-edit-form';
 import { NewAssetForm } from '@/components/new-asset-form';
 import { RenameOrganization } from '@/components/rename-organization';
+import { TagEditor } from '@/components/tag-editor';
 import { isClientRole } from '@/lib/ui/roles';
 import { isWeakStrength, strengthLabel } from '@/lib/ui/strength';
 import { FavoriteStar } from '@/components/favorite-star';
@@ -27,6 +28,7 @@ interface OrgRow {
   id: string; name: string; legal_name: string | null; status: string;
   industry: string | null; employee_count: number | null; timezone: string | null;
   website: string | null; onboarded_at: Date | null; notes: string | null;
+  tags: string[];
 }
 
 interface SiteRow {
@@ -81,7 +83,7 @@ export default async function OrganizationPage({
   const data = await withTenant(actorOf(identity), async (tx) => {
     const [organization] = await tx<OrgRow[]>`
       SELECT id, name, legal_name, status::text, industry, employee_count,
-             timezone, website, onboarded_at, notes
+             timezone, website, onboarded_at, notes, tags
       FROM organization WHERE id = ${organizationId}::uuid AND deleted_at IS NULL
     `;
     if (!organization) return null;
@@ -185,6 +187,20 @@ export default async function OrganizationPage({
         }
       />
       <PageBody>
+        {/*
+          The client's own tags, which were displayed nowhere but the client
+          LIST — the one place you cannot act on a single client. Adding a tag
+          was possible through the bulk bar; taking one off was not possible
+          anywhere, because nothing rendered a control over them.
+        */}
+        <div className="mb-4">
+          <TagEditor
+            target="client"
+            id={organization.id}
+            tags={organization.tags}
+            canWrite={canWrite}
+          />
+        </div>
         {canWrite && (
           <div className="mb-4 flex flex-wrap gap-2">
             <NewSecretForm organizationId={organization.id} />

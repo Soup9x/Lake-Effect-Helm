@@ -5,6 +5,7 @@ import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { AssetForm } from '@/components/asset-form';
 import { DependencyChip, DependencyEditor } from '@/components/dependency-editor';
+import { TagEditor } from '@/components/tag-editor';
 import { isClientRole } from '@/lib/ui/roles';
 import { isWeakStrength, strengthLabel } from '@/lib/ui/strength';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -168,11 +169,8 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             Criticality {node.criticality}
           </Badge>
           {node.site_name && <Badge tone="neutral">{node.site_name}</Badge>}
-          {node.tags.map((tag) => (
-            <Badge key={tag} tone="neutral">
-              {tag}
-            </Badge>
-          ))}
+          {/* Editable rather than decorative: same control, same endpoint. */}
+          <TagEditor target="node" id={node.id} tags={node.tags} canWrite={canWrite} />
           {expiries.map((expiry) => (
             <Badge key={expiry.id} tone={severityTone(expiry.severity)}>
               {humanise(expiry.kind)} {formatDate(expiry.expires_at)}
