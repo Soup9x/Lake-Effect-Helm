@@ -10,6 +10,7 @@ import { CredentialEditForm } from '@/components/credential-edit-form';
 import { NewAssetForm } from '@/components/new-asset-form';
 import { RenameOrganization } from '@/components/rename-organization';
 import { isClientRole } from '@/lib/ui/roles';
+import { isWeakStrength, strengthLabel } from '@/lib/ui/strength';
 import { FavoriteStar } from '@/components/favorite-star';
 import { NotesCard } from '@/components/notes-card';
 import { SelectableTable } from '@/components/selectable-table';
@@ -335,8 +336,8 @@ export default async function OrganizationPage({
                           {humanise(credential.credential_type)}
                         </span>
                         {credential.is_break_glass && <Badge tone="critical">Break glass</Badge>}
-                        {credential.strength_score !== null && credential.strength_score < 50 && (
-                          <Badge tone="warning">Weak</Badge>
+                        {isWeakStrength(credential.strength_score) && (
+                          <Badge tone="warning">{strengthLabel(credential.strength_score)}</Badge>
                         )}
                         {credential.tags.map((tag) => (
                           <Badge key={tag} tone="neutral">

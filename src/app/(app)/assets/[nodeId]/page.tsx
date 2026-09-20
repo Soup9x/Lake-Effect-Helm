@@ -6,6 +6,7 @@ import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { AssetForm } from '@/components/asset-form';
 import { DependencyChip, DependencyEditor } from '@/components/dependency-editor';
 import { isClientRole } from '@/lib/ui/roles';
+import { isWeakStrength, strengthLabel } from '@/lib/ui/strength';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
 import { RevealButton } from '@/components/reveal-button';
@@ -281,8 +282,8 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
                       {secret.sensitivity}
                     </Badge>
                     {secret.requires_step_up && <Badge tone="warning">Step-up required</Badge>}
-                    {secret.strength_score !== null && secret.strength_score < 50 && (
-                      <Badge tone="warning">Weak ({secret.strength_score})</Badge>
+                    {isWeakStrength(secret.strength_score) && (
+                      <Badge tone="warning">{strengthLabel(secret.strength_score)}</Badge>
                     )}
                   </div>
                   <p className="text-xs text-ink-faint">
