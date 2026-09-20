@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Input, Label } from './ui/field';
 import { Badge } from './ui/badge';
 import { formatDateTime } from '@/lib/ui/format';
+import { copyUnaudited } from '@/lib/ui/clipboard';
 
 export interface OidcSettings {
   configured: boolean;
@@ -198,14 +199,16 @@ export function OidcSettingsCard({ initial }: { initial: OidcSettings | null }) 
   }
 
   async function copyRedirect() {
-    try {
-      await navigator.clipboard.writeText(form.redirectUri);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard access is denied in some contexts. The value is on screen and
-      // selectable, so there is nothing to recover from.
-    }
+    // Through the shared guard rather than a bare writeText: a value that is
+    // not a non-empty string is a failure, not something to stringify onto the
+    // clipboard. The redirect URI is server-computed and always a string, so
+    // this is the cheap half of not repeating the reveal button's defect.
+    //
+    // A refusal stays silent. Unlike a revealed credential the URI is on screen
+    // and selectable, so there is nothing to recover from.
+    if ((await copyUnaudited(form.redirectUri)) !== 'copied') return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   return (

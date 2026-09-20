@@ -6,6 +6,7 @@ import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 import { useStepUp } from './step-up-dialog';
 import { STEP_UP_CODE, toAttemptResult, withStepUp } from '@/lib/ui/step-up';
+import { copyAudited, copyFailureMessage, type CopyOutcome } from '@/lib/ui/clipboard';
 import { cn } from '@/lib/ui/cn';
 
 /**
@@ -25,9 +26,16 @@ import { cn } from '@/lib/ui/cn';
  *   technician who walks away from a screen-shared session does not leave a
  *   domain admin password on it.
  *
- *   A copy is a SEPARATE audited call, not a local clipboard write of a value
- *   already on screen. "Was it copied" is a different question from "was it
- *   looked at" — one of them means it probably left the building.
+ *   A copy is a SEPARATE audited call. "Was it copied" is a different question
+ *   from "was it looked at" — one of them means it probably left the building,
+ *   so the copy button posts its own event before the text moves. What it then
+ *   writes is the plaintext ALREADY on screen: /copy records, it does not
+ *   decrypt, and asking the server for the value a second time would hand
+ *   plaintext to a `secret:read` holder through a route that never required
+ *   `secret:reveal`. For a long time this component wrote `body.value` from
+ *   that recording response, a field that does not exist, and put the word
+ *   `undefined` on the clipboard under a green "Copied". See
+ *   src/lib/ui/clipboard.ts.
  *
  *   A refusal renders its cause and its audit event id. When a technician says
  *   "it says I can't see this", support answers with one audit lookup instead
@@ -71,19 +79,22 @@ export function RevealButton({
   const stepUp = useStepUp();
   const [state, setState] = useState<RevealState>({ status: 'idle' });
   const [reason, setReason] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [copyOutcome, setCopyOutcome] = useState<CopyOutcome | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
       if (timer.current) clearTimeout(timer.current);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
     };
   }, []);
 
   const hide = () => {
     if (timer.current) clearTimeout(timer.current);
+    if (copyTimer.current) clearTimeout(copyTimer.current);
     setState({ status: 'idle' });
-    setCopied(false);
+    setCopyOutcome(null);
   };
 
   /**
@@ -134,25 +145,37 @@ export function RevealButton({
   };
 
   const copy = async () => {
-    // A separate, separately-audited call. Deliberately NOT a clipboard write of
-    // the value already in state.
-    try {
-      const response = await fetch(`/api/secrets/${secretId}/copy`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...(reason ? { reason } : {}) }),
-      });
-      if (!response.ok) return;
-      const body = (await response.json()) as { value: string };
-      await navigator.clipboard.writeText(body.value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    } catch {
-      // Clipboard access can be refused by the browser; the reveal still worked.
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+
+    const outcome = await copyAudited({
+      // The plaintext this component is already displaying. Only reachable
+      // while status === 'shown', which is the only state that renders the
+      // button — but copyAudited checks rather than trusting that.
+      value: state.value,
+      // The audit event, and nothing else: the route answers {auditEventUid}.
+      // No `reason` is sent because there is nowhere for one to go —
+      // helm.record_secret_copy() takes a field and no justification, and the
+      // route's schema drops any other key.
+      record: async () => {
+        const response = await fetch(`/api/secrets/${secretId}/copy`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        return response.ok;
+      },
+    });
+
+    setCopyOutcome(outcome);
+    // Clear the success line on its own; a failure stays until the value hides
+    // or the person tries again, because it is asking them to do something.
+    if (outcome === 'copied') {
+      copyTimer.current = setTimeout(() => setCopyOutcome(null), 2500);
     }
   };
 
   const needsReason = requiresReason || state.needsReason;
+  const copyFailure = copyOutcome ? copyFailureMessage(copyOutcome) : null;
 
   return (
     <div className="space-y-2" data-secret>
@@ -187,7 +210,10 @@ export function RevealButton({
           </div>
           <p className="text-xs text-ink-faint">
             Hides automatically in {AUTO_HIDE_MS / 1000}s.
-            {copied && <span className="ml-2 text-ok">Copied — recorded as a copy event.</span>}
+            {copyOutcome === 'copied' && (
+              <span className="ml-2 text-ok">Copied — recorded as a copy event.</span>
+            )}
+            {copyFailure && <span className="ml-2 text-danger">{copyFailure}</span>}
           </p>
         </div>
       ) : (
