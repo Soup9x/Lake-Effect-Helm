@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Input, Label, Select } from './ui/field';
 import { Badge, type BadgeTone } from './ui/badge';
 import { formatDateTime } from '@/lib/ui/format';
+import { syncLabel, syncState, syncTone } from '@/lib/ui/sync-health';
 
 export interface UnifiMapping {
   id: string;
@@ -87,18 +88,28 @@ const BLANK = {
 
 type Feedback = { ok: boolean; message: string } | null;
 
-function healthTone(mapping: UnifiMapping): BadgeTone {
-  if (!mapping.isActive) return 'neutral';
-  if (mapping.lastPollOk === null) return 'neutral';
-  if (mapping.lastPollOk) return 'ok';
-  return mapping.consecutiveFailures > 3 ? 'danger' : 'warning';
-}
-
-function healthLabel(mapping: UnifiMapping): string {
-  if (!mapping.isActive) return 'Paused';
-  if (mapping.lastPollOk === null) return 'Never polled';
-  return mapping.lastPollOk ? 'Polling' : 'Failing';
-}
+/*
+ * HEALTH COMES FROM src/lib/ui/sync-health.ts, the same three calls the
+ * dashboard's sync widget makes.
+ *
+ * This card used to answer with its own pair of helpers, and they were wrong in
+ * a way that only showed up over time: a mapping whose last poll SUCCEEDED was
+ * reported as "Polling" however long ago that was. A worker that stopped being
+ * scheduled, a container never restarted, a controller quietly unreachable in a
+ * way that produced no error row — all of them read as healthy on this page,
+ * green badge and all, while the documentation drifted.
+ *
+ * syncState() adds STALE after three missed poll intervals, which is the state
+ * neither helper here could express. Calling it rather than re-deriving it is
+ * what stops this page and the dashboard from ever disagreeing about the same
+ * mapping.
+ *
+ * WHAT CHANGED BESIDES: the old tone split a failing mapping into amber for
+ * the first three consecutive failures and red after that. That nuance is not
+ * lost — the error block further down already reads "N in a row, so retries are
+ * backing off" — and a failing poll shown amber on the one page where an
+ * operator can fix it was the wrong bias anyway.
+ */
 
 /**
  * How the receiver is doing, in words that do not overstate it.
@@ -439,7 +450,9 @@ export function UnifiSettingsCard({
               <div key={mapping.id} className="rounded-md border border-border p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium text-ink">{mapping.name}</span>
-                  <Badge tone={healthTone(mapping)}>{healthLabel(mapping)}</Badge>
+                  <Badge tone={syncTone(syncState(mapping))}>
+                    {syncLabel(syncState(mapping))}
+                  </Badge>
                   <span className="text-xs text-ink-faint">{mapping.organizationName}</span>
                   {mapping.tlsPinnedSha256 ? (
                     <Badge tone="warning">Certificate pinned</Badge>

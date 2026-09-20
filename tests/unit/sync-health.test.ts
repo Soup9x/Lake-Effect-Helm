@@ -6,6 +6,7 @@
  * ago that was. A worker that stopped being scheduled looks perfectly healthy
  * there.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { STALE_AFTER_INTERVALS, syncState, syncTone, type SyncMapping } from '../../src/lib/ui/sync-health';
 
@@ -87,5 +88,47 @@ describe('syncTone', () => {
   it('keeps the two non-faults neutral', () => {
     expect(syncTone('paused')).toBe('neutral');
     expect(syncTone('never')).toBe('neutral');
+  });
+});
+
+describe('one definition of health, not two', () => {
+  /**
+   * The settings card used to answer this question with its own pair of
+   * helpers, and they disagreed with the dashboard in the one case that
+   * matters: a mapping whose last poll SUCCEEDED read as "Polling" however long
+   * ago that was, so a worker that stopped being scheduled looked healthy on
+   * the page where somebody would have fixed it.
+   *
+   * Asserted against the source rather than the rendering because this
+   * repository has no DOM test setup, and because what regressed was not a
+   * pixel — it was a second copy of a rule. The same argument the SQL guards
+   * make: the cheapest way to keep one definition is to fail when a second
+   * appears.
+   */
+  const card = readFileSync('src/components/unifi-settings.tsx', 'utf8');
+
+  it('the settings card derives health from this module', () => {
+    expect(card).toMatch(/from '@\/lib\/ui\/sync-health'/);
+    expect(card).toMatch(/syncState\(mapping\)/);
+  });
+
+  it('the guard above would have caught the old code', () => {
+    // The helpers as they were, so a future reader can see the assertion is
+    // matched against something real rather than against nothing.
+    const old = `function healthTone(mapping: UnifiMapping): BadgeTone {\n` +
+      `  return mapping.lastPollOk ? 'ok' : 'warning';\n}`;
+    expect(old).toMatch(/function healthTone\b/);
+  });
+
+  it('...and has no local health helper of its own', () => {
+    // The two that were here, by name, plus the shape of any replacement.
+    expect(card).not.toMatch(/function healthTone\b/);
+    expect(card).not.toMatch(/function healthLabel\b/);
+    expect(card).not.toMatch(/lastPollOk \? 'Polling'/);
+  });
+
+  it('the dashboard widget derives it from the same place', () => {
+    const widgets = readFileSync('src/components/widgets/index.tsx', 'utf8');
+    expect(widgets).toMatch(/from '@\/lib\/ui\/sync-health'/);
   });
 });
