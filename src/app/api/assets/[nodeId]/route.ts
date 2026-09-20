@@ -169,4 +169,39 @@ export const PATCH = tenantRoute(
   { permissions: ['asset:write'] },
 );
 
+/**
+ * DELETE — permanent removal of an already-archived CREDENTIAL.
+ *
+ * Credentials only, and the narrowness is the point: this is the one asset type
+ * whose deletion has to reason about encrypted material that may be documented
+ * in more than one place. helm.delete_credential() removes the node, then the
+ * secret and its versions only if nothing else references them — a password
+ * shared between two credentials survives the deletion of one of them, which is
+ * the same many-to-one helm.secret_node_visible() resolves with bool_or.
+ *
+ * Other asset types archive and stay archived. Extending this is a decision
+ * about data retention, not a missing branch.
+ */
+export const DELETE = tenantRoute(
+  async ({ tx, params }) => {
+    const nodeId = z.guid().safeParse(params.nodeId);
+    if (!nodeId.success) throw ApiError.invalid('not an item id');
+
+    try {
+      const [row] = await tx<{ result: { name: string; secrets_removed: number } }[]>`
+        SELECT helm.delete_credential(${nodeId.data}::uuid) AS result
+      `;
+      return { deleted: true, ...(row?.result ?? {}) };
+    } catch (error) {
+      if ((error as { detail?: string }).detail === 'archive_first') {
+        throw ApiError.invalid(
+          'archive this credential first — permanent deletion is only available from the archive',
+        );
+      }
+      throw error;
+    }
+  },
+  { permissions: ['secret:delete'] },
+);
+
 export const dynamic = 'force-dynamic';

@@ -9,6 +9,7 @@ import { HealthDot } from '@/components/ui/health-dot';
 import { NewOrganizationForm } from '@/components/new-organization-form';
 import { FavoriteStar } from '@/components/favorite-star';
 import { SelectableTable, type SelectableRow } from '@/components/selectable-table';
+import { DeletePermanently } from '@/components/delete-permanently';
 import { isClientRole } from '@/lib/ui/roles';
 import { favoriteIds } from '@/lib/workspace/queries';
 
@@ -54,7 +55,9 @@ export default async function OrganizationsPage({
 
   const canWrite = !isClientRole(identity.roleKey);
 
-  const { organizations, pinned, archivedCount } = await withTenant(actorOf(identity), async (tx) => {
+  const { organizations, pinned, archivedCount, canDelete } = await withTenant(
+    actorOf(identity),
+    async (tx, session) => {
     const rows = await tx<OrganizationRow[]>`
       SELECT
         o.id, o.name, o.status::text, o.is_msp_internal, o.industry, o.tags,
@@ -79,8 +82,17 @@ export default async function OrganizationsPage({
       SELECT count(*)::int AS n FROM organization
       WHERE deleted_at IS NULL AND archived_at IS NOT NULL
     `;
-    return { organizations: rows, pinned: await favoriteIds(tx), archivedCount: counted?.n ?? 0 };
-  });
+    return {
+      organizations: rows,
+      pinned: await favoriteIds(tx),
+      archivedCount: counted?.n ?? 0,
+      // Permanent deletion is organization:delete — msp_only, and in the
+      // shipped catalogue super_admin alone. Strictly above the asset:write
+      // that archiving needs, which is the point.
+      canDelete: session.permissions.includes('organization:delete'),
+    };
+    },
+  );
 
   // Pinned clients float to the top of the same table rather than into a
   // separate card. A technician scanning for a client should find it in one
@@ -127,6 +139,24 @@ export default async function OrganizationsPage({
       <span key="sites" className="tabular-nums text-ink-muted">{org.site_count}</span>,
       <span key="assets" className="tabular-nums text-ink-muted">{org.asset_count}</span>,
       <span key="secrets" className="tabular-nums text-ink-muted">{org.secret_count}</span>,
+      // Only in the archive, and only for somebody who holds organization:delete.
+      // The rail is in helm.delete_organization(), which refuses a live client
+      // whatever the interface offers; this is where it is reachable.
+      showArchived && canDelete ? (
+        <DeletePermanently
+          key="delete"
+          endpoint={`/api/organizations/${org.id}`}
+          name={org.name}
+          kind="client"
+          counts={{
+            assets: Number(org.asset_count),
+            secrets: Number(org.secret_count),
+            sites: Number(org.site_count),
+          }}
+        />
+      ) : (
+        <span key="delete" />
+      ),
     ],
   }));
 
@@ -190,6 +220,7 @@ export default async function OrganizationsPage({
                   'Sites',
                   'Assets',
                   'Credentials',
+                  <span key="delete" className="sr-only">Delete</span>,
                 ]}
                 rows={rows}
               />

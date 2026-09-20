@@ -111,4 +111,43 @@ export const PATCH = tenantRoute(
   { permissions: ['organization:write'] },
 );
 
+
+/**
+ * DELETE — permanent removal, for a client that is already archived.
+ *
+ * Everything the rule needs is in helm.delete_organization(): it refuses a live
+ * client, refuses an actor without organization:delete, writes the audit event
+ * BEFORE the row is gone, and removes the encrypted material explicitly because
+ * secret.organization_id is ON DELETE RESTRICT and a cascade must not be able
+ * to take secrets out as a side effect.
+ *
+ * This route deliberately re-implements none of it. A deletion rule that also
+ * exists in a route is a deletion rule with two versions, and the one in the
+ * database is the one a script, a future endpoint and a psql session all pass
+ * through.
+ */
+export const DELETE = tenantRoute(
+  async ({ tx, params }) => {
+    const organizationId = z.guid().safeParse(params.organizationId);
+    if (!organizationId.success) throw ApiError.invalid('not a client id');
+
+    try {
+      const [row] = await tx<{ destroyed: Record<string, number> }[]>`
+        SELECT helm.delete_organization(${organizationId.data}::uuid) AS destroyed
+      `;
+      return { deleted: true, destroyed: row?.destroyed ?? {} };
+    } catch (error) {
+      // The archive-first rail carries DETAIL = 'archive_first' so the client
+      // can say what to do about it rather than showing a bare 403.
+      if ((error as { detail?: string }).detail === 'archive_first') {
+        throw ApiError.invalid(
+          'archive this client first — permanent deletion is only available from the archive',
+        );
+      }
+      throw error;
+    }
+  },
+  { permissions: ['organization:delete'] },
+);
+
 export const dynamic = 'force-dynamic';

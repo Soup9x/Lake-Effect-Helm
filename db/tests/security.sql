@@ -2114,6 +2114,125 @@ $steal$;
 ROLLBACK;
 
 \echo ''
+\echo '== 41. Permanent deletion is archive-first, and never touches the audit trail =='
+-- The first hard delete in the product. Everything else archives or soft
+-- deletes, which is why two latent schema defects only surfaced when this was
+-- written: thirty composite ON DELETE SET NULL keys that nulled tenant_id along
+-- with the reference (0510), and secret_version being append-only with no way
+-- for a purge to remove it (0520).
+
+-- (a) THE RAIL. A live client cannot be deleted at all, whoever is asking.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('a LIVE client cannot be deleted',
+  format($$SELECT helm.delete_organization(%L)$$, :t1_acme));
+SELECT helm_test.check_raises('a LIVE credential cannot be deleted',
+  format($$SELECT helm.delete_credential(%L)$$, :n_cred));
+ROLLBACK;
+
+-- (b) THE PERMISSION, which is strictly above the one archiving needs.
+--     Archiving goes through asset:write, which client_admin holds; deleting a
+--     client needs organization:delete, which only super_admin does.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE organization SET archived_at = now() WHERE id = :t1_acme;
+SELECT helm_test.ctx(:t1, :u_tech1);
+SELECT helm_test.check_raises('an archived client still needs organization:delete',
+  format($$SELECT helm.delete_organization(%L)$$, :t1_acme));
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE asset_node SET archived_at = now() WHERE id = :n_cred;
+SELECT helm_test.ctx(:t1, :u_tech1);
+SELECT helm_test.check_raises('an archived credential still needs secret:delete',
+  format($$SELECT helm.delete_credential(%L)$$, :n_cred));
+ROLLBACK;
+
+-- (c) THE CASCADE. One operation, everything under the client, nothing beside it.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE organization SET archived_at = now() WHERE id = :t1_acme;
+SELECT helm.delete_organization(:t1_acme) AS destroyed \gset
+SELECT helm_test.check('the client is gone',
+  NOT EXISTS (SELECT 1 FROM organization WHERE id = :t1_acme));
+SELECT helm_test.check('...and every asset under it',
+  NOT EXISTS (SELECT 1 FROM asset_node WHERE organization_id = :t1_acme));
+SELECT helm_test.check('...and every secret, which is ON DELETE RESTRICT and had to be explicit',
+  NOT EXISTS (SELECT 1 FROM secret WHERE organization_id = :t1_acme));
+SELECT helm_test.check('...and its sites and contacts',
+  NOT EXISTS (SELECT 1 FROM site WHERE organization_id = :t1_acme)
+  AND NOT EXISTS (SELECT 1 FROM contact WHERE organization_id = :t1_acme));
+SELECT helm_test.check('...and its search documents',
+  NOT EXISTS (SELECT 1 FROM search_document WHERE organization_id = :t1_acme));
+-- The assertion the whole feature rests on.
+SELECT helm_test.check('the AUDIT TRAIL about it survives the client',
+  EXISTS (SELECT 1 FROM audit_log WHERE organization_id = :t1_acme));
+SELECT helm_test.check('...and the other clients are untouched',
+  (SELECT count(*) FROM organization WHERE tenant_id = :t1) = 2);
+ROLLBACK;
+
+-- (d) A CREDENTIAL IS ONE ITEM, not a cascade.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE asset_node SET archived_at = now() WHERE id = :n_cred;
+SELECT helm.delete_credential(:n_cred) AS result \gset
+SELECT helm_test.check('the credential node is gone',
+  NOT EXISTS (SELECT 1 FROM asset_node WHERE id = :n_cred));
+SELECT helm_test.check('...and the material nothing else documented',
+  NOT EXISTS (SELECT 1 FROM secret WHERE id = :s_dom_adm));
+SELECT helm_test.check('...and the client it belonged to is still there',
+  EXISTS (SELECT 1 FROM organization WHERE id = :t1_acme));
+SELECT helm_test.check('...along with its other assets',
+  (SELECT count(*) FROM asset_node WHERE organization_id = :t1_acme) = 6);
+ROLLBACK;
+
+-- (e) SHARED MATERIAL IS NOT TAKEN FROM THE OTHER HOLDER. A secret referenced
+--     by two credentials survives the deletion of one of them — the same
+--     many-to-one that helm.secret_node_visible() resolves with bool_or.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name, archived_at)
+VALUES ('1d000000-0000-0000-0000-0000000000e1', :t1, :t1_acme, 'credential', 'zz second holder', now());
+INSERT INTO credential (id, tenant_id, credential_type, username, secret_id)
+VALUES ('1d000000-0000-0000-0000-0000000000e1', :t1, 'standard_user', 'zz', :s_dom_adm);
+
+SELECT helm.delete_credential('1d000000-0000-0000-0000-0000000000e1') AS r \gset
+SELECT helm_test.check('deleting one holder leaves shared material alone',
+  EXISTS (SELECT 1 FROM secret WHERE id = :s_dom_adm));
+SELECT helm_test.check('...and the credential that still documents it',
+  EXISTS (SELECT 1 FROM asset_node WHERE id = :n_cred));
+ROLLBACK;
+
+-- (f) THE APPEND-ONLY EXEMPTION IS NARROW. Ordinary code cannot remove
+--     credential history by raising the flag itself, and audit_log keeps the
+--     trigger function that has no exemption at all.
+SELECT helm_test.check('audit_log still uses the unexempted deny_mutation()',
+  NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+               WHERE NOT t.tgisinternal AND c.relname LIKE 'audit_log%'
+                 AND t.tgname = 'audit_log_immutable'
+                 AND t.tgfoid <> 'helm.deny_mutation()'::regprocedure));
+SELECT helm_test.check('the purge exemption exists on secret_version and nowhere else',
+  (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+    WHERE NOT t.tgisinternal
+      AND t.tgfoid = 'helm.deny_mutation_unless_purging()'::regprocedure
+      AND c.relname <> 'secret_version') = 0);
+SELECT helm_test.check_raises('helm_app cannot purge credential history itself',
+  $$DELETE FROM secret_version WHERE secret_id = '1e000000-0000-0000-0000-000000000002'$$);
+
+-- (g) AND SET NULL NO LONGER NULLS THE TENANT. The defect that made every hard
+--     delete in this schema impossible.
+SELECT helm_test.check('no composite SET NULL key nulls a NOT NULL column',
+  NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    WHERE c.contype = 'f' AND c.confdeltype = 'n' AND array_length(c.conkey, 1) > 1
+      AND EXISTS (
+        SELECT 1 FROM unnest(c.conkey) k
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k
+        WHERE a.attnotnull
+          AND (c.confdelsetcols = '{}'::int2[] OR k = ANY (c.confdelsetcols)))));
+
+\echo ''
 \echo '== 40. A per-user permission grant is not a way round the role catalogue =='
 -- membership_permission is the per-person override set_session_context() unions
 -- into a role's permissions. It had a SELECT policy and an INSERT policy and
