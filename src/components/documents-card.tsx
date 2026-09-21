@@ -408,7 +408,16 @@ export function DocumentsCard({
                     <span className={cn('font-medium', doc.archived ? 'text-ink-muted' : 'text-ink')}>
                       {doc.filename}
                     </span>
-                    <span className="ml-2 text-xs text-ink-faint">{formatBytes(doc.byteSize)}</span>
+                    {/*
+                      Who put this here, which is the question a second
+                      technician asks about a file they did not upload. The
+                      page joins app_user for it, and a column fetched for
+                      nothing is a column nobody notices is wrong.
+                    */}
+                    <span className="ml-2 text-xs text-ink-faint">
+                      {formatBytes(doc.byteSize)}
+                      {doc.uploadedBy && ` · ${doc.uploadedBy}`}
+                    </span>
                   </span>
                   {doc.isInternalOnly && <Badge tone="warning">Internal</Badge>}
                   {doc.archived && <Badge tone="neutral">Archived</Badge>}

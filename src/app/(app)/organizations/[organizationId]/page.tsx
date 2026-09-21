@@ -166,7 +166,12 @@ export default async function OrganizationPage({
       tx<DocumentQueryRow[]>`
         SELECT a.id, a.folder_id, a.filename, a.content_type, a.byte_size,
                a.is_internal_only, a.archived_at, a.uploaded_at,
-               u.display_name AS uploaded_by_name
+               -- app_user has "name", not "display_name" -- the Auth.js
+               -- adapter schema names it, and it is nullable. Same fallback
+               -- getServerIdentity() uses: an account that never set a name is
+               -- still somebody, and a dash in a document list is less use
+               -- than an address.
+               coalesce(u.name, u.email::text) AS uploaded_by_name
         FROM attachment a
         LEFT JOIN app_user u ON u.id = a.uploaded_by
         WHERE a.organization_id = ${organizationId}::uuid
