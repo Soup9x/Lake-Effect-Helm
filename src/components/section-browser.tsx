@@ -24,7 +24,7 @@
  *
  * The filtering itself is in src/lib/ui/browse.ts, tested there.
  */
-import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import { useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import { ChevronRight, Search } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Input, Label, Select } from './ui/field';
@@ -53,7 +53,7 @@ export const EXPIRY_WINDOWS = [30, 60, 90] as const;
 
 export function SectionBrowser({
   title,
-  icon: Icon,
+  icon,
   rows,
   columns,
   emptyTitle,
@@ -65,7 +65,22 @@ export function SectionBrowser({
   action,
 }: {
   title: string;
-  icon?: ComponentType<{ className?: string }>;
+  /**
+   * AN ELEMENT, NOT A COMPONENT, and that distinction is the whole of a
+   * production outage.
+   *
+   * Every caller of this component is a SERVER component, so a prop given here
+   * is serialised across the server/client boundary. A lucide icon is
+   * forwardRef(...) — a reference React cannot serialise — and `icon={MapPin}`
+   * therefore failed the entire page render with "Functions cannot be passed
+   * directly to Client Components". It reads like an ordinary value, which is
+   * why it survived review and a build.
+   *
+   * An element is data, so it crosses. The caller renders it: `<MapPin />`.
+   * This is the same reason `rows` carries ReactNode cells rather than a row
+   * renderer — see the note at the top of this file.
+   */
+  icon?: ReactElement;
   rows: BrowsableRow[];
   columns: ReactNode[];
   emptyTitle: string;
@@ -108,7 +123,7 @@ export function SectionBrowser({
       <Card className="h-full">
         <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
           <CardTitle className="flex items-center gap-2">
-            {Icon && <Icon className="size-4 text-ink-faint" aria-hidden />}
+            {icon}
             {title}
             <span className="tabular-nums text-ink-faint">{rows.length}</span>
           </CardTitle>
@@ -155,7 +170,7 @@ export function SectionBrowser({
           if (!next) reset();
         }}
         title={title}
-        {...(Icon ? { icon: Icon } : {})}
+        {...(icon ? { icon } : {})}
         description={
           narrowed ? `${visible.length} of ${rows.length} shown` : `${rows.length} in total`
         }

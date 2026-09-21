@@ -25,7 +25,7 @@
  */
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
-import type { ComponentType, ReactNode } from 'react';
+import { isValidElement, type ComponentType, type ReactElement, type ReactNode } from 'react';
 import { cn } from '@/lib/ui/cn';
 
 export interface ModalProps {
@@ -34,10 +34,32 @@ export interface ModalProps {
   title: string;
   /** Sits under the title. One sentence, for anything the form cannot say itself. */
   description?: string;
-  icon?: ComponentType<{ className?: string }>;
+  /**
+   * A component to render, OR an element already rendered.
+   *
+   * Both, and the second one is not a convenience. Twenty-two callers are
+   * client components passing a lucide icon by reference, which is free for
+   * them. A SERVER component cannot do that: a component reference is not
+   * serialisable across the server/client boundary, and React refuses it with
+   * "Functions cannot be passed directly to Client Components" — which it did,
+   * in production, on every client page. A server caller renders the icon
+   * itself and passes the element. See SectionBrowser, and
+   * tests/integration/pages.test.ts for what now catches the mistake.
+   */
+  icon?: ComponentType<{ className?: string }> | ReactElement;
   children: ReactNode;
   /** Wider, for forms with two columns of real content. */
   size?: 'md' | 'lg';
+}
+
+/** Either form, rendered the same size. isValidElement is the only reliable
+ *  way to tell them apart: a lucide icon is forwardRef(...), so `typeof` says
+ *  "object" for both a component and an element. */
+function renderIcon(icon: ModalProps['icon']): ReactNode {
+  if (!icon) return null;
+  if (isValidElement(icon)) return icon;
+  const Icon = icon as ComponentType<{ className?: string }>;
+  return <Icon className="size-4 text-ink-faint" />;
 }
 
 export function Modal({
@@ -45,7 +67,7 @@ export function Modal({
   onOpenChange,
   title,
   description,
-  icon: Icon,
+  icon,
   children,
   size = 'md',
 }: ModalProps) {
@@ -70,7 +92,7 @@ export function Modal({
           <div className="mb-4 flex items-start justify-between gap-4">
             <div>
               <Dialog.Title className="flex items-center gap-2 text-sm font-medium text-ink">
-                {Icon && <Icon className="size-4 text-ink-faint" />}
+                {renderIcon(icon)}
                 {title}
               </Dialog.Title>
               {description ? (

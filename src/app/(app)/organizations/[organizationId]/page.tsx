@@ -12,6 +12,7 @@ import { RenameOrganization } from '@/components/rename-organization';
 import { TagEditor } from '@/components/tag-editor';
 import { SectionBrowser } from '@/components/section-browser';
 import { DocumentsCard } from '@/components/documents-card';
+import { SectionBoundary } from '@/components/section-boundary';
 import { maxUploadBytes } from '@/lib/documents/limits';
 import type { DocumentRow, FolderRow } from '@/lib/ui/documents';
 import { isClientRole } from '@/lib/ui/roles';
@@ -301,7 +302,7 @@ export default async function OrganizationPage({
         <div className="grid gap-4 lg:grid-cols-3">
           <SectionBrowser
             title="Sites"
-            icon={MapPin}
+            icon={<MapPin className="size-4 text-ink-faint" aria-hidden />}
             emptyTitle="No sites documented."
             columns={['Site', 'Address', 'Phone']}
             rows={sites.map((site) => ({
@@ -348,7 +349,7 @@ export default async function OrganizationPage({
 
           <SectionBrowser
             title="Contacts"
-            icon={Users}
+            icon={<Users className="size-4 text-ink-faint" aria-hidden />}
             emptyTitle="No contacts documented."
             columns={['Contact', 'Title', 'Reach them']}
             filters={[{ key: 'role', label: 'Role' }]}
@@ -381,7 +382,7 @@ export default async function OrganizationPage({
 
           <SectionBrowser
             title="Expiring"
-            icon={CalendarClock}
+            icon={<CalendarClock className="size-4 text-ink-faint" aria-hidden />}
             emptyTitle="Nothing tracked."
             columns={['Item', 'Kind', 'Expires', 'Severity']}
             filters={[{ key: 'kind', label: 'Kind' }]}
@@ -408,7 +409,7 @@ export default async function OrganizationPage({
         <div className="grid gap-4 lg:grid-cols-2">
           <SectionBrowser
             title="Credentials"
-            icon={KeyRound}
+            icon={<KeyRound className="size-4 text-ink-faint" aria-hidden />}
             emptyTitle="No credentials documented"
             emptyDescription="Credentials stored here are encrypted per tenant and every read is recorded."
             bulk={{ target: 'node', selectable: canWrite }}
@@ -509,7 +510,7 @@ export default async function OrganizationPage({
 
           <SectionBrowser
             title="Assets"
-            icon={Boxes}
+            icon={<Boxes className="size-4 text-ink-faint" aria-hidden />}
             emptyTitle="No assets documented"
             bulk={{ target: 'node', selectable: canWrite }}
             filters={[
@@ -545,15 +546,23 @@ export default async function OrganizationPage({
             filtering. Everything it renders arrived through RLS, so an
             internal-only subtree is absent from these props entirely rather
             than hidden by the component.
+
+            Wrapped, because it is the newest and busiest section here — a
+            file browser with uploads, a tree and six actions per row. A throw
+            inside it now costs this card, not the credentials somebody opened
+            this page to read. It does NOT catch a serialisation failure;
+            nothing does. See src/app/(app)/error.tsx.
           */}
-          <DocumentsCard
-            organizationId={organization.id}
-            folders={folderRows}
-            documents={documentRows}
-            canWrite={canWrite}
-            canDelete={canDeleteDocuments}
-            maxBytes={maxUploadBytes()}
-          />
+          <SectionBoundary title="Documents">
+            <DocumentsCard
+              organizationId={organization.id}
+              folders={folderRows}
+              documents={documentRows}
+              canWrite={canWrite}
+              canDelete={canDeleteDocuments}
+              maxBytes={maxUploadBytes()}
+            />
+          </SectionBoundary>
         </div>
       </PageBody>
     </>

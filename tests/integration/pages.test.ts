@@ -25,12 +25,27 @@
  * body runs, and a column that does not exist raises 42703 exactly as it did
  * in production. That is the whole mechanism here.
  *
+ * AND THEN IT HAPPENED AGAIN, one layer further on. With the query fixed, the
+ * pages reached the step AFTER data fetching — React serialising the element
+ * tree for the client — and every client page died on
+ *
+ *     Functions cannot be passed directly to Client Components
+ *
+ * because five `icon={MapPin}` props handed a Client Component a lucide
+ * forwardRef, which is a reference React cannot serialise. That had been latent
+ * since the modal rework; the SQL error was simply throwing first, so nothing
+ * ever got far enough to serialise anything.
+ *
+ * So awaiting the page is not enough on its own: it proves the queries run, not
+ * that what they produced can cross the boundary. Each page is now walked for
+ * props that React would refuse. See tests/support/rsc-boundary.ts.
+ *
  * WHAT THIS DOES NOT COVER, said plainly so nobody reads more into a pass: it
- * runs each page's data fetching and stops at the element tree. It does not
- * render components, so a mistake in JSX is not caught here — component logic
- * is tested as extracted functions (src/lib/ui/*), which is where this project
- * puts it. What it does catch is every hand-written SQL string in a page, which
- * is the class of defect that produced this outage.
+ * runs each page's data fetching and walks the element tree it returns. It does
+ * not RENDER components, so a mistake inside a component's JSX is not caught
+ * here — component logic is tested as extracted functions (src/lib/ui/*), which
+ * is where this project puts it. What it does catch is every hand-written SQL
+ * string in a page, and every prop a page hands across the client boundary.
  */
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { withTenant } from '../../src/lib/db/client';
@@ -38,6 +53,7 @@ import { useSessionResolver } from '../../src/lib/auth/session';
 import {
   IDS, actor, connectPools, disconnectPools, resetDatabase,
 } from './harness';
+import { clientComponentNames, describeViolations, findBoundaryViolations } from '../support/rsc-boundary';
 
 /**
  * next/headers reaches into a request scope that does not exist here.
@@ -195,6 +211,34 @@ describe('every page runs its queries', () => {
       // is a failure rather than a pass.
       expect(rendered).toBeTruthy();
       expect(rendered).toHaveProperty('type');
+    });
+  }
+});
+
+describe('every page can cross the client boundary', () => {
+  // Read once: it scans every .tsx under src for the directive.
+  const clients = clientComponentNames();
+
+  it('knows which components are client components, so the check is not vacuous', () => {
+    // A regex that stopped matching would make every assertion below pass
+    // against an empty set, which is the failure mode of a source scan.
+    expect(clients.size).toBeGreaterThan(20);
+    expect(clients).toContain('SectionBrowser');
+    expect(clients).toContain('DocumentsCard');
+  });
+
+  for (const page of PAGES) {
+    it(`${page.name} hands client components only serialisable props`, async () => {
+      const violations = findBoundaryViolations(await page.load(), clients);
+
+      expect(
+        violations,
+        violations.length === 0
+          ? ''
+          : `React cannot send these to a Client Component:\n${describeViolations(violations)}\n\n` +
+            'Render the icon on the server and pass the element (icon={<MapPin />}), ' +
+            'or pass a string the client component looks up.',
+      ).toEqual([]);
     });
   }
 });
