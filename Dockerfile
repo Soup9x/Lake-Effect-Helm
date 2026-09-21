@@ -16,7 +16,7 @@
 # -----------------------------------------------------------------------------
 # deps — install once, cached on the lockfile alone
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS deps
+FROM node:25-alpine AS deps
 WORKDIR /app
 
 RUN corepack enable
@@ -38,7 +38,7 @@ RUN pnpm install --frozen-lockfile
 # and key-rotation entry points are TypeScript executed directly, so tsx is not
 # build tooling here, it is the runtime.
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS deps-prod
+FROM node:25-alpine AS deps-prod
 WORKDIR /app
 
 RUN corepack enable
@@ -48,7 +48,7 @@ RUN pnpm install --frozen-lockfile --prod
 # -----------------------------------------------------------------------------
 # builder — Next standalone output plus the bundled worker
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS builder
+FROM node:25-alpine AS builder
 WORKDIR /app
 
 RUN corepack enable
@@ -63,7 +63,7 @@ RUN pnpm build && pnpm build:worker
 # -----------------------------------------------------------------------------
 # runtime — the web tier and the worker
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS runtime
+FROM node:25-alpine AS runtime
 WORKDIR /app
 
 # A fixed uid, because it is not an implementation detail: the master key file
@@ -127,7 +127,7 @@ CMD ["node", "server.js"]
 # Dependencies come from deps-prod, NOT deps: this image must not carry the test
 # runner and the build toolchain alongside superuser credentials.
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS migrate
+FROM node:25-alpine AS migrate
 WORKDIR /app
 
 RUN addgroup -g 10001 -S helm && adduser -u 10001 -S helm -G helm
