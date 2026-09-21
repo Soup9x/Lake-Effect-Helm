@@ -348,9 +348,43 @@ export const attachment = pgTable('attachment', {
   scanStatus: attachmentScanStatus('scan_status').notNull().default('pending'),
   scannedAt: tstz('scanned_at'),
   isInternalOnly: boolean('is_internal_only').notNull().default(false),
+  /**
+   * The client document tree, added by 0560. `isDocument` is the discriminator:
+   * true means a standalone file in a client's folder tree (and never also a
+   * file attached to an asset — a CHECK says so), false means the asset or site
+   * attachment this table has always held. `folderId` NULL on a document means
+   * the top level of that tree, not "no folder".
+   */
+  folderId: uuid('folder_id'),
+  isDocument: boolean('is_document').notNull().default(false),
   uploadedAt: tstz('uploaded_at').notNull().defaultNow(),
   uploadedBy: uuid('uploaded_by').references(() => appUser.id, { onDelete: 'set null' }),
+  /** Archive-first, the rail 0500 put in front of every permanent deletion. */
+  archivedAt: tstz('archived_at'),
   deletedAt: tstz('deleted_at'),
+});
+
+/**
+ * Per-client document folders, nested.
+ *
+ * `parentId` NULL is the top level of one client's tree; there is no root row,
+ * because a root row is one somebody can rename, move or delete and every
+ * operation would have to special-case it. `isInternalOnly` is inherited
+ * downwards by trigger (0560), so a document inside an internal folder is
+ * itself marked internal and every visibility decision anywhere in the product
+ * stays a plain column test.
+ */
+export const documentFolder = pgTable('document_folder', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  parentId: uuid('parent_id'),
+  name: text('name').notNull(),
+  isInternalOnly: boolean('is_internal_only').notNull().default(false),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
 });
 
 export const note = pgTable('note', {

@@ -469,12 +469,13 @@ identities** after signing in.
 
 ## 7. Storage, and the two separations that matter
 
-Three volumes hold state that is not the database:
+Four volumes hold state that is not the database:
 
 ```
 helm-exports       rendered export bundles, encrypted when they hold credentials
 helm-passphrases   the passphrases for those bundles
 helm-anchors       witnessed audit chain heads
+helm-documents     client documents, always encrypted
 ```
 
 **Exports and passphrases must not share a backup set.** A credential bundle is
@@ -513,6 +514,48 @@ Left as an ordinary volume, the anchoring job still verifies the chain hourly
 and logs the head — which is worth having — but the receipt proves less than it
 appears to. **Settings → Audit** shows how many events are currently protected
 only by the database.
+
+### 7.1 Client documents
+
+Files uploaded against a client — contracts, network diagrams, install notes —
+are written to `helm-documents` under opaque, randomly-named, two-level-sharded
+keys, mode 0600. The bytes are **AES-256-GCM under the tenant's data key before
+they reach the disk**, with the ciphertext bound to its own row, so a copy of
+this volume on its own is not a filing cabinet. Documents get the same
+treatment as credentials on purpose: an install note with a PSK in it is a
+credential whatever the filename says.
+
+**Back this volume up WITH the database, not instead of it.** The filenames, the
+folder tree and the nonce that opens each file are rows in Postgres. Restoring
+one half without the other leaves documents nobody can open, or rows pointing
+at files that are not there. Unlike exports and passphrases, these two belong
+in the *same* backup set — the encryption key is not in either of them, it is
+behind your KEK provider.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `HELM_DOCUMENT_DIR` | `/var/lib/helm/documents` | where the bytes go |
+| `HELM_DOCUMENT_MAX_BYTES` | `52428800` (50 MB) | per-file cap |
+
+Raising the cap has a real cost: an upload is buffered in memory to be
+encrypted, so this number is roughly the RAM one concurrent upload can occupy.
+
+**Uploads are not virus-scanned.** `attachment.scan_status` exists and every
+document is recorded as `skipped`, not `pending` — a `pending` that nothing
+drains would read as "we are checking" when nobody is. Helm reduces the risk on
+the way out instead: every download is served
+`Content-Disposition: attachment` with `nosniff` and, for anything but a short
+render-safe list of types, `application/octet-stream`, so no stored file is
+ever executed or scripted by a browser that fetched it from Helm's origin.
+Executables and scripts are refused at upload by extension, which stops the
+obvious case and is trivially defeated by a rename — treat client-supplied
+files as you would any other client-supplied file.
+
+**Deleting a document is archive-first**, the same rail that guards deleting a
+client or a credential: archiving needs `asset:write`, destroying needs
+`asset:delete`, which no client-side role holds. A folder must be emptied
+before it can be deleted, archived contents included. Every upload, download,
+refusal and deletion is an audit event.
 
 ---
 

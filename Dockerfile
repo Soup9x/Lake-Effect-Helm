@@ -94,9 +94,9 @@ COPY --from=builder --chown=helm:helm /app/node_modules/postgres ./node_modules/
 # Writable state. Declared here so the directories exist with the right owner
 # even when an operator forgets to mount a volume — the failure is then "no
 # volume mounted" rather than "EACCES at 3am".
-RUN mkdir -p /var/lib/helm/exports /var/lib/helm/passphrases /var/lib/helm/anchors \
+RUN mkdir -p /var/lib/helm/exports /var/lib/helm/passphrases /var/lib/helm/anchors /var/lib/helm/documents \
  && chown -R helm:helm /var/lib/helm \
- && chmod 0700 /var/lib/helm/exports /var/lib/helm/passphrases
+ && chmod 0700 /var/lib/helm/exports /var/lib/helm/passphrases /var/lib/helm/documents
 
 USER helm
 EXPOSE 3000

@@ -11,6 +11,9 @@ import { NewAssetForm } from '@/components/new-asset-form';
 import { RenameOrganization } from '@/components/rename-organization';
 import { TagEditor } from '@/components/tag-editor';
 import { SectionBrowser } from '@/components/section-browser';
+import { DocumentsCard } from '@/components/documents-card';
+import { maxUploadBytes } from '@/lib/documents/limits';
+import type { DocumentRow, FolderRow } from '@/lib/ui/documents';
 import { isClientRole } from '@/lib/ui/roles';
 import { isWeakStrength, strengthLabel } from '@/lib/ui/strength';
 import { FavoriteStar } from '@/components/favorite-star';
@@ -56,6 +59,17 @@ interface ExpiryRow {
   id: string; label: string; kind: string; expires_at: Date; severity: string; days_remaining: number;
 }
 
+/** Flat rows; src/lib/ui/documents.ts nests them. */
+interface FolderQueryRow {
+  id: string; parent_id: string | null; name: string; is_internal_only: boolean;
+}
+
+interface DocumentQueryRow {
+  id: string; folder_id: string | null; filename: string; content_type: string;
+  byte_size: string; is_internal_only: boolean; archived_at: Date | null;
+  uploaded_at: Date; uploaded_by_name: string | null;
+}
+
 interface HealthRow {
   health: string; expired_count: number; critical_count: number;
   warning_count: number; reasons: string[] | null;
@@ -78,7 +92,7 @@ export default async function OrganizationPage({
   const identity = await getServerIdentity();
   const { organizationId } = await params;
 
-  const data = await withTenant(actorOf(identity), async (tx) => {
+  const data = await withTenant(actorOf(identity), async (tx, session) => {
     const [organization] = await tx<OrgRow[]>`
       SELECT id, name, legal_name, status::text, industry, employee_count,
              timezone, website, onboarded_at, notes, tags
@@ -91,7 +105,8 @@ export default async function OrganizationPage({
     // somebody's history for a client they cannot see.
     await recordView(tx, { organizationId });
 
-    const [sites, contacts, assets, credentials, expiries, health, pinned] = await Promise.all([
+    const [sites, contacts, assets, credentials, expiries, health, pinned, folders, documents] =
+      await Promise.all([
       tx<SiteRow[]>`
         SELECT id, name, code, is_primary, address_line1, city, region, main_phone, notes
         FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
@@ -133,16 +148,67 @@ export default async function OrganizationPage({
         FROM v_client_health WHERE organization_id = ${organizationId}::uuid
       `,
       isFavorite(tx, organizationId),
+      /*
+       * The client's whole document tree, metadata only, in two queries.
+       *
+       * RLS decides what comes back — an internal-only folder and everything
+       * under it simply is not in these rows for a co-managed client actor,
+       * which is why the modal has no visibility logic of its own. Archived
+       * documents ARE fetched: they are hidden by default and shown behind a
+       * checkbox, and they are the reason a folder delete is refused.
+       */
+      tx<FolderQueryRow[]>`
+        SELECT id, parent_id, name, is_internal_only
+        FROM document_folder
+        WHERE organization_id = ${organizationId}::uuid
+        ORDER BY name
+      `,
+      tx<DocumentQueryRow[]>`
+        SELECT a.id, a.folder_id, a.filename, a.content_type, a.byte_size,
+               a.is_internal_only, a.archived_at, a.uploaded_at,
+               u.display_name AS uploaded_by_name
+        FROM attachment a
+        LEFT JOIN app_user u ON u.id = a.uploaded_by
+        WHERE a.organization_id = ${organizationId}::uuid
+          AND a.is_document AND a.deleted_at IS NULL
+        ORDER BY lower(a.filename)
+        LIMIT 2000
+      `,
     ]);
 
-    return { organization, sites, contacts, assets, credentials, expiries, health: health[0], pinned };
+    return {
+      organization, sites, contacts, assets, credentials, expiries,
+      health: health[0], pinned, folders, documents,
+      canDeleteDocuments: session.permissions.includes('asset:delete'),
+    };
   });
 
   // RLS makes "not yours" and "not there" the same answer; so does this page.
   if (!data) notFound();
 
-  const { organization, sites, contacts, assets, credentials, expiries, health, pinned } = data;
+  const {
+    organization, sites, contacts, assets, credentials, expiries, health, pinned,
+    folders, documents, canDeleteDocuments,
+  } = data;
   const canWrite = !isClientRole(identity.roleKey);
+
+  const folderRows: FolderRow[] = folders.map((f) => ({
+    id: f.id,
+    parentId: f.parent_id,
+    name: f.name,
+    isInternalOnly: f.is_internal_only,
+  }));
+  const documentRows: DocumentRow[] = documents.map((d) => ({
+    id: d.id,
+    folderId: d.folder_id,
+    filename: d.filename,
+    contentType: d.content_type,
+    byteSize: Number(d.byte_size),
+    isInternalOnly: d.is_internal_only,
+    archived: d.archived_at !== null,
+    uploadedAt: d.uploaded_at.toISOString(),
+    uploadedBy: d.uploaded_by_name,
+  }));
 
   return (
     <>
@@ -466,6 +532,22 @@ export default async function OrganizationPage({
                 <span key="crit" className="tabular-nums text-ink-muted">{asset.criticality}</span>,
               ],
             }))}
+          />
+
+          {/*
+            Documents, the sixth card. Not a SectionBrowser: the other five
+            filter a flat list, and a folder tree is navigation rather than
+            filtering. Everything it renders arrived through RLS, so an
+            internal-only subtree is absent from these props entirely rather
+            than hidden by the component.
+          */}
+          <DocumentsCard
+            organizationId={organization.id}
+            folders={folderRows}
+            documents={documentRows}
+            canWrite={canWrite}
+            canDelete={canDeleteDocuments}
+            maxBytes={maxUploadBytes()}
           />
         </div>
       </PageBody>

@@ -19,6 +19,11 @@ import { LocalDevKekProvider } from '../../src/lib/crypto/kek';
 import { SecretService } from '../../src/lib/secrets/service';
 import { TenantKeyService } from '../../src/lib/secrets/keys';
 import { LinkEngine } from '../../src/lib/graph/links';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DocumentService } from '../../src/lib/documents/service';
+import { FilesystemExportStorage } from '../../src/lib/exports/storage';
 
 export const PG = {
   // PGHOST first: it is the standard libpq name, it is what scripts/check-drift.ts
@@ -117,12 +122,20 @@ export interface Harness {
   secrets: SecretService;
   keys: TenantKeyService;
   links: LinkEngine;
+  documents: DocumentService;
+  /** Where this harness's document bytes landed, so a test can look at them. */
+  documentRoot: string;
 }
 
 export function buildHarness(): Harness {
   const kek = new LocalDevKekProvider(randomBytes(32).toString('base64'));
   const dekCache = new DekCache(kek, { ttlMs: 60_000 });
   const blindIndex = new BlindIndex(randomBytes(32).toString('base64'));
+
+  // A real directory rather than an in-memory stub: the storage layer's
+  // sharded keys, 0600 modes and path-escape refusal are part of what is being
+  // tested, and a fake would pass while the real one wrote to the wrong place.
+  const documentRoot = mkdtempSync(join(tmpdir(), 'helm-documents-'));
 
   return {
     kek,
@@ -131,6 +144,11 @@ export function buildHarness(): Harness {
     secrets: new SecretService({ dekCache, blindIndex }),
     keys: new TenantKeyService(kek),
     links: new LinkEngine(),
+    documents: new DocumentService({
+      dekCache,
+      storage: new FilesystemExportStorage(documentRoot),
+    }),
+    documentRoot,
   };
 }
 

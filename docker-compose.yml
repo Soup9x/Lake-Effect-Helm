@@ -87,6 +87,8 @@ x-helm-env: &helm-env
 
   # --- Storage --------------------------------------------------------------
   HELM_EXPORT_DIR: /var/lib/helm/exports
+  HELM_DOCUMENT_DIR: /var/lib/helm/documents
+  HELM_DOCUMENT_MAX_BYTES: "${HELM_DOCUMENT_MAX_BYTES:-52428800}"
   HELM_EXPORT_PASSPHRASE_DIR: /var/lib/helm/passphrases
   HELM_AUDIT_ANCHOR_DIR: /var/lib/helm/anchors
 
@@ -269,6 +271,7 @@ services:
       # host file must be 0400 and owned by uid 10001.
       - ./deploy/secrets/master.key:/run/helm/master.key:ro
       - helm-exports:/var/lib/helm/exports
+      - helm-documents:/var/lib/helm/documents
       - helm-anchors:/var/lib/helm/anchors
     expose:
       - "3000"
@@ -294,6 +297,7 @@ services:
     volumes:
       - ./deploy/secrets/master.key:/run/helm/master.key:ro
       - helm-exports:/var/lib/helm/exports
+      - helm-documents:/var/lib/helm/documents
       - helm-anchors:/var/lib/helm/anchors
       # The passphrase volume is mounted ONLY here. The web tier never needs
       # it: a credential bundle's passphrase is generated at render time, never
@@ -411,6 +415,12 @@ volumes:
 
   # Rendered export bundles. Encrypted at rest when they contain credentials.
   helm-exports:
+
+  # Client documents. Always encrypted at rest, under the tenant's data key —
+  # but back this up WITH the database, not instead of it: the filenames, the
+  # folder tree and the nonce that opens each file are rows in Postgres, and
+  # either half alone restores to nothing.
+  helm-documents:
 
   # The passphrases for those bundles. A SEPARATE volume, and it must be on a
   # separate backup set from helm-exports — the entire scheme rests on the

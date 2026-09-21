@@ -64,6 +64,7 @@ export function renderJson(data: CollectedExport, options: RenderOptions): Buffe
     expirations: data.expirations,
     procedures: data.procedures,
     flexibleAssets: data.flexibleAssets,
+    documents: data.documents,
   };
 
   return Buffer.from(`${JSON.stringify(document, jsonReplacer, 2)}\n`, 'utf8');
@@ -321,7 +322,34 @@ export function renderPdf(data: CollectedExport, options: RenderOptions): Buffer
     }
   }
 
+  // ---- Documents ---------------------------------------------------------
+  // The inventory, not the files. A path plus a hash is what lets somebody
+  // receiving this pack check they were sent everything it says they were.
+  if (data.documents.length) {
+    doc.pageBreak().heading('Documents', 1);
+    doc.table(
+      [
+        { header: 'Folder', width: 0.3 },
+        { header: 'File', width: 0.34 },
+        { header: 'Type', width: 0.22 },
+        { header: 'Size', width: 0.14 },
+      ],
+      data.documents.map((d) => [
+        d.path || '(top level)',
+        d.filename,
+        d.content_type,
+        describeBytes(Number(d.byte_size)),
+      ]),
+    );
+  }
+
   return doc.render();
+}
+
+function describeBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function credentialRows(

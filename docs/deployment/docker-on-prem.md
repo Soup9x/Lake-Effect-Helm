@@ -1028,6 +1028,7 @@ read the old data.
 | --- | --- | --- |
 | `/run/helm/master.key` | web, worker, bootstrap, rotate-kek | bind mount |
 | `/var/lib/helm/exports` | web, worker | `helm-exports` |
+| `/var/lib/helm/documents` | web, worker | `helm-documents` |
 | `/var/lib/helm/passphrases` | **worker only** | `helm-passphrases` |
 | `/var/lib/helm/anchors` | web, worker | `helm-anchors` |
 | `/data/caddy/pki/authorities/local/root.crt` | caddy | `caddy-data` |

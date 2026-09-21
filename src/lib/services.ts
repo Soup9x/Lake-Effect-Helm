@@ -17,6 +17,7 @@ import { HelmCryptoError } from './crypto/errors';
 import { AwsKmsKekProvider, LocalDevKekProvider, type KekProvider, type WrapProvider } from './crypto/kek';
 import { LocalMasterKekProvider } from './crypto/kek-local';
 import { VaultTransitKekProvider } from './crypto/kek-vault';
+import { DocumentService } from './documents/service';
 import { FlexibleAssetValidator } from './flexible/validator';
 import { LinkEngine } from './graph/links';
 import { TenantKeyService } from './secrets/keys';
@@ -26,6 +27,7 @@ let kekProvider: KekProvider | null = null;
 let dekCache: DekCache | null = null;
 let blindIndex: BlindIndex | null | undefined;
 let secretService: SecretService | null = null;
+let documentService: DocumentService | null = null;
 let keyService: TenantKeyService | null = null;
 let linkEngine: LinkEngine | null = null;
 let validator: FlexibleAssetValidator | null = null;
@@ -216,6 +218,7 @@ export function setKekProvider(provider: KekProvider, custody?: KeyCustody): voi
   dekCache?.clear();
   dekCache = null;
   secretService = null;
+  documentService = null;
   keyService = null;
 }
 
@@ -236,6 +239,17 @@ export function getSecretService(): SecretService {
     blindIndex: getBlindIndex(),
   });
   return secretService;
+}
+
+/**
+ * Client documents. Shares the DEK cache with secrets deliberately: a document
+ * and a credential belonging to the same client are sealed under the same
+ * per-tenant key, so a KEK rotation moves both and there is one answer to
+ * "which key is protecting this client's material".
+ */
+export function getDocumentService(): DocumentService {
+  documentService ??= new DocumentService({ dekCache: getDekCache() });
+  return documentService;
 }
 
 export function getKeyService(): TenantKeyService {
@@ -261,6 +275,7 @@ export function resetServices(): void {
   dekCache = null;
   blindIndex = undefined;
   secretService = null;
+  documentService = null;
   keyService = null;
   linkEngine = null;
   validator = null;

@@ -40,6 +40,7 @@ export interface CollectedExport {
   readonly expirations: ExpirationRecord[];
   readonly procedures: ProcedureRecord[];
   readonly flexibleAssets: FlexibleAssetRecord[];
+  readonly documents: DocumentRecord[];
   readonly attestation: Attestation;
 }
 
@@ -108,6 +109,36 @@ export interface ProcedureRecord {
 
 export interface FlexibleAssetRecord {
   id: string; name: string; type_name: string; data: Record<string, unknown>;
+}
+
+/**
+ * A client's document tree, as an inventory rather than as bytes.
+ *
+ * WHAT IS AND IS NOT IN A BUNDLE. The file contents are not: this module
+ * collects metadata, the same way it collects a credential's username and not
+ * its password, and a handover pack that inlined 4 GB of network diagrams is
+ * not a document somebody reads. What IS here is the list — path, name, size,
+ * type, hash — which is what makes the pack auditable: an offboarding client
+ * can tell whether they received everything, and the sha256 says whether what
+ * they received is what Helm held.
+ *
+ * INTERNAL-ONLY DOCUMENTS ARE ABSENT, and not because of a WHERE clause here.
+ * The collector runs under the REQUESTING actor's session (see
+ * requestedBy in service.ts), so attachment's own policy decides, exactly as it
+ * does on the client page and in search. A co-managed client administrator
+ * holds export:create, and before 0390 that returned them every internal-only
+ * row in their organisation; documents inherit that fix rather than needing
+ * their own.
+ */
+export interface DocumentRecord {
+  id: string;
+  filename: string;
+  path: string;
+  content_type: string;
+  byte_size: number;
+  content_sha256: string;
+  is_internal_only: boolean;
+  uploaded_at: Date;
 }
 
 /**
@@ -231,6 +262,25 @@ export async function collectExport(
     ORDER BY t.name, n.name
   `;
 
+  // Archived documents are excluded for the same reason archived assets are:
+  // an export is what the client's estate IS, not what it used to be.
+  const documents = await tx<DocumentRecord[]>`
+    SELECT a.id,
+           a.filename,
+           array_to_string(helm.document_folder_path(a.folder_id), ' / ') AS path,
+           a.content_type,
+           a.byte_size::bigint AS byte_size,
+           encode(a.content_sha256, 'hex') AS content_sha256,
+           a.is_internal_only,
+           a.uploaded_at
+    FROM attachment a
+    WHERE a.organization_id = ${organizationId}::uuid
+      AND a.is_document
+      AND a.deleted_at IS NULL
+      AND a.archived_at IS NULL
+    ORDER BY path, lower(a.filename)
+  `;
+
   return {
     organization,
     sites,
@@ -241,6 +291,7 @@ export async function collectExport(
     expirations,
     procedures,
     flexibleAssets,
+    documents,
     attestation: await collectAttestation(tx),
   };
 }

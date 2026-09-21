@@ -1520,7 +1520,11 @@ ROLLBACK;
 SELECT helm_test.check('every policy on a flagged table names the flag',
   NOT EXISTS (
     SELECT 1 FROM pg_policies
-    WHERE tablename IN ('asset_node', 'attachment', 'note', 'search_document')
+    WHERE tablename IN ('asset_node', 'attachment', 'note', 'search_document',
+                        -- 0560. Added here rather than asserted separately, so
+                        -- the next flagged table is caught by the list somebody
+                        -- already has to extend.
+                        'document_folder')
       AND coalesce(qual, '') || coalesce(with_check, '') NOT LIKE '%internal_visible%'));
 -- A credential is hidden by reaching its node, whose policy carries the flag.
 -- The reach is what must not be simplified away.
@@ -2633,6 +2637,274 @@ SELECT helm_test.check('...and for the OIDC settings',
   (SELECT count(*) FROM helm.oidc_settings()) = 0);
 SELECT helm_test.check_raises('...but still cannot read the table itself',
   $$SELECT count(*) FROM radius_config$$);
+ROLLBACK;
+
+\echo ''
+\echo '== 43. Client documents: a folder tree over the attachments that exist =='
+--
+-- Documents ARE attachments — is_document, in a document_folder — so they
+-- inherit attachment's policies, which have carried helm.internal_visible()
+-- since 0390. That reuse is the point: the flag whose enforcement gaps this
+-- project has had to close twice does not get a second table to be forgotten
+-- on. What 0560 adds is the tree, and the tree's own rules are what this
+-- section is about.
+
+\echo '-- the permission ladder, read out of the catalogue rather than assumed --'
+-- 0500 established the shape: archiving needs asset:write, destroying needs
+-- something strictly above it. Documents use the same two, so the property
+-- worth asserting is that they still ARE a ladder.
+SELECT helm_test.check('every role that can delete an asset can also write one',
+  NOT EXISTS (
+    SELECT 1 FROM role_permission d
+    WHERE d.permission_key = 'asset:delete'
+      AND NOT EXISTS (SELECT 1 FROM role_permission w
+                      WHERE w.role_key = d.role_key AND w.permission_key = 'asset:write')));
+SELECT helm_test.check('...and at least one role can write without being able to delete',
+  EXISTS (
+    SELECT 1 FROM role_permission w
+    WHERE w.permission_key = 'asset:write'
+      AND NOT EXISTS (SELECT 1 FROM role_permission d
+                      WHERE d.role_key = w.role_key AND d.permission_key = 'asset:delete')));
+SELECT helm_test.check('no client-side role can destroy a document',
+  NOT EXISTS (
+    SELECT 1 FROM role_permission rp JOIN app_role r ON r.key = rp.role_key
+    WHERE rp.permission_key = 'asset:delete' AND NOT r.is_tenant_wide));
+
+\echo '-- the tree refuses to become something other than a tree --'
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO document_folder (tenant_id, organization_id, name)
+VALUES (:t1, :t1_acme, 'Contracts') RETURNING id AS f_contracts \gset
+INSERT INTO document_folder (tenant_id, organization_id, parent_id, name)
+VALUES (:t1, :t1_acme, :'f_contracts', '2026') RETURNING id AS f_2026 \gset
+
+SELECT helm_test.check('a folder knows its own path',
+  helm.document_folder_path(:'f_2026') = ARRAY['Contracts', '2026']);
+
+SELECT helm_test.check_raises('a second folder cannot take a sibling''s name',
+  format($$INSERT INTO document_folder (tenant_id, organization_id, name)
+           VALUES (%L, %L, 'contracts')$$, :t1, :t1_acme));
+-- The same name under a DIFFERENT parent is fine: the index is per sibling
+-- group, not per client.
+INSERT INTO document_folder (tenant_id, organization_id, parent_id, name)
+VALUES (:t1, :t1_acme, :'f_2026', 'Contracts') RETURNING id AS f_nested \gset
+SELECT helm_test.check('...and the same name under a different parent is fine',
+  helm.document_folder_path(:'f_nested') = ARRAY['Contracts', '2026', 'Contracts']);
+
+SELECT helm_test.check_raises('a folder cannot be moved inside itself',
+  format('UPDATE document_folder SET parent_id = %L WHERE id = %L', :'f_contracts', :'f_contracts'));
+SELECT helm_test.check_raises('...nor inside its own descendant',
+  format('UPDATE document_folder SET parent_id = %L WHERE id = %L', :'f_2026', :'f_contracts'));
+ROLLBACK;
+
+\echo '-- internal-only is INHERITED, which is what keeps every path a column test --'
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO document_folder (tenant_id, organization_id, name, is_internal_only)
+VALUES (:t1, :t1_acme, 'Margins', true) RETURNING id AS f_margins \gset
+
+-- Asked for false; the trigger says otherwise, because a folder the client
+-- cannot see must not contain one they can.
+INSERT INTO document_folder (tenant_id, organization_id, parent_id, name, is_internal_only)
+VALUES (:t1, :t1_acme, :'f_margins', 'Q1', false) RETURNING id AS f_q1 \gset
+SELECT helm_test.check('a folder created under an internal parent is internal',
+  (SELECT is_internal_only FROM document_folder WHERE id = :'f_q1'));
+
+INSERT INTO attachment (tenant_id, organization_id, is_document, folder_id, filename,
+                        content_type, byte_size, storage_key, content_sha256, is_internal_only)
+VALUES (:t1, :t1_acme, true, :'f_q1', 'margin-analysis.xlsx',
+        'application/vnd.ms-excel', 4096, 'sec/43/a', decode(repeat('a1',32),'hex'), false)
+RETURNING id AS d_margin \gset
+SELECT helm_test.check('...and so is a document dropped into it',
+  (SELECT is_internal_only FROM attachment WHERE id = :'d_margin'));
+
+-- A client-visible tree beside it, so every "the client sees nothing"
+-- assertion below is quantifying over something.
+INSERT INTO document_folder (tenant_id, organization_id, name)
+VALUES (:t1, :t1_acme, 'Shared') RETURNING id AS f_shared \gset
+INSERT INTO attachment (tenant_id, organization_id, is_document, folder_id, filename,
+                        content_type, byte_size, storage_key, content_sha256)
+VALUES (:t1, :t1_acme, true, :'f_shared', 'runbook.pdf', 'application/pdf', 2048,
+        'sec/43/b', decode(repeat('b2',32),'hex')) RETURNING id AS d_runbook \gset
+
+\echo '-- ...and marking an existing folder internal reaches everything beneath it --'
+INSERT INTO document_folder (tenant_id, organization_id, name)
+VALUES (:t1, :t1_acme, 'Onboarding') RETURNING id AS f_onb \gset
+INSERT INTO document_folder (tenant_id, organization_id, parent_id, name)
+VALUES (:t1, :t1_acme, :'f_onb', 'Notes') RETURNING id AS f_notes \gset
+INSERT INTO attachment (tenant_id, organization_id, is_document, folder_id, filename,
+                        content_type, byte_size, storage_key, content_sha256)
+VALUES (:t1, :t1_acme, true, :'f_notes', 'handover.docx', 'application/msword', 900,
+        'sec/43/c', decode(repeat('c3',32),'hex')) RETURNING id AS d_handover \gset
+
+UPDATE document_folder SET is_internal_only = true WHERE id = :'f_onb';
+SELECT helm_test.check('the subfolder went internal with its parent',
+  (SELECT is_internal_only FROM document_folder WHERE id = :'f_notes'));
+SELECT helm_test.check('...and so did the document two levels down',
+  (SELECT is_internal_only FROM attachment WHERE id = :'d_handover'));
+SELECT helm_test.check('...and the search index agrees',
+  NOT EXISTS (SELECT 1 FROM search_document
+              WHERE entity_id = :'d_handover' AND client_visible));
+
+\echo '-- search carries the folder path, because nobody remembers the filename --'
+SELECT helm_test.check('a document is indexed under its path',
+  (SELECT subtitle FROM search_document WHERE entity_id = :'d_runbook') = 'Shared');
+UPDATE document_folder SET name = 'Handover' WHERE id = :'f_shared';
+SELECT helm_test.check('...and renaming the folder re-indexes what is beneath it',
+  (SELECT subtitle FROM search_document WHERE entity_id = :'d_runbook') = 'Handover');
+
+UPDATE attachment SET folder_id = NULL WHERE id = :'d_runbook';
+SELECT helm_test.check('a top-level document still says where it is',
+  (SELECT subtitle FROM search_document WHERE entity_id = :'d_runbook') = 'Documents');
+UPDATE attachment SET folder_id = :'f_shared' WHERE id = :'d_runbook';
+
+\echo '-- the co-managed client, through every path that reaches a document --'
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('a client sees only the folders that are not internal',
+  (SELECT count(*) FROM document_folder) = 1);
+SELECT helm_test.check('...and only the documents that are not internal',
+  (SELECT count(*) FROM attachment WHERE is_document) = 1);
+SELECT helm_test.check('...through the search index',
+  NOT EXISTS (SELECT 1 FROM search_document
+              WHERE entity_type = 'attachment' AND title = 'margin-analysis.xlsx'));
+SELECT helm_test.check('...and through helm.search(), which is a different code path',
+  (SELECT count(*) FROM helm.search('margin-analysis', NULL, NULL, 20, 0)) = 0);
+SELECT helm_test.check('...while the shared one IS findable, so the query works at all',
+  (SELECT count(*) FROM helm.search('runbook', NULL, NULL, 20, 0)) = 1);
+SELECT helm_test.check('...and the folder path is searchable too',
+  (SELECT count(*) FROM helm.search('Handover', NULL, NULL, 20, 0)) >= 1);
+
+-- A refusal is RETURNED, not raised, so the audit row survives it. That is the
+-- shape helm.reveal_secret() has had since 0210 and the reason a denied
+-- attempt on a client's files leaves a trace at all.
+SELECT helm_test.check('a client cannot open an internal document',
+  NOT (SELECT ok FROM helm.open_document(:'d_margin')));
+SELECT helm_test.check('...and the refusal is on the record',
+  EXISTS (SELECT 1 FROM audit_log
+          WHERE action = 'document.download_denied' AND entity_id = :'d_margin'
+            AND outcome = 'denied'));
+SELECT helm_test.check('...and it hands back no storage key to try anyway',
+  (SELECT storage_key FROM helm.open_document(:'d_margin')) IS NULL);
+SELECT helm_test.check('...but the one meant for them opens',
+  (SELECT ok FROM helm.open_document(:'d_runbook')));
+SELECT helm_test.check('...and that is audited too',
+  EXISTS (SELECT 1 FROM audit_log
+          WHERE action = 'document.downloaded' AND entity_id = :'d_runbook'));
+
+SELECT helm_test.check_raises('a client cannot create an internal-only folder',
+  format($$INSERT INTO document_folder (tenant_id, organization_id, name, is_internal_only)
+           VALUES (%L, %L, 'smuggled', true)$$, :t1, :t1_acme));
+SELECT helm_test.check_raises('...nor an internal-only document',
+  format($$INSERT INTO attachment (tenant_id, organization_id, is_document, filename,
+                                   content_type, byte_size, storage_key, content_sha256,
+                                   is_internal_only)
+           VALUES (%L, %L, true, 'smuggled.pdf', 'application/pdf', 1, 'sec/43/x',
+                   decode(repeat('ff',32),'hex'), true)$$, :t1, :t1_acme));
+WITH touched AS (
+  UPDATE document_folder SET name = 'renamed by the client' WHERE id = :'f_margins' RETURNING id
+)
+SELECT helm_test.check('...and cannot reach an internal folder with an UPDATE',
+  (SELECT count(*) FROM touched) = 0);
+
+\echo '-- the OTHER tenant, which shares none of this --'
+SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('a second tenant sees no folders at all',
+  (SELECT count(*) FROM document_folder) = 0);
+SELECT helm_test.check('...and no documents',
+  (SELECT count(*) FROM attachment WHERE is_document) = 0);
+ROLLBACK;
+
+\echo '-- destroying a document: archived first, and above the rank that archives --'
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO attachment (tenant_id, organization_id, is_document, filename,
+                        content_type, byte_size, storage_key, content_sha256)
+VALUES (:t1, :t1_acme, true, 'to-delete.pdf', 'application/pdf', 10,
+        'sec/43/d', decode(repeat('d4',32),'hex')) RETURNING id AS d_doomed \gset
+
+SELECT helm_test.check('a live document cannot be deleted',
+  (SELECT helm.delete_document(:'d_doomed') ->> 'reason') = 'not_archived');
+
+UPDATE attachment SET archived_at = now() WHERE id = :'d_doomed';
+SELECT helm_test.check('archiving takes it out of the search index',
+  NOT EXISTS (SELECT 1 FROM search_document WHERE entity_id = :'d_doomed'));
+
+-- tier1 holds asset:write, so it archived above; it does not hold asset:delete.
+SELECT helm_test.ctx(:t1, :u_tech1);
+SELECT helm_test.check('a rank that can archive cannot destroy',
+  (SELECT helm.delete_document(:'d_doomed') ->> 'reason') = 'forbidden');
+SELECT helm_test.check('...and the refusal is on the record, because it was returned not raised',
+  EXISTS (SELECT 1 FROM audit_log
+          WHERE action = 'document.delete_denied' AND entity_id = :'d_doomed'
+            AND outcome = 'denied'));
+SELECT helm_test.check('...and the document is still there',
+  EXISTS (SELECT 1 FROM attachment WHERE id = :'d_doomed'));
+
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check('archived, a document can be destroyed',
+  (SELECT helm.delete_document(:'d_doomed') ->> 'deleted') = 'true');
+SELECT helm_test.check('...and the row is gone',
+  NOT EXISTS (SELECT 1 FROM attachment WHERE id = :'d_doomed'));
+SELECT helm_test.check('...while the record of its destruction is not',
+  EXISTS (SELECT 1 FROM audit_log
+          WHERE action = 'document.deleted' AND entity_id = :'d_doomed'
+            AND metadata ->> 'filename' = 'to-delete.pdf'));
+ROLLBACK;
+
+\echo '-- deleting a folder: it must be empty, archived contents included --'
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO document_folder (tenant_id, organization_id, name)
+VALUES (:t1, :t1_acme, 'Doomed') RETURNING id AS f_doomed \gset
+INSERT INTO document_folder (tenant_id, organization_id, parent_id, name)
+VALUES (:t1, :t1_acme, :'f_doomed', 'Inner') RETURNING id AS f_inner \gset
+
+SELECT helm_test.check_raises('a folder with a subfolder cannot be deleted',
+  format('DELETE FROM document_folder WHERE id = %L', :'f_doomed'));
+
+INSERT INTO attachment (tenant_id, organization_id, is_document, folder_id, filename,
+                        content_type, byte_size, storage_key, content_sha256, archived_at)
+VALUES (:t1, :t1_acme, true, :'f_inner', 'old.pdf', 'application/pdf', 5,
+        'sec/43/e', decode(repeat('e5',32),'hex'), now()) RETURNING id AS d_old \gset
+SELECT helm_test.check_raises('...and an ARCHIVED document still holds its folder open',
+  format('DELETE FROM document_folder WHERE id = %L', :'f_inner'));
+
+SELECT helm.delete_document(:'d_old');
+WITH gone AS (DELETE FROM document_folder WHERE id = :'f_inner' RETURNING 1)
+SELECT helm_test.check('emptied, the inner folder goes', (SELECT count(*) FROM gone) = 1);
+WITH gone AS (DELETE FROM document_folder WHERE id = :'f_doomed' RETURNING 1)
+SELECT helm_test.check('...and so does its parent', (SELECT count(*) FROM gone) = 1);
+SELECT helm_test.check('...and both deletions are on the record',
+  (SELECT count(*) FROM audit_log
+   WHERE action = 'document_folder.deleted'
+     AND entity_id IN (:'f_inner', :'f_doomed')) = 2);
+ROLLBACK;
+
+\echo '-- a document is never also an asset attachment --'
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('a document cannot hang off an asset as well',
+  format($$INSERT INTO attachment (tenant_id, organization_id, is_document, node_id, filename,
+                                   content_type, byte_size, storage_key, content_sha256)
+           VALUES (%L, %L, true, %L, 'both.pdf', 'application/pdf', 1, 'sec/43/f',
+                   decode(repeat('0f',32),'hex'))$$, :t1, :t1_acme, :n_fw));
+SELECT helm_test.check_raises('...and an asset attachment cannot sit in a folder',
+  format($$INSERT INTO attachment (tenant_id, organization_id, is_document, folder_id, filename,
+                                   content_type, byte_size, storage_key, content_sha256)
+           VALUES (%L, %L, false, gen_random_uuid(), 'neither.pdf', 'application/pdf', 1,
+                   'sec/43/g', decode(repeat('1f',32),'hex'))$$, :t1, :t1_acme));
+
+-- Two documents may not share a name in one folder. No versioning: the second
+-- upload is refused rather than silently replacing bytes somebody still needs.
+INSERT INTO attachment (tenant_id, organization_id, is_document, filename,
+                        content_type, byte_size, storage_key, content_sha256)
+VALUES (:t1, :t1_acme, true, 'same.pdf', 'application/pdf', 1, 'sec/43/h',
+        decode(repeat('2f',32),'hex'));
+SELECT helm_test.check_raises('a second document cannot take the same name in a folder',
+  format($$INSERT INTO attachment (tenant_id, organization_id, is_document, filename,
+                                   content_type, byte_size, storage_key, content_sha256)
+           VALUES (%L, %L, true, 'SAME.pdf', 'application/pdf', 1, 'sec/43/i',
+                   decode(repeat('3f',32),'hex'))$$, :t1, :t1_acme));
 ROLLBACK;
 
 \echo ''
