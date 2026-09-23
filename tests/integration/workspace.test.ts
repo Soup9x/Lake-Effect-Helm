@@ -454,6 +454,43 @@ describe('recently viewed', () => {
     expect(asset?.context).toBeTruthy();
   });
 
+  /**
+   * The page calls this BEFORE the six queries that render it, inside the same
+   * transaction. A failed statement aborts a Postgres transaction, so a
+   * swallowed failure here used to poison every query after it — one
+   * unwritable history row became a 500 on every client and asset page, and
+   * the catch hid the cause.
+   *
+   * A deleted organisation is the realistic trigger: the page reads the row,
+   * it goes away, and the write violates user_recent_view's foreign key.
+   */
+  it('a failed view record leaves the caller’s transaction usable', async () => {
+    const vanished = '0a000000-0000-0000-0000-0000000000ff';
+
+    const stillWorks = await asActor(IDS.tech1, async (tx) => {
+      await recordView(tx, { organizationId: vanished });
+
+      // What the page does next. Before the savepoint this raised 25P02,
+      // "current transaction is aborted, commands ignored until end of
+      // transaction block".
+      const [row] = await tx<{ name: string }[]>`
+        SELECT name FROM organization WHERE id = ${IDS.orgAcme}::uuid
+      `;
+      return row?.name ?? null;
+    });
+
+    expect(stillWorks).toBeTruthy();
+  });
+
+  it('records nothing when the view record fails', async () => {
+    const vanished = '0a000000-0000-0000-0000-0000000000fe';
+
+    await asActor(IDS.tech1, (tx) => recordView(tx, { organizationId: vanished }));
+
+    const recent = await asActor(IDS.tech1, (tx) => listRecent(tx, 50));
+    expect(recent.map((r) => r.id)).not.toContain(vanished);
+  });
+
   it('orders correctly even within one transaction', async () => {
     // now() is the transaction's start time, so a pair recorded in one
     // transaction would tie and order arbitrarily. record_view() stamps

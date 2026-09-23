@@ -108,21 +108,43 @@ export async function setFavorite(
  * because it could not write a history row would be trading the thing somebody
  * asked for against a convenience. helm.record_view() already returns quietly
  * for a non-person actor; this swallows the rest, because the one remaining
- * failure mode — a read-only transaction or a lost connection — is not worth a
- * 500 on a page that otherwise worked.
+ * failure mode is not worth a 500 on a page that otherwise worked.
+ *
+ * THE SAVEPOINT IS WHAT MAKES THAT TRUE, and a bare try/catch made it false.
+ *
+ * Both callers — the client page and the asset page — call this INSIDE the
+ * transaction `withTenant` opened, and before the queries that actually render
+ * the page. In Postgres a failed statement aborts its whole transaction: every
+ * statement after it fails with 25P02, "current transaction is aborted",
+ * until a rollback. Catching the error in JavaScript does not undo that. So
+ * swallowing it here did the exact opposite of what it was written to do — one
+ * unwritable history row turned into six failed queries and a 500 on every
+ * client and asset page, with the catch hiding the cause and the log showing
+ * only the meaningless 25P02 from whichever query ran first.
+ *
+ * Rolling back to a savepoint is the one thing that recovers an aborted
+ * transaction without discarding it. The write is attempted inside one, so a
+ * failure costs exactly the history row it was trying to write.
+ *
+ * Not hypothetical: a client whose organisation row is deleted between the
+ * page's read and this write violates user_recent_view's foreign key, which is
+ * enough.
  */
 export async function recordView(
   tx: HelmTx,
   target: { organizationId: string } | { nodeId: string },
 ): Promise<void> {
   try {
-    if ('organizationId' in target) {
-      await tx`SELECT helm.record_view(${target.organizationId}::uuid, NULL)`;
-    } else {
-      await tx`SELECT helm.record_view(NULL, ${target.nodeId}::uuid)`;
-    }
+    await tx.savepoint(async (sp) => {
+      if ('organizationId' in target) {
+        await sp`SELECT helm.record_view(${target.organizationId}::uuid, NULL)`;
+      } else {
+        await sp`SELECT helm.record_view(NULL, ${target.nodeId}::uuid)`;
+      }
+    });
   } catch {
-    // Deliberately silent. See above.
+    // Deliberately silent, and now safely so: the savepoint has been rolled
+    // back, so the caller's transaction is intact and its queries still run.
   }
 }
 
