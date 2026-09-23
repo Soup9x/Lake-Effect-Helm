@@ -74,7 +74,7 @@ export function unifiSyncJob(): Job {
     // next_poll_at in the database, from each mapping's own interval. This
     // number is the granularity of "due", not the polling rate.
     everyMs: 30 * 1000,
-    lockKey: 0x48_45_4c_4d_07,
+    lockKey: 0x48_45_4c_4d_0a,
     run: syncUnifi,
   };
 }

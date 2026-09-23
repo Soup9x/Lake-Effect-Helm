@@ -16,35 +16,8 @@
  */
 import { closeAllPools } from '../lib/db/client';
 import { describeKeyCustody } from '../lib/services';
-import { deliverExpiryAlertsJob, evaluateExpiryAlertsJob } from './alerts';
-import { anchorAuditChainJob } from './anchor';
-import { integrationSyncJob } from './sync';
-import { renderExportsJob, expireExportsJob } from './exports';
-import { pruneAuthAttemptsJob } from './auth-hygiene';
-import { fanOutNotificationsJob, deliverNotificationsJob } from './notifications';
-import { unifiSyncJob } from './unifi-sync';
+import { allJobs } from './jobs';
 import { WorkerRuntime, createLogger, type LogLevel } from './runtime';
-
-function jobs() {
-  return [
-    evaluateExpiryAlertsJob(),
-    deliverExpiryAlertsJob(),
-    integrationSyncJob(),
-    anchorAuditChainJob(),
-    renderExportsJob(),
-    expireExportsJob(),
-    pruneAuthAttemptsJob(),
-    // 0400 removed two-person approval from credential exports on the stated
-    // understanding that detection replaces prevention. These two jobs ARE the
-    // detection, so a deployment running the worker at all runs them.
-    fanOutNotificationsJob(),
-    deliverNotificationsJob(),
-    // Which mappings are due is decided by next_poll_at in the database, from
-    // each mapping's own interval — this job's tick is the granularity of
-    // "due", not a polling rate.
-    unifiSyncJob(),
-  ];
-}
 
 async function main(): Promise<void> {
   const once = process.argv.includes('--once');
@@ -60,7 +33,7 @@ async function main(): Promise<void> {
     hostHoldsMasterKey: custody.hostHoldsMasterKey,
   });
 
-  const runtime = new WorkerRuntime(jobs(), { logger: log });
+  const runtime = new WorkerRuntime(allJobs(), { logger: log });
 
   if (once) {
     await runtime.runOnce();

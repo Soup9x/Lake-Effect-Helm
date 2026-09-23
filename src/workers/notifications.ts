@@ -70,7 +70,7 @@ export function fanOutNotificationsJob(): Job {
     // asked for it is still at their desk. A minute is the useful granularity;
     // anything longer and the notification arrives after the conversation.
     everyMs: 60 * 1000,
-    lockKey: 0x48_45_4c_4d_05,
+    lockKey: 0x48_45_4c_4d_08,
     run: fanOutNotifications,
   };
 }
@@ -79,7 +79,7 @@ export function deliverNotificationsJob(): Job {
   return {
     name: 'notifications.deliver',
     everyMs: 60 * 1000,
-    lockKey: 0x48_45_4c_4d_06,
+    lockKey: 0x48_45_4c_4d_09,
     run: deliverNotifications,
   };
 }
