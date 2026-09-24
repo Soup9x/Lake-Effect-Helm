@@ -17,3 +17,4 @@ export * from './integrations';
 export * from './audit';
 export * from './workspace';
 export * from './network';
+export * from './topology';

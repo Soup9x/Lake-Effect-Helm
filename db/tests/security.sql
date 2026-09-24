@@ -2908,5 +2908,160 @@ SELECT helm_test.check_raises('a second document cannot take the same name in a 
 ROLLBACK;
 
 \echo ''
+\echo '== 44. Site topology: a drawing is client data, and a poll does not redraw it =='
+--
+-- A diagram isolates like any other client record, so most of what follows is
+-- the usual ladder read out of the catalogue. What is NOT usual is the promise
+-- the feature makes to whoever moved the boxes: the next poll leaves them where
+-- they were put. 0570 asserts that at migration time, which is once. This
+-- asserts it on every run, because the way that promise breaks is a later edit
+-- to the upsert, long after 0570 stopped being looked at.
+
+\echo '-- both tables are wired up, and for every command --'
+SELECT helm_test.check('topology_node and topology_link both force RLS',
+  NOT EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname IN ('topology_node', 'topology_link')
+      AND NOT (c.relrowsecurity AND c.relforcerowsecurity)));
+
+-- A missing DELETE policy reads as working right up until somebody tries to
+-- remove a box, so the count is per command rather than "has policies".
+SELECT helm_test.check('...with a policy for each of the four commands',
+  NOT EXISTS (
+    SELECT 1 FROM (
+      SELECT tablename, count(DISTINCT cmd) AS cmds FROM pg_policies
+      WHERE schemaname = 'public' AND tablename IN ('topology_node', 'topology_link')
+      GROUP BY tablename) t
+    WHERE t.cmds <> 4));
+
+-- Topology is not the dependency graph. A dependency says "this relies on
+-- that"; a topology link says "these two are cabled together". The schemas must
+-- not quietly converge into one table, because then one of the two features has
+-- stopped meaning what it says.
+SELECT helm_test.check('topology_link and asset_link are still two different things',
+  (SELECT count(*) FROM pg_class WHERE relname IN ('topology_link', 'asset_link')) = 2);
+
+\echo '-- the one that protects the feature --'
+--
+-- If a future edit adds pos_x to the upsert's update list, every synced diagram
+-- rearranges itself on the next poll and nobody finds out until a customer
+-- opens one. Same for the customisation markers: the sync may never decide, on
+-- a person's behalf, that they have edited something.
+SELECT helm_test.check('the sync upsert never assigns a position',
+  pg_get_functiondef(
+    'helm.upsert_topology_node(uuid, bytea, text, text, text, topology_device_type, uuid)'::regprocedure
+  ) !~* '(SET|,)\s*pos_[xy]\s*=');
+
+SELECT helm_test.check('...nor raises a customisation marker for somebody',
+  pg_get_functiondef(
+    'helm.upsert_topology_node(uuid, bytea, text, text, text, topology_device_type, uuid)'::regprocedure
+  ) !~* '(SET|,)\s*[a-z_]*_customised\s*=');
+
+\echo '-- a drawing belongs to a site, and a site belongs to a client --'
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+INSERT INTO site (id, tenant_id, organization_id, name)
+VALUES ('1e900000-0000-0000-0000-0000000000a1', :t1, :t1_acme,   'Acme HQ (topology)'),
+       ('1e900000-0000-0000-0000-0000000000a2', :t1, :t1_globex, 'Globex HQ (topology)');
+
+INSERT INTO topology_node (tenant_id, site_id, label, source)
+VALUES (:t1, '1e900000-0000-0000-0000-0000000000a1', 'Acme core switch', 'manual'),
+       (:t1, '1e900000-0000-0000-0000-0000000000a1', 'Acme firewall',    'manual'),
+       (:t1, '1e900000-0000-0000-0000-0000000000a2', 'Globex switch',    'manual');
+
+SELECT helm_test.check('the MSP sees every client''s diagram',
+  (SELECT count(*) FROM topology_node) = 3);
+
+SELECT helm_test.check_raises('a line cannot join two different sites',
+  format($$INSERT INTO topology_link (tenant_id, site_id, from_node_id, to_node_id)
+           SELECT %L, '1e900000-0000-0000-0000-0000000000a1',
+                  (SELECT id FROM topology_node WHERE label = 'Acme core switch'),
+                  (SELECT id FROM topology_node WHERE label = 'Globex switch')$$, :t1));
+
+-- Without a MAC there is nothing to match the box against on the next poll, so
+-- it would be re-created every time rather than updated.
+SELECT helm_test.check_raises('a synced node must carry a device identity',
+  format($$INSERT INTO topology_node (tenant_id, site_id, label, source)
+           VALUES (%L, '1e900000-0000-0000-0000-0000000000a1', 'Ghost', 'unifi_sync')$$, :t1));
+
+-- Null means "never placed", and the layout puts it somewhere. Half a
+-- coordinate would mean neither.
+SELECT helm_test.check_raises('a node cannot have one coordinate',
+  format($$INSERT INTO topology_node (tenant_id, site_id, label, pos_x)
+           VALUES (%L, '1e900000-0000-0000-0000-0000000000a1', 'Halfway', 40)$$, :t1));
+
+INSERT INTO topology_link (tenant_id, site_id, from_node_id, to_node_id)
+SELECT :t1, '1e900000-0000-0000-0000-0000000000a1',
+       (SELECT id FROM topology_node WHERE label = 'Acme core switch'),
+       (SELECT id FROM topology_node WHERE label = 'Acme firewall');
+
+SELECT helm_test.check_raises('the same pair drawn the other way round is the same cable',
+  format($$INSERT INTO topology_link (tenant_id, site_id, from_node_id, to_node_id)
+           SELECT %L, '1e900000-0000-0000-0000-0000000000a1',
+                  (SELECT id FROM topology_node WHERE label = 'Acme firewall'),
+                  (SELECT id FROM topology_node WHERE label = 'Acme core switch')$$, :t1));
+
+\echo '-- the co-managed client sees their own site and only their own --'
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('a client administrator sees only their own diagram',
+  (SELECT count(*) FROM topology_node) = 2);
+SELECT helm_test.check('...and none of the other client''s lines',
+  (SELECT count(*) FROM topology_link
+    WHERE site_id = '1e900000-0000-0000-0000-0000000000a2') = 0);
+
+-- Rank 30 against a rank-40 write policy. The client roles hold asset:write, so
+-- the route would let this through; the database is the gate that closes.
+SELECT helm_test.check_raises('a client administrator cannot draw',
+  format($$INSERT INTO topology_node (tenant_id, site_id, label)
+           VALUES (%L, '1e900000-0000-0000-0000-0000000000a1', 'Client drawn')$$, :t1));
+
+SELECT helm_test.ctx(:t1, :u_ro);
+SELECT helm_test.check_raises('...nor can a read-only client user',
+  format($$INSERT INTO topology_node (tenant_id, site_id, label)
+           VALUES (%L, '1e900000-0000-0000-0000-0000000000a1', 'Viewer drawn')$$, :t1));
+
+\echo '-- and the other tenant shares none of it --'
+SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('the other tenant sees no nodes',
+  (SELECT count(*) FROM topology_node) = 0);
+SELECT helm_test.check('the other tenant sees no lines',
+  (SELECT count(*) FROM topology_link) = 0);
+ROLLBACK;
+
+\echo '-- a controller mapping cannot be pointed at another client''s site --'
+--
+-- 0570 gives unifi_site_mapping a site_id so a poll knows which diagram it is
+-- seeding. The mapping is scoped to a client and the site is scoped to a
+-- client; if those two could disagree, a poll would write one client's devices
+-- onto another client's drawing.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO site (id, tenant_id, organization_id, name)
+VALUES ('1e900000-0000-0000-0000-0000000000b1', :t1, :t1_globex, 'Globex site (topology)'),
+       ('1e900000-0000-0000-0000-0000000000b2', :t1, :t1_acme,   'Acme site (topology)');
+
+SELECT helm_test.check_raises('a mapping''s site must belong to the mapping''s client',
+  format($$INSERT INTO unifi_site_mapping
+             (tenant_id, organization_id, name, controller_url, unifi_site_id, site_id)
+           VALUES (%L, %L, 'topology guard', 'https://unifi.example.test', 'default',
+                   '1e900000-0000-0000-0000-0000000000b1')$$, :t1, :t1_acme));
+
+INSERT INTO unifi_site_mapping
+  (tenant_id, organization_id, name, controller_url, unifi_site_id, site_id)
+VALUES (:t1, :t1_acme, 'topology guard', 'https://unifi.example.test', 'default',
+        '1e900000-0000-0000-0000-0000000000b2');
+SELECT helm_test.check('...and a site in the mapping''s own client is accepted',
+  (SELECT site_id FROM unifi_site_mapping WHERE name = 'topology guard')
+    = '1e900000-0000-0000-0000-0000000000b2');
+
+-- Unbinding is always allowed: a mapping with no site simply seeds no diagram.
+UPDATE unifi_site_mapping SET site_id = NULL WHERE name = 'topology guard';
+SELECT helm_test.check('a mapping may be unbound from its site',
+  (SELECT site_id FROM unifi_site_mapping WHERE name = 'topology guard') IS NULL);
+ROLLBACK;
+
+\echo ''
 \echo '== All security assertions passed =='
 

@@ -6,6 +6,7 @@ import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { NewSecretForm } from '@/components/new-secret-form';
 import { SiteForm } from '@/components/site-form';
+import { TopologyDesigner } from '@/components/topology-designer';
 import { CredentialEditForm } from '@/components/credential-edit-form';
 import { NewAssetForm } from '@/components/new-asset-form';
 import { RenameOrganization } from '@/components/rename-organization';
@@ -333,6 +334,14 @@ export default async function OrganizationPage({
                       }}
                     />
                   )}
+                  {/* Open for anybody who may read the client; only editable
+                      with asset:write, which the component is told about
+                      rather than deciding for itself. */}
+                  <TopologyDesigner
+                    siteId={site.id}
+                    siteName={site.name}
+                    canEdit={canWrite}
+                  />
                 </div>,
                 <div key="addr" className="text-ink-muted">
                   {[site.address_line1, site.city, site.region].filter(Boolean).join(', ') || '—'}

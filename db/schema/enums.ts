@@ -135,3 +135,10 @@ export const authMethod = pgEnum('auth_method', ['sso', 'password', 'radius', 'o
 // on the network; and the lifecycle a technician sets on it by hand.
 export const networkAssetType = pgEnum('network_asset_type', ['unifi_device', 'client_device']);
 export const networkAssetStatus = pgEnum('network_asset_status', ['active', 'maintenance', 'decommissioned']);
+
+// Site topology (0570). A box's icon, and who put the row there — the second
+// one is what the sync's non-destructive contract is written in terms of.
+export const topologyDeviceType = pgEnum('topology_device_type', [
+  'switch', 'router', 'firewall', 'server', 'access_point', 'generic',
+]);
+export const topologySource = pgEnum('topology_source', ['manual', 'unifi_sync']);
