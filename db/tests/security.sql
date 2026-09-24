@@ -2908,14 +2908,14 @@ SELECT helm_test.check_raises('a second document cannot take the same name in a 
 ROLLBACK;
 
 \echo ''
-\echo '== 44. Site topology: a drawing is client data, and a poll does not redraw it =='
+\echo '== 44. Site topology: a drawing is client data, and only a person draws it =='
 --
--- A diagram isolates like any other client record, so most of what follows is
--- the usual ladder read out of the catalogue. What is NOT usual is the promise
--- the feature makes to whoever moved the boxes: the next poll leaves them where
--- they were put. 0570 asserts that at migration time, which is once. This
--- asserts it on every run, because the way that promise breaks is a later edit
--- to the upsert, long after 0570 stopped being looked at.
+-- 0570 shipped these tables with UniFi auto-population and a good deal of
+-- machinery to stop a poll undoing somebody's work. 0580 removed the
+-- integration, so the assertions that machinery earned are gone with it. What
+-- replaces them is the statement that it is GONE rather than dormant: a
+-- half-removed integration, where the columns survive and something starts
+-- writing to them again, is the failure this section now guards.
 
 \echo '-- both tables are wired up, and for every command --'
 SELECT helm_test.check('topology_node and topology_link both force RLS',
@@ -2942,21 +2942,29 @@ SELECT helm_test.check('...with a policy for each of the four commands',
 SELECT helm_test.check('topology_link and asset_link are still two different things',
   (SELECT count(*) FROM pg_class WHERE relname IN ('topology_link', 'asset_link')) = 2);
 
-\echo '-- the one that protects the feature --'
---
--- If a future edit adds pos_x to the upsert's update list, every synced diagram
--- rearranges itself on the next poll and nobody finds out until a customer
--- opens one. Same for the customisation markers: the sync may never decide, on
--- a person's behalf, that they have edited something.
-SELECT helm_test.check('the sync upsert never assigns a position',
-  pg_get_functiondef(
-    'helm.upsert_topology_node(uuid, bytea, text, text, text, topology_device_type, uuid)'::regprocedure
-  ) !~* '(SET|,)\s*pos_[xy]\s*=');
+\echo '-- the integration is removed, not merely unused --'
+SELECT helm_test.check('no sync bookkeeping survives on either table',
+  NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND ((table_name = 'topology_node'
+            AND column_name IN ('mac_blind_index', 'source', 'label_customised',
+                                'device_type_customised', 'ip_address_customised',
+                                'subnet_customised'))
+        OR (table_name = 'topology_link' AND column_name = 'source'))));
 
-SELECT helm_test.check('...nor raises a customisation marker for somebody',
-  pg_get_functiondef(
-    'helm.upsert_topology_node(uuid, bytea, text, text, text, topology_device_type, uuid)'::regprocedure
-  ) !~* '(SET|,)\s*[a-z_]*_customised\s*=');
+SELECT helm_test.check('a controller mapping no longer names a site',
+  NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'unifi_site_mapping'
+      AND column_name = 'site_id'));
+
+SELECT helm_test.check('and the seeding functions are gone',
+  NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'helm'
+      AND p.proname IN ('upsert_topology_node', 'upsert_topology_link',
+                        'unifi_mapping_site_guard')));
 
 \echo '-- a drawing belongs to a site, and a site belongs to a client --'
 BEGIN;
@@ -2966,10 +2974,10 @@ INSERT INTO site (id, tenant_id, organization_id, name)
 VALUES ('1e900000-0000-0000-0000-0000000000a1', :t1, :t1_acme,   'Acme HQ (topology)'),
        ('1e900000-0000-0000-0000-0000000000a2', :t1, :t1_globex, 'Globex HQ (topology)');
 
-INSERT INTO topology_node (tenant_id, site_id, label, source)
-VALUES (:t1, '1e900000-0000-0000-0000-0000000000a1', 'Acme core switch', 'manual'),
-       (:t1, '1e900000-0000-0000-0000-0000000000a1', 'Acme firewall',    'manual'),
-       (:t1, '1e900000-0000-0000-0000-0000000000a2', 'Globex switch',    'manual');
+INSERT INTO topology_node (tenant_id, site_id, label)
+VALUES (:t1, '1e900000-0000-0000-0000-0000000000a1', 'Acme core switch'),
+       (:t1, '1e900000-0000-0000-0000-0000000000a1', 'Acme firewall'),
+       (:t1, '1e900000-0000-0000-0000-0000000000a2', 'Globex switch');
 
 SELECT helm_test.check('the MSP sees every client''s diagram',
   (SELECT count(*) FROM topology_node) = 3);
@@ -2979,12 +2987,6 @@ SELECT helm_test.check_raises('a line cannot join two different sites',
            SELECT %L, '1e900000-0000-0000-0000-0000000000a1',
                   (SELECT id FROM topology_node WHERE label = 'Acme core switch'),
                   (SELECT id FROM topology_node WHERE label = 'Globex switch')$$, :t1));
-
--- Without a MAC there is nothing to match the box against on the next poll, so
--- it would be re-created every time rather than updated.
-SELECT helm_test.check_raises('a synced node must carry a device identity',
-  format($$INSERT INTO topology_node (tenant_id, site_id, label, source)
-           VALUES (%L, '1e900000-0000-0000-0000-0000000000a1', 'Ghost', 'unifi_sync')$$, :t1));
 
 -- Null means "never placed", and the layout puts it somewhere. Half a
 -- coordinate would mean neither.
@@ -3028,38 +3030,6 @@ SELECT helm_test.check('the other tenant sees no nodes',
   (SELECT count(*) FROM topology_node) = 0);
 SELECT helm_test.check('the other tenant sees no lines',
   (SELECT count(*) FROM topology_link) = 0);
-ROLLBACK;
-
-\echo '-- a controller mapping cannot be pointed at another client''s site --'
---
--- 0570 gives unifi_site_mapping a site_id so a poll knows which diagram it is
--- seeding. The mapping is scoped to a client and the site is scoped to a
--- client; if those two could disagree, a poll would write one client's devices
--- onto another client's drawing.
-BEGIN;
-SELECT helm_test.ctx(:t1, :u_admin1);
-INSERT INTO site (id, tenant_id, organization_id, name)
-VALUES ('1e900000-0000-0000-0000-0000000000b1', :t1, :t1_globex, 'Globex site (topology)'),
-       ('1e900000-0000-0000-0000-0000000000b2', :t1, :t1_acme,   'Acme site (topology)');
-
-SELECT helm_test.check_raises('a mapping''s site must belong to the mapping''s client',
-  format($$INSERT INTO unifi_site_mapping
-             (tenant_id, organization_id, name, controller_url, unifi_site_id, site_id)
-           VALUES (%L, %L, 'topology guard', 'https://unifi.example.test', 'default',
-                   '1e900000-0000-0000-0000-0000000000b1')$$, :t1, :t1_acme));
-
-INSERT INTO unifi_site_mapping
-  (tenant_id, organization_id, name, controller_url, unifi_site_id, site_id)
-VALUES (:t1, :t1_acme, 'topology guard', 'https://unifi.example.test', 'default',
-        '1e900000-0000-0000-0000-0000000000b2');
-SELECT helm_test.check('...and a site in the mapping''s own client is accepted',
-  (SELECT site_id FROM unifi_site_mapping WHERE name = 'topology guard')
-    = '1e900000-0000-0000-0000-0000000000b2');
-
--- Unbinding is always allowed: a mapping with no site simply seeds no diagram.
-UPDATE unifi_site_mapping SET site_id = NULL WHERE name = 'topology guard';
-SELECT helm_test.check('a mapping may be unbound from its site',
-  (SELECT site_id FROM unifi_site_mapping WHERE name = 'topology guard') IS NULL);
 ROLLBACK;
 
 \echo ''

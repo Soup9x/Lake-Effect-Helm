@@ -26,11 +26,6 @@ interface NodeRow {
   device_type: string;
   pos_x: number | null;
   pos_y: number | null;
-  source: string;
-  label_customised: boolean;
-  device_type_customised: boolean;
-  ip_address_customised: boolean;
-  subnet_customised: boolean;
 }
 
 interface LinkRow {
@@ -38,7 +33,6 @@ interface LinkRow {
   from_node_id: string;
   to_node_id: string;
   label: string | null;
-  source: string;
 }
 
 export const GET = tenantRoute(
@@ -56,40 +50,24 @@ export const GET = tenantRoute(
     `;
     if (!site) throw ApiError.notFound('no such site');
 
-    const [nodes, links, bound] = await Promise.all([
+    const [nodes, links] = await Promise.all([
       tx<NodeRow[]>`
         SELECT id, asset_node_id, label, ip_address, subnet,
-               device_type::text AS device_type, pos_x, pos_y, source::text AS source,
-               label_customised, device_type_customised,
-               ip_address_customised, subnet_customised
+               device_type::text AS device_type, pos_x, pos_y
         FROM topology_node
         WHERE site_id = ${siteId}::uuid
         ORDER BY created_at
       `,
       tx<LinkRow[]>`
-        SELECT id, from_node_id, to_node_id, label, source::text AS source
+        SELECT id, from_node_id, to_node_id, label
         FROM topology_link
         WHERE site_id = ${siteId}::uuid
         ORDER BY created_at
-      `,
-      /*
-       * Whether anything still feeds this diagram.
-       *
-       * The interface needs it to tell the truth about deleting a synced box:
-       * it comes back on the next poll if a controller is still reporting the
-       * device, and stays gone if nothing is. Without this the warning would
-       * have to be written in the conditional voice, which is how warnings get
-       * ignored.
-       */
-      tx<{ n: string }[]>`
-        SELECT count(*)::text AS n FROM unifi_site_mapping
-        WHERE site_id = ${siteId}::uuid AND is_active
       `,
     ]);
 
     return {
       site: { id: site.id, name: site.name },
-      unifiBound: Number(bound[0]?.n ?? 0) > 0,
       nodes: nodes.map((n) => ({
         id: n.id,
         assetNodeId: n.asset_node_id,
@@ -99,20 +77,12 @@ export const GET = tenantRoute(
         deviceType: n.device_type,
         posX: n.pos_x,
         posY: n.pos_y,
-        source: n.source,
-        customised: {
-          label: n.label_customised,
-          deviceType: n.device_type_customised,
-          ipAddress: n.ip_address_customised,
-          subnet: n.subnet_customised,
-        },
       })),
       links: links.map((l) => ({
         id: l.id,
         fromNodeId: l.from_node_id,
         toNodeId: l.to_node_id,
         label: l.label,
-        source: l.source,
       })),
     };
   },

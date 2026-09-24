@@ -42,16 +42,6 @@ export const unifiSiteMapping = pgTable('unifi_site_mapping', {
 
   isActive: boolean('is_active').notNull().default(false),
 
-  /**
-   * The Helm site whose topology this mapping seeds (0570).
-   *
-   * Nullable, and null is the default: a mapping binds to an ORGANIZATION, and
-   * a client with three offices on one controller needs to say which office a
-   * mapping's devices belong to before a per-site diagram can be seeded. A
-   * mapping with no site seeds no topology, which is the pre-0570 behaviour.
-   */
-  siteId: uuid('site_id'),
-
   tlsVerify: boolean('tls_verify').notNull().default(true),
   tlsPinnedSha256: text('tls_pinned_sha256'),
   tlsExceptionAckBy: uuid('tls_exception_ack_by').references(() => appUser.id, { onDelete: 'set null' }),

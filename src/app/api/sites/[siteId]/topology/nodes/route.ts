@@ -5,14 +5,9 @@ import { ApiError } from '@/lib/api/errors';
 /**
  * POST /api/sites/{siteId}/topology/nodes — add a box by hand.
  *
- * Manual nodes exist for everything the controller cannot tell us about: an ISP
- * handoff, a patch panel, a printer nobody manages, or simply a device the
- * person drawing wants represented more plainly than its asset record reads.
- *
- * `source` is fixed to 'manual' here and is not a field the caller may set.
- * A row claiming to be 'unifi_sync' without a device identity would be a node
- * the sync could never match and would therefore duplicate on every poll —
- * 0570 makes that unrepresentable with a CHECK, and this makes it unreachable.
+ * Every node is drawn by a person — a switch, an ISP handoff, a patch panel, a
+ * printer nobody manages. Nothing else writes to this table (0580), so there is
+ * no second writer to reconcile with and no provenance to record.
  *
  * asset:write, matching POST /api/sites and PATCH /api/assets/{nodeId}: drawing
  * a diagram of a client's network is ordinary client-data editing. Deliberately
@@ -60,12 +55,12 @@ export const POST = tenantRoute(
       const [node] = await tx<{ id: string }[]>`
         INSERT INTO topology_node (
           tenant_id, site_id, asset_node_id, label, ip_address, subnet,
-          device_type, pos_x, pos_y, source)
+          device_type, pos_x, pos_y)
         VALUES (
           helm.require_tenant_id(), ${siteId}::uuid, ${body.assetNodeId ?? null}::uuid,
           ${body.label}, ${body.ipAddress ?? null}, ${body.subnet ?? null},
           ${body.deviceType}::topology_device_type,
-          ${body.posX ?? null}, ${body.posY ?? null}, 'manual')
+          ${body.posX ?? null}, ${body.posY ?? null})
         RETURNING id
       `;
       if (!node) throw ApiError.conflict('the node could not be created');

@@ -2,15 +2,7 @@ import { z } from 'zod';
 import { tenantRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 
-/**
- * DELETE one line.
- *
- * A synced line deletes like any other and is re-derived on the next poll for
- * as long as the controller still reports that uplink. Removing a line the
- * telemetry keeps asserting is therefore temporary, and saying so in the
- * response lets the interface say it too rather than leaving somebody to
- * discover it five minutes later.
- */
+/** DELETE one line. Nothing re-derives it, so it stays deleted. */
 export const DELETE = tenantRoute(
   async ({ tx, params }) => {
     const siteId = params.siteId;
@@ -22,14 +14,14 @@ export const DELETE = tenantRoute(
       throw ApiError.invalid('linkId must be a UUID');
     }
 
-    const [row] = await tx<{ id: string; source: string }[]>`
+    const [row] = await tx<{ id: string }[]>`
       DELETE FROM topology_link
       WHERE id = ${linkId}::uuid AND site_id = ${siteId}::uuid
-      RETURNING id, source::text AS source
+      RETURNING id
     `;
     if (!row) throw ApiError.notFound('no such topology link');
 
-    return { deleted: row.id, wasSynced: row.source === 'unifi_sync' };
+    return { deleted: row.id };
   },
   { permissions: ['asset:write'] },
 );

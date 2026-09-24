@@ -14,15 +14,9 @@
  *
  * A drag writes pos_x/pos_y immediately, on pointer-up, and nothing else. The
  * auto-layout that places a node which has never been positioned is display
- * only: it is recomputed on every load and never written back, because "has a
- * person placed this?" is the question the whole non-destructive sync contract
- * turns on, and silently answering yes on first render would destroy it.
- *
- * DELETING A SYNCED NODE IS NOT A DELETE, and the interface says so in those
- * words before it happens. It removes the box; the next poll puts it back if
- * the controller still reports the device, and leaves it gone if it does not.
- * Telling somebody that afterwards, when the box reappears, would be a bug
- * report rather than a feature.
+ * only: it is recomputed on every load and never written back. A node whose
+ * position is NULL has genuinely never been placed, and writing a synthetic
+ * one on first render would throw that distinction away for nothing.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -32,7 +26,6 @@ import {
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Select } from './ui/field';
 import { Modal } from './ui/modal';
-import { Badge } from './ui/badge';
 
 const DEVICE_TYPES = [
   ['switch', 'Switch'],
@@ -63,7 +56,6 @@ interface TopologyNode {
   deviceType: DeviceType;
   posX: number | null;
   posY: number | null;
-  source: 'manual' | 'unifi_sync';
 }
 
 interface TopologyLink {
@@ -71,12 +63,10 @@ interface TopologyLink {
   fromNodeId: string;
   toNodeId: string;
   label: string | null;
-  source: 'manual' | 'unifi_sync';
 }
 
 interface Graph {
   site: { id: string; name: string };
-  unifiBound: boolean;
   nodes: TopologyNode[];
   links: TopologyLink[];
 }
@@ -244,16 +234,6 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
   };
 
   const removeNode = async (node: TopologyNode) => {
-    if (node.source === 'unifi_sync' && graph?.unifiBound) {
-      const ok = window.confirm(
-        `“${node.label}” came from UniFi.\n\n` +
-        'Removing it here takes it off the diagram, but the next sync will put ' +
-        'it back for as long as the controller still reports the device. It ' +
-        'stays gone only once the device is genuinely off the controller.\n\n' +
-        'Remove it anyway?',
-      );
-      if (!ok) return;
-    }
     if (await send(`/api/sites/${siteId}/topology/nodes/${node.id}`, { method: 'DELETE' })) {
       setSelected(null);
       await load();
@@ -335,7 +315,6 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
               {busy ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
               Refresh
             </Button>
-            {graph?.unifiBound && <Badge tone="brand">UniFi-fed</Badge>}
             {linkingFrom && (
               <span className="text-xs text-ink-muted">
                 Pick the second node to link, or press Cancel link.
@@ -357,10 +336,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
           <div className="overflow-auto rounded-md border border-border bg-surface-sunken">
             {graph && graph.nodes.length === 0 ? (
               <p className="px-4 py-10 text-center text-sm text-ink-muted">
-                Nothing on this diagram yet.
-                {graph.unifiBound
-                  ? ' The next UniFi sync will seed it from the controller.'
-                  : ' Add a node, or bind a UniFi mapping to this site to seed it automatically.'}
+                Nothing on this diagram yet. Add a node to start drawing.
               </p>
             ) : (
               <svg
@@ -391,7 +367,6 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
                         x1={x1} y1={y1} x2={x2} y2={y2}
                         className={active ? 'stroke-brand' : 'stroke-border-strong'}
                         strokeWidth={active ? 3 : 2}
-                        strokeDasharray={link.source === 'unifi_sync' ? undefined : '6 4'}
                       />
                       {link.label && (
                         <text
@@ -454,8 +429,6 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
               <span className="text-sm font-medium text-ink">
                 {selectedNode ? selectedNode.label : selectedLink?.label ?? 'Link'}
               </span>
-              {selectedNode?.source === 'unifi_sync' && <Badge tone="neutral">From UniFi</Badge>}
-              {selectedLink?.source === 'unifi_sync' && <Badge tone="neutral">From UniFi</Badge>}
 
               <span className="ml-auto flex items-center gap-2">
                 {selectedNode?.assetNodeId && (
@@ -491,8 +464,8 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
           )}
 
           <FieldHint>
-            Solid lines come from the UniFi sync; dashed lines were drawn by hand.
-            A node positioned here is never moved by a sync.
+            Drag a node to place it; the position is saved as soon as you let go.
+            Select a node to link it to another, open its asset, or remove it.
           </FieldHint>
         </div>
       </Modal>

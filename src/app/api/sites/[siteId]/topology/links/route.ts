@@ -11,10 +11,9 @@ import { ApiError } from '@/lib/api/errors';
  * has no wire to, so the two produce different pictures from the same estate
  * and neither is a subset of the other.
  *
- * Direction is stored but not meaningful to the renderer: v1 draws straight
- * lines. It is kept because the sync has it — a device knows its uplink — and
- * re-deriving it later from a controller that may no longer report the device
- * would be impossible.
+ * Direction is stored but means only "the order it was drawn": v1 renders a
+ * plain line either way, and the pair uniqueness index is built on both
+ * columns, so A→B and B→A are one cable.
  */
 const createSchema = z.object({
   fromNodeId: z.guid(),
@@ -45,11 +44,11 @@ export const POST = tenantRoute(
 
     try {
       const [link] = await tx<{ id: string }[]>`
-        INSERT INTO topology_link (tenant_id, site_id, from_node_id, to_node_id, label, source)
+        INSERT INTO topology_link (tenant_id, site_id, from_node_id, to_node_id, label)
         VALUES (
           helm.require_tenant_id(), ${siteId}::uuid,
           ${body.fromNodeId}::uuid, ${body.toNodeId}::uuid,
-          ${body.label ?? null}, 'manual')
+          ${body.label ?? null})
         RETURNING id
       `;
       if (!link) throw ApiError.conflict('the link could not be created');

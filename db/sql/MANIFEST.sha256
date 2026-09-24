@@ -1,12 +1,3 @@
-# sha256 of every file in db/sql, in filename order.
-#
-# An applied migration is immutable: db/migrate.ts hashes the whole file and
-# refuses to run when it no longer matches what helm_migration recorded. This
-# manifest moves that failure from deploy time to commit time.
-#
-# Adding a migration:  pnpm db:check-migrations --update
-# Changing one:        do not. Write a new migration that alters what it did.
-
 ce0e8a45c33358d4f1c77c1ca70b929534bfbb51f313a23b74d69c14a61fdcf1  0000_bootstrap.sql
 79646363a8f8f59642f582020ed0f20affd00022bc823c229b9fe747b370b6b5  0010_tenancy.sql
 9b96fb1b5dc6a05bc7d5207870e0074fd8772dcd0f209a8cb36b3b104a3d8284  0020_identity.sql
@@ -62,6 +53,7 @@ c1988dfb80fd3a2190497d24f74ac49c4a3b0df21d9dbd4d6bee1c4a08d28d36  0510_set_null_
 93d3fb5387f5412cd03166b760de199442e20553fe5e6ae18ae0c742499a6bef  0550_rls_auth_and_cursor_tables.sql
 4a6787626953ec5034dce12148728a53d36c9b9002d98344a0966e0f59fd48c7  0560_client_documents.sql
 1f83a03c0a3b8d0b1f09e22dd2f3cb863990beed776cdc59b9e580fb1e929a4f  0570_site_topology.sql
+bc04c688424a996a5cb097a0affb1ef441130ba026ca0d56231411ed22c29ff8  0580_topology_manual_only.sql
 ceaa62a2b3a9ae44f80eb465551588e365622c6ccd907aafab8a8a742489f24c  0900_seed_system_data.sql
 d1e15e0ef2729d84a057f93690bba9312d12e7578c1b900d436202a0d0e13db7  0910_worker_seed.sql
 da61c396e5f3ca93cf3fb98eff3a41035be0ad2ef316bc5f8fae5f356ece5352  0920_export_permission_rename.sql

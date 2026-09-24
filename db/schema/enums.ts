@@ -136,9 +136,9 @@ export const authMethod = pgEnum('auth_method', ['sso', 'password', 'radius', 'o
 export const networkAssetType = pgEnum('network_asset_type', ['unifi_device', 'client_device']);
 export const networkAssetStatus = pgEnum('network_asset_status', ['active', 'maintenance', 'decommissioned']);
 
-// Site topology (0570). A box's icon, and who put the row there — the second
-// one is what the sync's non-destructive contract is written in terms of.
+// Site topology (0570). Which icon to draw a box with. The companion
+// `topology_source` enum was dropped by 0580 along with the UniFi seeding it
+// described — every node is drawn by a person now.
 export const topologyDeviceType = pgEnum('topology_device_type', [
   'switch', 'router', 'firewall', 'server', 'access_point', 'generic',
 ]);
-export const topologySource = pgEnum('topology_source', ['manual', 'unifi_sync']);

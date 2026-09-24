@@ -31,7 +31,6 @@
  * a column on the mapping.
  */
 import { withTenant, db } from '../lib/db/client';
-import { seedTopologyFromPoll } from '../lib/topology/sync';
 import type { Job, JobContext, JobResult } from './runtime';
 import { describeError } from './runtime';
 import { getBlindIndex, getDekCache, getSecretService } from '../lib/services';
@@ -110,8 +109,6 @@ async function syncUnifi(ctx: JobContext): Promise<JobResult> {
   let inserted = 0;
   let updated = 0;
   let offline = 0;
-  let topologyNodes = 0;
-  let topologyLinks = 0;
 
   for (const mapping of backlog) {
     if (ctx.stopping()) break;
@@ -166,42 +163,12 @@ async function syncUnifi(ctx: JobContext): Promise<JobResult> {
       );
       offline += wentOffline;
 
-      /*
-       * The diagram, after the inventory it draws.
-       *
-       * AFTER finish_unifi_poll, not before: that call is what marks devices
-       * the controller no longer reports as offline, and the seeder reads only
-       * online ones. Seeding first would re-create a box for a device that had
-       * just been retired, which is the one thing that makes deleting a synced
-       * node feel broken.
-       *
-       * In its own transaction, and failure is logged rather than thrown. A
-       * controller that polled cleanly has done its job; a topology that could
-       * not be drawn is not a reason to mark the poll failed and back it off.
-       */
-      const seeded = await withTenant(
-        actor,
-        (tx) => seedTopologyFromPoll(tx, mapping.tenant_id, mapping.mapping_id),
-        { role: 'worker' },
-      ).catch((error: unknown) => {
-        log.warn('topology could not be seeded', describeError(error));
-        return null;
-      });
-
-      if (seeded?.siteId) {
-        topologyNodes += seeded.nodes;
-        topologyLinks += seeded.links;
-      }
-
       log.info('polled', {
         devices: counts.devices,
         clients: counts.clients,
         inserted: counts.inserted,
         updated: counts.updated,
         wentOffline,
-        ...(seeded?.siteId
-          ? { topologyNodes: seeded.nodes, topologyLinks: seeded.links }
-          : {}),
       });
     } catch (error) {
       failed += 1;
@@ -235,7 +202,6 @@ async function syncUnifi(ctx: JobContext): Promise<JobResult> {
   return {
     counts: {
       mappings: backlog.length, polled, failed, skipped, inserted, updated, offline,
-      topologyNodes, topologyLinks,
     },
     idle: polled === 0 && failed === 0,
   };
