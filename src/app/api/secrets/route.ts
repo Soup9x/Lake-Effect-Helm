@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getSecretService } from '@/lib/services';
+import { parseTotpEnrolment, TotpEnrolmentError } from '@/lib/secrets/totp-enrolment';
 
 /**
  * The same rule normaliseTags() applies in lib/bulk/service.ts, minus its
@@ -61,6 +62,20 @@ const createSchema = z.object({
   siteId: z.guid().nullable().optional(),
   criticality: z.number().int().min(1).max(5).default(3),
   isBreakGlass: z.boolean().default(false),
+
+  /**
+   * An optional TOTP seed, captured at the same time as the password.
+   *
+   * In the same request and therefore the same transaction, because the moment a
+   * technician has both halves in front of them is the moment to store both. A
+   * separate follow-up call is a step that gets skipped, and a credential
+   * documented as having MFA that does not is worse than one that admits it.
+   *
+   * An otpauth:// URI or a bare base32 seed; the URI's parameters win when it
+   * carries them. Replacing or removing a seed later is
+   * PUT/DELETE /api/assets/{nodeId}/totp.
+   */
+  totpSeed: z.string().min(1).max(4096).optional(),
 });
 
 /**
@@ -117,6 +132,23 @@ export const POST = tenantRoute(
       }
       return result.data;
     });
+
+    /*
+     * Parsed first, before anything is encrypted or inserted.
+     *
+     * A mistyped seed has to cost a 400 and nothing else. Validating it after
+     * the password was already stored would leave the technician with a
+     * half-captured credential and a form they have to work out how to finish.
+     */
+    let enrolment;
+    if (body.totpSeed !== undefined) {
+      try {
+        enrolment = parseTotpEnrolment(body.totpSeed);
+      } catch (error) {
+        if (error instanceof TotpEnrolmentError) throw ApiError.invalid(error.message);
+        throw error;
+      }
+    }
 
     // One try/catch over BOTH writes. `secret` and `asset_node` each reach
     // organization through a composite key carrying tenant_id, so an id from
@@ -212,6 +244,49 @@ export const POST = tenantRoute(
       )
     `;
 
+    /*
+     * The seed, if one came with the request. Same transaction as the password
+     * and the node, so there is no state in which the credential exists and its
+     * second factor silently did not store.
+     *
+     * A second `secret` row of kind 'totp_seed', not a column and not a field on
+     * the password's own secret: 0070's composite FK pins this slot to that
+     * kind, and the seed needs its own rotation history — replacing a seed and
+     * changing a password are different events on different schedules.
+     */
+    let totp: { secretId: string; version: number; auditEventUid: string } | undefined;
+    if (enrolment) {
+      totp = await getSecretService().createInTransaction(
+        tx,
+        {
+          tenantId: identity.tenantId,
+          actorId: identity.actorId,
+          actorType: identity.actorType,
+        },
+        {
+          organizationId: body.organizationId,
+          kind: 'totp_seed',
+          label: `${body.label} (TOTP seed)`,
+          // See PUT /api/assets/{nodeId}/totp for why 'elevated' and not
+          // 'critical': a code is needed mid-login, and forcing a step-up to
+          // obtain one would mean re-authenticating twice to sign in once.
+          sensitivity: 'elevated',
+        },
+        enrolment.seed,
+      );
+
+      await tx`
+        UPDATE credential SET
+          totp_secret_id      = ${totp.secretId}::uuid,
+          totp_algorithm      = ${enrolment.algorithm},
+          totp_digits         = ${enrolment.digits},
+          totp_period_seconds = ${enrolment.periodSeconds},
+          totp_issuer         = ${enrolment.issuer},
+          totp_account        = ${enrolment.account}
+        WHERE id = ${node.id}::uuid
+      `;
+    }
+
     return {
       // The node is what the interface navigates to; the secret is what it
       // reveals. Both are returned because a caller storing a credential
@@ -220,6 +295,9 @@ export const POST = tenantRoute(
       secretId: created.secretId,
       version: created.version,
       auditEventUid: created.auditEventUid,
+      // The seed's id, never the seed. A caller that wants to confirm the
+      // enrolment took asks for a code, which is audited.
+      ...(totp ? { totpSecretId: totp.secretId } : {}),
     };
   },
   { permissions: ['secret:write', 'asset:write'] },

@@ -236,6 +236,39 @@ export class SecretService {
     }
   }
 
+  /**
+   * Rotate inside a transaction the caller already owns.
+   *
+   * The `createInTransaction` counterpart, and needed for the same reason: a
+   * rotation that is one part of a larger atomic write. Attaching a replacement
+   * TOTP seed writes the new version AND updates the credential's algorithm,
+   * digits and period — two statements that must not come apart, because a
+   * credential holding a SHA256 seed and a row that still says SHA1 generates
+   * confidently wrong codes.
+   *
+   * The denial audit is kept, and works despite the caller's transaction
+   * aborting: #auditWriteDenial opens its own. That matters here — a refused
+   * rotation rolls back the denial row write_secret_version wrote, so without
+   * this a refused TOTP replacement would leave no trace at all.
+   */
+  async rotateInTransaction(
+    tx: HelmTx,
+    actor: ActorRef,
+    secretId: string,
+    plaintext: string,
+    reason: string,
+  ): Promise<WriteValueResult> {
+    try {
+      const written = await this.#writeVersion(tx, actor.tenantId, secretId, plaintext, reason);
+      return { secretId, ...written };
+    } catch (cause) {
+      if (!(cause instanceof StaleSecretVersionError)) {
+        await this.#auditWriteDenial(actor, secretId, cause);
+      }
+      throw cause;
+    }
+  }
+
   async #writeVersion(
     tx: HelmTx,
     tenantId: string,

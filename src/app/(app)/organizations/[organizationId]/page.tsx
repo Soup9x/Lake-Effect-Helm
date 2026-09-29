@@ -55,6 +55,8 @@ interface CredentialRow {
   requires_reason: boolean; requires_step_up: boolean; is_break_glass: boolean;
   strength_score: number | null; tags: string[];
   notes: string | null; criticality: number; secret_label: string | null;
+  /** Whether a TOTP seed is attached. A boolean, never the id and never the seed. */
+  has_totp: boolean;
 }
 
 interface ExpiryRow {
@@ -131,6 +133,7 @@ export default async function OrganizationPage({
         SELECT n.id AS node_id, n.name, n.tags, n.notes, n.criticality,
                c.credential_type::text, c.username::text, c.url,
                c.secret_id::text, c.is_break_glass,
+               c.totp_secret_id IS NOT NULL AS has_totp,
                m.label AS secret_label,
                m.sensitivity::text, m.requires_reason, m.requires_step_up, m.strength_score
         FROM credential c
@@ -498,6 +501,7 @@ export default async function OrganizationPage({
                   secretId={credential.secret_id ?? ''}
                   nodeId={credential.node_id}
                   tags={credential.tags}
+                  hasTotp={credential.has_totp}
                   canEdit={canWrite && credential.secret_id !== null}
                   values={{
                     label: credential.secret_label ?? credential.name,

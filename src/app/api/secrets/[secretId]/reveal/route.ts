@@ -52,6 +52,34 @@ export const POST = tenantRoute(
       },
     );
 
+    /*
+     * A TOTP SEED IS NOT REVEALABLE HERE, and the reason is the whole point of
+     * the feature.
+     *
+     * The seed is a code-generating key with an unbounded lifetime. Handing it
+     * to a browser means every future code for that account can be computed off
+     * the record, by anything that scraped the response, forever — which makes
+     * the secret:reveal gate on the code endpoint decorative. So this route,
+     * the one a browser can reach, refuses; POST /api/assets/{nodeId}/totp/code
+     * generates the code server-side and returns six digits.
+     *
+     * Refused AFTER the reveal, deliberately. The audit row is already written,
+     * so an attempt to pull a seed through the browser door is recorded rather
+     * than silently turned away — and the plaintext is disposed below either
+     * way.
+     *
+     * The offboarding export still emits seeds, and must: a client taking their
+     * accounts back needs the seed to re-enrol. That path calls
+     * SecretService.reveal directly from the export worker and never comes
+     * through here.
+     */
+    if (revealed.kind === 'totp_seed') {
+      revealed.value.dispose();
+      throw ApiError.forbidden(
+        'a TOTP seed cannot be read directly — request the current code instead',
+      );
+    }
+
     // Dispose immediately: the plaintext exists in this process only for as long
     // as it takes to serialise the response.
     return revealed.value.use((plaintext) => ({

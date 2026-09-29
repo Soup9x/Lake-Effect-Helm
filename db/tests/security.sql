@@ -3033,5 +3033,109 @@ SELECT helm_test.check('the other tenant sees no lines',
 ROLLBACK;
 
 \echo ''
+\echo '== 45. A credential''s second factor is a secret like any other =='
+--
+-- The TOTP slot on `credential` is not a column holding a seed — it is a
+-- reference into `secret`, carrying a generated discriminator whose only job is
+-- to hold a composite FK that refuses anything but kind 'totp_seed'. That makes
+-- "the seed is stored the way every other credential is stored" a property of
+-- the schema rather than a convention the application is trusted to follow, and
+-- it is what this section checks.
+
+\echo '-- the slot cannot hold anything but a seed --'
+SELECT helm_test.check('the TOTP slot is pinned by a composite FK, not by convention',
+  EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'credential'::regclass
+      AND conname = 'credential_totp_kind_fk'
+      AND contype = 'f'));
+
+-- Generated, so nothing can write a discriminator that disagrees with the
+-- reference beside it.
+SELECT helm_test.check('...off a generated column nobody can set by hand',
+  (SELECT is_generated FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'credential'
+      AND column_name = 'totp_secret_kind') = 'ALWAYS');
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+/*
+ * A password is not a seed, and the slot says so — AT COMMIT.
+ *
+ * credential_totp_kind_fk is DEFERRABLE INITIALLY DEFERRED and has to be: no
+ * referential action is possible on an FK containing a generated column, so when
+ * credential_totp_secret_fk nulls totp_secret_id the discriminator regenerates
+ * to NULL and this constraint has to be satisfied by the time it is looked at
+ * (0070 says so where it is declared).
+ *
+ * Which means the UPDATE itself is accepted and the refusal lands later. Forcing
+ * the check is what proves the constraint is real rather than decorative — and
+ * the deferral is worth asserting in its own right, because a future edit making
+ * it IMMEDIATE would break deletion rather than this.
+ */
+UPDATE credential SET totp_secret_id = (
+  SELECT id FROM secret WHERE tenant_id = :t1 AND kind = 'password' LIMIT 1)
+WHERE id = :n_cred;
+SELECT helm_test.check_raises('a non-seed secret cannot fill the TOTP slot',
+  'SET CONSTRAINTS ALL IMMEDIATE');
+ROLLBACK;
+
+SELECT helm_test.check('...and that constraint is deferred, which deletion depends on',
+  (SELECT condeferrable AND condeferred FROM pg_constraint
+    WHERE conrelid = 'credential'::regclass AND conname = 'credential_totp_kind_fk'));
+
+\echo '-- a seed is never readable as metadata, only as ciphertext --'
+-- The same rule 0140 applies to every other kind of key material: an audit row
+-- may say a seed was revealed, never what it was.
+SELECT helm_test.check('totp_seed is on the audit metadata blocklist',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'reject_secret_bearing_metadata')
+  LIKE '%''totp_seed''%');
+
+-- And the trigger is actually attached, since the blocklist is a function body
+-- that would pass this check while enforcing nothing.
+SELECT helm_test.check('...by a trigger that is attached to audit_log',
+  EXISTS (
+    SELECT 1 FROM pg_trigger t
+    WHERE t.tgrelid = 'audit_log'::regclass
+      AND t.tgname = 'audit_log_no_secrets'
+      AND NOT t.tgisinternal));
+
+\echo '-- the parameters the code is computed from are bounded --'
+-- A period outside this range is not a TOTP window any authenticator would
+-- agree with, and digits outside 6-8 is not a code any vendor accepts.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('a TOTP period below 15 seconds is refused',
+  format('UPDATE credential SET totp_period_seconds = 5 WHERE id = %L', :n_cred));
+SELECT helm_test.check_raises('...and above 120',
+  format('UPDATE credential SET totp_period_seconds = 300 WHERE id = %L', :n_cred));
+SELECT helm_test.check_raises('a digit count outside 6-8 is refused',
+  format('UPDATE credential SET totp_digits = 9 WHERE id = %L', :n_cred));
+SELECT helm_test.check_raises('an algorithm no authenticator implements is refused',
+  format('UPDATE credential SET totp_algorithm = %L WHERE id = %L', 'MD5', :n_cred));
+ROLLBACK;
+
+\echo '-- a seed inherits the visibility of the credential it belongs to --'
+-- 0390 and 0460 both had to be told about this column. The check is that they
+-- still are: a seed reachable when the credential holding it is internal-only
+-- would be a way round the flag this project has had to close twice.
+SELECT helm_test.check('secret_node_visible resolves a seed through its credential',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'secret_node_visible')
+  LIKE '%totp_secret_id%');
+
+-- Permanent deletion has to take the seed with the credential; a seed left
+-- behind is live key material nothing references and nothing lists.
+SELECT helm_test.check('permanent deletion covers the TOTP slot',
+  (SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'helm' AND p.proname = 'delete_credential')
+  LIKE '%totp_secret_id%');
+
+\echo ''
 \echo '== All security assertions passed =='
 

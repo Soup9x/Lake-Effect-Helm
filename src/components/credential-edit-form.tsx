@@ -72,6 +72,7 @@ export function CredentialEditForm({
   tags,
   values: initial,
   canEdit,
+  hasTotp = false,
 }: {
   secretId: string;
   /**
@@ -83,6 +84,12 @@ export function CredentialEditForm({
   tags: string[];
   values: CredentialValues;
   canEdit: boolean;
+  /**
+   * Whether a TOTP seed is already attached. Only ever used to choose the
+   * wording and to offer removal — the seed itself never comes near this
+   * component, in either direction.
+   */
+  hasTotp?: boolean;
 }) {
   const router = useRouter();
   const stepUp = useStepUp();
@@ -95,6 +102,8 @@ export function CredentialEditForm({
   // The rotation half. Kept out of `values` so it can never be swept into the
   // metadata PATCH by a future edit to changedFields().
   const [rotating, setRotating] = useState(false);
+  const [editingTotp, setEditingTotp] = useState(false);
+  const [totpSeed, setTotpSeed] = useState('');
   const [newValue, setNewValue] = useState('');
   const [reason, setReason] = useState('');
 
@@ -171,6 +180,77 @@ export function CredentialEditForm({
       body,
       (b) => (b ?? {}) as { version?: number },
     );
+  }
+
+  /**
+   * Store or replace the seed.
+   *
+   * PUT rather than POST: there is one TOTP slot on a credential and this sets
+   * it, whether or not something was there. The route decides between creating a
+   * secret and rotating the existing one — that is its business, not the form's,
+   * and it is the part that keeps one audit chain per slot.
+   */
+  async function attemptTotp() {
+    const response = await fetch(`/api/assets/${nodeId}/totp`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        seed: totpSeed.trim(),
+        ...(reason.trim() ? { reason: reason.trim() } : {}),
+      }),
+    });
+    const body = await response.json().catch(() => null);
+    return toAttemptResult<unknown>(response.ok, response.status, body, (b) => b);
+  }
+
+  async function saveTotp() {
+    setBusy(true);
+    setError(null);
+    setSaved(null);
+    try {
+      const result = await withStepUp(attemptTotp, stepUp.prompt);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      setTotpSeed('');
+      setReason('');
+      setEditingTotp(false);
+      setSaved(
+        hasTotp
+          ? 'The one-time code seed was replaced. The previous one is superseded, not deleted.'
+          : 'The one-time code seed was stored. Codes are generated on the credential page.',
+      );
+      router.refresh();
+    } catch {
+      setError('The request did not reach the server.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeTotp() {
+    setBusy(true);
+    setError(null);
+    setSaved(null);
+    try {
+      const response = await fetch(`/api/assets/${nodeId}/totp`, { method: 'DELETE' });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        setError(
+          (body as { error?: { message?: string } } | null)?.error?.message ??
+            'The seed could not be removed.',
+        );
+        return;
+      }
+      setEditingTotp(false);
+      setSaved('The one-time code seed was detached. Its history is kept for the audit trail.');
+      router.refresh();
+    } catch {
+      setError('The request did not reach the server.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function rotate(event: React.FormEvent) {
@@ -439,6 +519,100 @@ export function CredentialEditForm({
                   onClick={() => {
                     setRotating(false);
                     setNewValue('');
+                    setReason('');
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/*
+          The second factor. A sibling of the rotation block rather than a field
+          in the metadata form above, for the same reason the password is: this
+          writes encrypted material through an audited endpoint, and a PATCH that
+          swept it up with a corrected username would be a very different event
+          wearing the same name.
+        */}
+        <div className="mt-5 border-t border-border pt-4">
+          {!editingTotp ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setEditingTotp(true)}
+              >
+                <KeyRound />
+                {hasTotp ? 'Replace the one-time code seed' : 'Add a one-time code seed'}
+              </Button>
+              {hasTotp && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={removeTotp}
+                >
+                  {busy && <Loader2 className="animate-spin" />}
+                  Remove it
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div>
+                <Label htmlFor="cred-totp">One-time code seed</Label>
+                <Input
+                  id="cred-totp"
+                  value={totpSeed}
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={4096}
+                  placeholder="otpauth://… or a base32 seed"
+                  onChange={(e) => setTotpSeed(e.target.value)}
+                />
+                <FieldHint>
+                  Prefer the otpauth:// URI from the vendor&rsquo;s setup page: it carries
+                  the digit count, period and algorithm, which are not always 6, 30
+                  and SHA1. Checked before anything is stored, so a bad paste is
+                  refused rather than saved.
+                </FieldHint>
+              </div>
+              {hasTotp && (
+                <div>
+                  <Label htmlFor="cred-totp-reason">Why</Label>
+                  <Input
+                    id="cred-totp-reason"
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    placeholder="e.g. re-enrolled after the vendor reset MFA"
+                    maxLength={500}
+                  />
+                  <FieldHint>Recorded against the replacement, like a password rotation.</FieldHint>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy || !totpSeed.trim()}
+                  onClick={saveTotp}
+                >
+                  {busy && <Loader2 className="animate-spin" />}
+                  {hasTotp ? 'Replace' : 'Store'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setEditingTotp(false);
+                    setTotpSeed('');
                     setReason('');
                   }}
                 >

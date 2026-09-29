@@ -110,6 +110,7 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
   const [username, setUsername] = useState('');
   const [url, setUrl] = useState('');
   const [notes, setNotes] = useState('');
+  const [totpSeed, setTotpSeed] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -152,6 +153,10 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
         ...(username.trim() ? { username: username.trim() } : {}),
         ...(url.trim() ? { url: url.trim() } : {}),
         ...(notes.trim() ? { notes: notes.trim() } : {}),
+        // Sent only when filled. The server parses it BEFORE storing anything,
+        // so a mistyped seed refuses the whole request rather than leaving a
+        // credential that claims a second factor it cannot compute.
+        ...(totpSeed.trim() ? { totpSeed: totpSeed.trim() } : {}),
       }),
     });
     const payload = await response.json().catch(() => null);
@@ -353,6 +358,26 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
               placeholder="Optional. Where this is used, what breaks without it."
             />
             <FieldHint>Context, not the credential. Anyone who can see this client reads it.</FieldHint>
+          </div>
+
+          <div>
+            <Label htmlFor="secret-totp">One-time code seed</Label>
+            <Input
+              id="secret-totp"
+              value={totpSeed}
+              onChange={(e) => setTotpSeed(e.target.value)}
+              placeholder="Optional. otpauth://… or a base32 seed"
+              maxLength={4096}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <FieldHint>
+              Paste the otpauth:// URI from the vendor&rsquo;s MFA setup page if there is
+              one — it carries the digit count and period, which are not always the
+              usual 6 and 30. A bare base32 seed works too. Stored encrypted like
+              the credential itself; codes are generated here and the seed is never
+              shown again.
+            </FieldHint>
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">

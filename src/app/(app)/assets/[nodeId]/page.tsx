@@ -11,6 +11,7 @@ import { isWeakStrength, strengthLabel } from '@/lib/ui/strength';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
 import { RevealButton } from '@/components/reveal-button';
+import { TotpPanel } from '@/components/totp-panel';
 import { formatDate, formatDateTime, humanise } from '@/lib/ui/format';
 import { recordView } from '@/lib/workspace/queries';
 import { NotesCard } from '@/components/notes-card';
@@ -34,6 +35,13 @@ interface SecretRow {
   id: string; label: string; kind: string; sensitivity: string;
   requires_reason: boolean; requires_step_up: boolean;
   strength_score: number | null; last_rotated_at: Date | null; rotation_due_at: Date | null;
+}
+
+/** The credential's TOTP enrolment, when it has one. */
+interface TotpRow {
+  totp_secret_id: string;
+  totp_issuer: string | null;
+  totp_account: string | null;
 }
 
 interface ExpiryRow {
@@ -98,14 +106,23 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         WHERE e.from_node_id = ${nodeId}::uuid
         ORDER BY other.name
       `,
+      /*
+       * THE TOTP SEED IS DELIBERATELY NOT IN THIS LIST.
+       *
+       * Every row here renders a RevealButton, which POSTs to
+       * /api/secrets/{id}/reveal and displays the plaintext. For a seed that
+       * plaintext is a permanent code-generating key, and putting it on screen
+       * would hand over every future code for the account with one audit row to
+       * show for it. The seed is surfaced as a live code by TotpPanel instead,
+       * and the reveal route refuses kind 'totp_seed' outright so removing it
+       * here is tidiness rather than the control.
+       */
       tx<SecretRow[]>`
         SELECT m.id, m.label, m.kind::text, m.sensitivity::text, m.requires_reason,
                m.requires_step_up, m.strength_score, m.last_rotated_at, m.rotation_due_at
         FROM v_secret_metadata m
         WHERE m.id IN (
           SELECT c.secret_id FROM credential c WHERE c.id = ${nodeId}::uuid AND c.secret_id IS NOT NULL
-          UNION
-          SELECT c.totp_secret_id FROM credential c WHERE c.id = ${nodeId}::uuid AND c.totp_secret_id IS NOT NULL
           UNION
           SELECT s.private_key_secret_id FROM ssl_certificate s
             WHERE s.id = ${nodeId}::uuid AND s.private_key_secret_id IS NOT NULL
@@ -125,11 +142,34 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       ORDER BY name
     `;
 
-    return { node, detail: detailRows, edges, secrets, expiries, sites };
+    /*
+     * The TOTP enrolment and whether this actor may generate a code.
+     *
+     * The permission is read from the database rather than inferred from the
+     * role key, because role_permission is editable per deployment and a
+     * per-user grant (0480) can add secret:reveal to somebody whose role does
+     * not carry it. Getting this wrong would only change what the page OFFERS —
+     * the code endpoint gates independently — but offering a button that always
+     * refuses is its own kind of wrong.
+     */
+    const [totp] = await tx<TotpRow[]>`
+      SELECT c.totp_secret_id, c.totp_issuer, c.totp_account
+      FROM credential c
+      WHERE c.id = ${nodeId}::uuid AND c.totp_secret_id IS NOT NULL
+    `;
+    const [perm] = await tx<{ allowed: boolean }[]>`
+      SELECT helm.has_permission('secret:reveal') AS allowed
+    `;
+
+    return {
+      node, detail: detailRows, edges, secrets, expiries, sites,
+      totp: totp ?? null,
+      canReveal: perm?.allowed ?? false,
+    };
   });
 
   if (!data) notFound();
-  const { node, detail, edges, secrets, expiries, sites } = data;
+  const { node, detail, edges, secrets, expiries, sites, totp, canReveal } = data;
   const canWrite = !isClientRole(identity.roleKey);
 
   return (
@@ -259,8 +299,8 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           <CardHeader>
             <CardTitle>Credentials</CardTitle>
           </CardHeader>
-          <CardContent className={secrets.length === 0 ? 'p-0' : 'space-y-5'}>
-            {secrets.length === 0 ? (
+          <CardContent className={secrets.length === 0 && !totp ? 'p-0' : 'space-y-5'}>
+            {secrets.length === 0 && !totp ? (
               <EmptyState title="No credentials attached to this asset" />
             ) : (
               secrets.map((secret) => (
@@ -296,6 +336,14 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
                   />
                 </div>
               ))
+            )}
+            {totp && (
+              <TotpPanel
+                nodeId={node.id}
+                issuer={totp.totp_issuer}
+                account={totp.totp_account}
+                canReveal={canReveal}
+              />
             )}
           </CardContent>
         </Card>
@@ -333,11 +381,23 @@ async function detailFor(
   `;
 
   const row = rows[0]?.row ?? {};
-  // Secret *references* are shown elsewhere as a reveal control; listing the id
-  // as a detail field is noise, and inviting someone to copy it is worse.
+  /*
+   * Secret *references* are shown elsewhere as a reveal control; listing the id
+   * as a detail field is noise, and inviting someone to copy it is worse.
+   *
+   * The totp_* parameters go the same way, and they were noise long before
+   * anything could store a seed: credential.totp_algorithm, totp_digits and
+   * totp_period_seconds are NOT NULL with defaults (0070), so EVERY credential
+   * has rendered "Totp algorithm SHA1 · Totp digits 6 · Totp period seconds 30"
+   * whether or not it had a second factor. They describe how to compute a code,
+   * which is TotpPanel's business, and they mean nothing on a credential with no
+   * seed.
+   */
+  const HIDDEN = new Set(['totp_algorithm', 'totp_digits', 'totp_period_seconds', 'totp_issuer', 'totp_account']);
   return Object.fromEntries(
     Object.entries(row).filter(
-      ([key, value]) => value !== null && value !== '' && !key.endsWith('_secret_id'),
+      ([key, value]) =>
+        value !== null && value !== '' && !key.endsWith('_secret_id') && !HIDDEN.has(key),
     ),
   );
 }
