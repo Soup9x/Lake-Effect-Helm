@@ -86,4 +86,54 @@ export const PATCH = tenantRoute(
   { permissions: ['asset:write'] },
 );
 
+/**
+ * DELETE /api/sites/:id — this location is closed.
+ *
+ * A SOFT DELETE, like contacts and for the same reason: `site` carries
+ * deleted_at, there is no archive view for sites and no restore path, so the row
+ * stays and nothing shows it again.
+ *
+ * WHAT HAPPENS TO WHAT WAS AT THIS SITE. Nothing is deleted with it. Every
+ * reference to `site` is ON DELETE SET NULL, and a soft delete does not even
+ * fire those — the assets, contacts and SOPs recorded here keep their rows and
+ * keep pointing at a site that no longer appears, which reads in the interface
+ * as "no site". That is the right outcome (a decommissioned building does not
+ * un-document the switch that was in it) but it is a consequence worth stating,
+ * so the counts come back in the response for the interface to report.
+ */
+export const DELETE = tenantRoute(
+  async ({ tx, params, identity }) => {
+    const siteId = z.guid().safeParse(params.siteId);
+    if (!siteId.success) throw ApiError.invalid('siteId must be a UUID');
+
+    // Counted BEFORE the update, and in the same transaction, so the number
+    // reported is the number that was actually affected.
+    const [counts] = await tx<{ assets: string; contacts: string }[]>`
+      SELECT
+        (SELECT count(*)::text FROM asset_node
+          WHERE site_id = ${siteId.data}::uuid AND archived_at IS NULL) AS assets,
+        (SELECT count(*)::text FROM contact
+          WHERE site_id = ${siteId.data}::uuid AND deleted_at IS NULL) AS contacts
+    `;
+
+    const [row] = await tx<{ id: string; name: string }[]>`
+      UPDATE site
+      SET deleted_at = now(), updated_at = now(), updated_by = ${identity.actorId}::uuid
+      WHERE id = ${siteId.data}::uuid AND deleted_at IS NULL
+      RETURNING id, name
+    `;
+    if (!row) throw ApiError.notFound('no such site');
+
+    return {
+      removed: row.id,
+      name: row.name,
+      orphaned: {
+        assets: Number(counts?.assets ?? 0),
+        contacts: Number(counts?.contacts ?? 0),
+      },
+    };
+  },
+  { permissions: ['asset:write'] },
+);
+
 export const dynamic = 'force-dynamic';
