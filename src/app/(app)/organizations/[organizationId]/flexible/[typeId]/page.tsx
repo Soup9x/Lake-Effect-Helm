@@ -41,6 +41,8 @@ export default async function FlexibleAssetPage({
     `;
     if (!type) return null;
 
+    const [rank] = await tx<{ rank: number }[]>`SELECT helm.current_role_rank() AS rank`;
+
     const rows = await tx<{
       id: string; name: string; status: string; needs_migration: boolean;
       updated_at: Date; updated_by_name: string | null; is_internal_only: boolean;
@@ -60,6 +62,7 @@ export default async function FlexibleAssetPage({
     return {
       org,
       type,
+      actorRoleRank: rank?.rank ?? 0,
       records: rows.map<CategoryRecord>((r) => ({
         id: r.id,
         name: r.name,
@@ -69,6 +72,8 @@ export default async function FlexibleAssetPage({
         internalOnly: r.is_internal_only,
         updatedAt: r.updated_at.toISOString(),
         updatedBy: r.updated_by_name,
+        removeKind: 'node',
+        permissions: { internalOnly: r.is_internal_only },
       })),
     };
   });
@@ -97,6 +102,7 @@ export default async function FlexibleAssetPage({
         total={data.records.length}
         categoryLabel={data.type.name}
         canWrite={canWrite}
+        actorRoleRank={data.actorRoleRank}
       />
     </>
   );

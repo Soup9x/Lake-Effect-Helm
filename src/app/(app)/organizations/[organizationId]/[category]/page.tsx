@@ -48,6 +48,11 @@ export default async function CategoryPage({
     `;
     if (!org) return null;
 
+    // Authoritative, and the same number helm.reveal_secret compares against —
+    // rather than mapping a role key to a rank in the browser.
+    const [rank] = await tx<{ rank: number }[]>`SELECT helm.current_role_rank() AS rank`;
+    const actorRoleRank = rank?.rank ?? 0;
+
     if (category.kind === 'node') {
       /*
        * One query serves every node category, credentials included.
@@ -63,13 +68,21 @@ export default async function CategoryPage({
         updated_at: Date; updated_by_name: string | null;
         username: string | null; url: string | null; has_totp: boolean;
         secret_label: string | null; is_internal_only: boolean;
+        secret_id: string | null; sensitivity: string | null;
+        requires_step_up: boolean | null; requires_reason: boolean | null;
+        min_role_rank: number | null;
       }[]>`
         SELECT n.id, n.name, n.status::text,
                n.updated_at, u.name AS updated_by_name,
                c.username, c.url,
                c.totp_secret_id IS NOT NULL AS has_totp,
                m.label AS secret_label,
-               n.is_internal_only
+               n.is_internal_only,
+               -- The access policy, for the permissions dialog. All five come
+               -- from v_secret_metadata and are NULL on every category that is
+               -- not a credential.
+               m.id::text AS secret_id, m.sensitivity::text, m.requires_step_up,
+               m.requires_reason, m.min_role_rank
         FROM asset_node n
         LEFT JOIN app_user u ON u.id = n.updated_by
         LEFT JOIN credential c ON c.id = n.id
@@ -87,6 +100,7 @@ export default async function CategoryPage({
       `;
       return {
         org,
+        actorRoleRank,
         total: Number(totalRow?.n ?? 0),
         records: rows.map<CategoryRecord>((r) => ({
           id: r.id,
@@ -100,6 +114,21 @@ export default async function CategoryPage({
           externalUrl: r.url,
           updatedAt: r.updated_at.toISOString(),
           updatedBy: r.updated_by_name,
+          removeKind: 'node',
+          permissions: {
+            internalOnly: r.is_internal_only,
+            ...(r.secret_id
+              ? {
+                  secret: {
+                    id: r.secret_id,
+                    sensitivity: (r.sensitivity ?? 'standard') as 'standard' | 'elevated' | 'critical',
+                    requiresStepUp: r.requires_step_up ?? false,
+                    requiresReason: r.requires_reason ?? false,
+                    minRoleRank: r.min_role_rank ?? 40,
+                  },
+                }
+              : {}),
+          },
         })),
       };
     }
@@ -116,6 +145,7 @@ export default async function CategoryPage({
       `;
       return {
         org,
+        actorRoleRank,
         total: rows.length,
         records: rows.map<CategoryRecord>((r) => ({
           id: r.id,
@@ -125,6 +155,8 @@ export default async function CategoryPage({
           extra: r.phone,
           flagged: r.is_primary,
           updatedAt: r.updated_at.toISOString(),
+          // No visibility flag on `contact`, so no permissions action.
+          removeKind: 'contact',
         })),
       };
     }
@@ -141,6 +173,7 @@ export default async function CategoryPage({
       `;
       return {
         org,
+        actorRoleRank,
         total: rows.length,
         records: rows.map<CategoryRecord>((r) => ({
           id: r.id,
@@ -150,6 +183,7 @@ export default async function CategoryPage({
           extra: r.main_phone,
           flagged: r.is_primary,
           updatedAt: r.updated_at.toISOString(),
+          removeKind: 'site',
         })),
       };
     }
@@ -198,6 +232,7 @@ export default async function CategoryPage({
 
     return {
       org,
+      actorRoleRank,
       total: Number(totalRows[0]?.n ?? 0),
       records: [
         ...folders.map<CategoryRecord>((f) => ({
@@ -218,6 +253,8 @@ export default async function CategoryPage({
           internalOnly: d.is_internal_only,
           updatedAt: d.uploaded_at.toISOString(),
           updatedBy: d.uploaded_by_name,
+          removeKind: 'document',
+          permissions: { internalOnly: d.is_internal_only },
         })),
       ],
     };
@@ -318,6 +355,7 @@ export default async function CategoryPage({
         categoryLabel={category.label}
         canWrite={canWrite}
         labels={labels}
+        actorRoleRank={data.actorRoleRank}
       />
     </>
   );

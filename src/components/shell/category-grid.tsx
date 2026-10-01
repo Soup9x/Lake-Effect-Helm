@@ -17,10 +17,11 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Copy, EyeOff, ExternalLink, KeyRound, Check } from 'lucide-react';
+import { Check, Copy, ExternalLink, EyeOff, KeyRound, Lock, Pencil, Trash2 } from 'lucide-react';
 import { FilterToolbar } from './filter-toolbar';
 import { DataTable, type Column, type GridRow } from './data-table';
-import { standardRowActions } from './row-action-icons';
+import { RowRemoveDialog, type RemoveKind } from './row-remove-dialog';
+import { RowPermissionsDialog, type RowPermissions } from './row-permissions-dialog';
 import { Badge } from '../ui/badge';
 import { formatDate } from '@/lib/ui/format';
 import { copyUnaudited } from '@/lib/ui/clipboard';
@@ -43,6 +44,10 @@ export interface CategoryRecord {
   updatedAt?: string | undefined;
   updatedBy?: string | null | undefined;
   folder?: { itemCount: number; itemNoun: string; href: string } | undefined;
+  /** What removing this row actually does. Omitted where it cannot be removed. */
+  removeKind?: RemoveKind | undefined;
+  /** Who can see it. Omitted for rows with no visibility flag — contacts, sites. */
+  permissions?: RowPermissions | undefined;
 }
 
 interface Row extends GridRow {
@@ -103,15 +108,27 @@ export function CategoryGrid({
   categoryLabel,
   canWrite,
   labels,
+  actorRoleRank,
 }: {
   records: readonly CategoryRecord[];
   total: number;
   categoryLabel: string;
   canWrite: boolean;
   labels?: ColumnLabels;
+  /** Caps the minimum-role select in the permissions dialog. */
+  actorRoleRank: number;
 }) {
   const params = useSearchParams();
   const query = params?.get('q') ?? '';
+
+  /*
+   * ONE DIALOG EACH, driven by which row asked for it, rather than a pair per
+   * row. Eighty rows would otherwise mount a hundred and sixty dialogs — all
+   * closed, all holding state — and the Radix portal for each is real work on
+   * every render.
+   */
+  const [removing, setRemoving] = useState<CategoryRecord | null>(null);
+  const [permissioning, setPermissioning] = useState<CategoryRecord | null>(null);
 
   const rows = useMemo<Row[]>(
     () =>
@@ -129,9 +146,22 @@ export function CategoryGrid({
           .toLowerCase(),
         actions: record.folder
           ? []
-          : standardRowActions({
-              ...(canWrite && record.href ? { editHref: record.href } : {}),
-            }),
+          : [
+              ...(canWrite && record.href
+                ? [{ label: 'Edit', icon: Pencil, href: record.href }]
+                : []),
+              // Only where there is a flag to edit: a contact has no visibility
+              // of its own, so offering the control would be offering nothing.
+              ...(canWrite && record.permissions
+                ? [{ label: 'Permissions', icon: Lock, onClick: () => setPermissioning(record) }]
+                : []),
+              ...(canWrite && record.removeKind
+                ? [{
+                    label: 'Remove', icon: Trash2, tone: 'danger' as const,
+                    onClick: () => setRemoving(record),
+                  }]
+                : []),
+            ],
       })),
     [records, canWrite],
   );
@@ -244,6 +274,28 @@ export function CategoryGrid({
         selectable={canWrite}
         emptyMessage={`No ${categoryLabel.toLowerCase()} recorded for this client yet.`}
       />
+
+      {removing?.removeKind && (
+        <RowRemoveDialog
+          rowId={removing.id}
+          rowLabel={removing.name}
+          kind={removing.removeKind}
+          open
+          onOpenChange={(next) => { if (!next) setRemoving(null); }}
+        />
+      )}
+
+      {permissioning?.permissions && (
+        <RowPermissionsDialog
+          rowId={permissioning.id}
+          rowLabel={permissioning.name}
+          kind={permissioning.removeKind === 'document' ? 'document' : 'node'}
+          permissions={permissioning.permissions}
+          actorRoleRank={actorRoleRank}
+          open
+          onOpenChange={(next) => { if (!next) setPermissioning(null); }}
+        />
+      )}
     </>
   );
 }
