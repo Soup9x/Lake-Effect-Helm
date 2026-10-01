@@ -47,7 +47,7 @@
     "ajv-formats": "^3.0.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "^0.45.3",
     "lucide-react": "^1.46.0",
     "next": "^16.3.5",
     "next-auth": "5.0.0-beta.32",
@@ -55,7 +55,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "tailwind-merge": "^3.7.0",
-    "tsx": "^4.20.6",
+    "tsx": "^4.23.15",
     "zod": "^4.1.12"
   },
   "devDependencies": {
