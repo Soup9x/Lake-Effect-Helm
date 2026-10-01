@@ -20,6 +20,17 @@ const button = cva(
         ghost: 'text-ink-muted hover:bg-surface-sunken hover:text-ink',
         danger: 'bg-danger text-on-danger hover:brightness-90',
         link: 'text-brand underline-offset-4 hover:underline',
+        /*
+         * The shell's two action weights, distinct from `primary`.
+         *
+         * `primary` is Lake Effect blue and still marks the primary action
+         * INSIDE a form or dialog. These two are the view-header pair: `cta`
+         * creates a record, `action` does something adjacent to creating one
+         * (import, export). Keeping them separate means a dialog's submit button
+         * and a page's "+ New" are not competing for the same colour.
+         */
+        cta: 'bg-cta text-on-cta hover:bg-cta-hover',
+        action: 'bg-action-secondary text-on-action-secondary hover:bg-action-secondary-hover',
       },
       size: {
         sm: 'h-8 px-3',

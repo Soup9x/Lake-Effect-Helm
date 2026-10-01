@@ -1,112 +1,17 @@
-import Link from 'next/link';
 import type { ReactNode } from 'react';
-import {
-  Building2,
-  CalendarClock,
-  FileDown,
-  KeyRound,
-  LayoutDashboard,
-  ScrollText,
-  Search,
-  Settings,
-  ShieldAlert,
-  Users,
-} from 'lucide-react';
-import { TenantSwitcher } from './tenant-switcher';
-import type { ServerIdentity } from '@/lib/auth/server-identity';
-import { AccountMenu } from './account-menu';
-import { RecentlyViewed } from './recently-viewed';
-import { HelmMark } from './ui/helm-mark';
-import { isClientRole } from '@/lib/ui/roles';
+import { KeyRound, ShieldAlert } from 'lucide-react';
 import { Breadcrumbs, type Crumb } from './ui/breadcrumbs';
 
-interface NavItem {
-  href: string;
-  label: string;
-  icon: typeof LayoutDashboard;
-  /** Hidden when the signed-in role lacks this permission. */
-  permission?: string;
-}
-
-/**
- * Navigation is filtered by ROLE, not by permission checks in the browser.
+/*
+ * AppShell, its NAV table and HIDDEN_FROM_CLIENTS lived here until the IT
+ * Glue-shaped redesign replaced them with src/components/shell/. The chrome is
+ * now a dark global bar of four SCOPES plus an organization drawer, so a flat
+ * list of eight destinations has nowhere to render.
  *
- * Hiding a link is a convenience, never a control: every page independently
- * establishes a tenant context and every query runs under RLS, so typing the
- * URL of a page this role cannot use produces an empty result or a refusal from
- * the database — not a leak. The filter exists so a client's read-only user is
- * not shown five things that will all say "not permitted".
+ * What stayed is everything below: PageHeader, PageBody and EmptyState are used
+ * by eleven pages that the redesign does not touch, and moving them would have
+ * been churn in files with no other reason to change.
  */
-const NAV: NavItem[] = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/organizations', label: 'Clients', icon: Building2 },
-  { href: '/expirations', label: 'Expirations', icon: CalendarClock },
-  { href: '/search', label: 'Search', icon: Search },
-  { href: '/exports', label: 'Exports', icon: FileDown },
-  { href: '/audit', label: 'Audit', icon: ScrollText },
-  { href: '/people', label: 'People', icon: Users },
-  { href: '/settings', label: 'Settings', icon: Settings },
-];
-
-const HIDDEN_FROM_CLIENTS = new Set(['/audit', '/settings', '/people']);
-
-export function AppShell({
-  identity,
-  children,
-}: {
-  identity: ServerIdentity;
-  children: ReactNode;
-}) {
-  const isClient = isClientRole(identity.roleKey);
-  const items = NAV.filter((item) => !(isClient && HIDDEN_FROM_CLIENTS.has(item.href)));
-  const active = identity.memberships.find((m) => m.tenantId === identity.tenantId);
-
-  return (
-    <div className="flex min-h-screen bg-surface">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface-raised">
-        <div className="flex items-center gap-2 px-4 py-4">
-          <HelmMark className="size-7" />
-          <span className="text-sm font-semibold tracking-tight">Helm</span>
-        </div>
-
-        <div className="px-2 pb-2">
-          <TenantSwitcher memberships={identity.memberships} activeTenantId={identity.tenantId} />
-        </div>
-
-        <nav className="flex-1 space-y-0.5 px-2 py-2">
-          {items.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-ink-muted hover:bg-surface-sunken hover:text-ink"
-            >
-              <item.icon className="size-4 shrink-0" aria-hidden />
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* The account lives top right, where every other tool an MSP uses all
-            day puts it. Slim on purpose: each page renders its own header
-            underneath, and two tall bars stacked is how a dashboard loses the
-            screen it is meant to be showing. */}
-        <header className="flex h-12 shrink-0 items-center justify-end gap-1 border-b border-border bg-surface-raised px-4">
-          <RecentlyViewed />
-          <AccountMenu
-            name={identity.name}
-            email={identity.email}
-            roleName={active?.roleName ?? identity.roleKey}
-            isClient={isClient}
-          />
-        </header>
-
-        <main className="min-w-0 flex-1">{children}</main>
-      </div>
-    </div>
-  );
-}
 
 /**
  * Every page's header, and therefore the one place breadcrumbs belong.
