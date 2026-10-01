@@ -32,7 +32,8 @@ RUN pnpm install --frozen-lockfile
 # a security question rather than a size one. A full install puts vitest,
 # drizzle-kit, typescript, esbuild and every @types package next to those
 # credentials — 105 packages that exist to build and test the product, not to
-# run it, and two of which currently carry advisories.
+# run it. They carry no advisories at HEAD, and the audit job is a gate that
+# keeps it that way; this stage is what makes a future one not a shipped one.
 #
 # `tsx` is a production dependency for exactly this reason: the migrate, bootstrap
 # and key-rotation entry points are TypeScript executed directly, so tsx is not

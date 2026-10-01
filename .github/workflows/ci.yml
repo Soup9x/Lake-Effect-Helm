@@ -399,23 +399,41 @@ jobs:
         run: sudo docker compose down -v --remove-orphans || true
 
   # ---------------------------------------------------------------------------
-  # Advisory. Non-blocking on purpose — see the note below.
+  # Blocking. `pnpm audit --audit-level moderate` reports nothing at HEAD.
   # ---------------------------------------------------------------------------
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
-    # Non-blocking, and the reason is specific rather than habitual. The
-    # remaining findings are all in DEV tooling — vitest and the esbuild that
-    # drizzle-kit pulls in — and neither ships: the runtime image carries only
-    # the traced server output, and the migrate image installs with --prod.
-    # Neither has a fix inside its pinned major, and vitest 5 does not honour
-    # this suite's fileParallelism setting, so every integration file races for
-    # the same database.
+    # This job carried continue-on-error from the day it was written, on the
+    # stated understanding that the findings were "all in DEV tooling". That
+    # stopped being true without anyone noticing, which is the whole argument
+    # against annotating a red job instead of clearing it: an advisory against
+    # a SHIPPED dependency arrives into a job that is already red and changes
+    # nothing. A critical RCE in next/og (GHSA-vcvr-r3jv-pc5j) sat here behind
+    # that annotation, next to a moderate in fast-uri, which ajv pulls into the
+    # flexible-asset validator and which therefore ships too.
     #
-    # Anything that reaches a shipped artifact is a different matter and should
-    # be fixed rather than annotated. When the dev-only findings clear, drop
-    # continue-on-error and this becomes a gate.
-    continue-on-error: true
+    # All five findings are now cleared at the root, so the exemption is gone:
+    #
+    #   next       16.3.5 -> 16.3.8   CRITICAL, shipped
+    #   fast-uri   3.1.7  -> 3.1.8    via ajv, shipped
+    #   vitest     3.2.7  -> 4.1.11   dev; 4.1.11 IS the patched version, and
+    #                                 it honours fileParallelism (verified: 35
+    #                                 integration files, zero overlapping
+    #                                 execution windows). The old note rejected
+    #                                 vitest 5, which was never what the
+    #                                 advisory asked for.
+    #   esbuild    0.18.20 pinned out by a scoped pnpm override; drizzle-kit
+    #              still depends on the deprecated @esbuild-kit/esm-loader, so
+    #              upgrading drizzle-kit does not clear it.
+    #
+    # A gate here can go red with no change to this repo, because advisories
+    # are published against code that was already committed. That is the point.
+    # next 16.3.6 carried the fix for the critical on 2026-09-22 and this repo
+    # was still on 16.3.5 nine days later, because a job that is always red
+    # tells you nothing on the day it starts being right. When one lands, fix
+    # it or re-exempt it DELIBERATELY, naming the advisory and why it cannot
+    # reach a shipped artifact.
     steps:
       - uses: actions/checkout@v7
 
