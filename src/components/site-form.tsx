@@ -46,14 +46,33 @@ export interface SiteFormProps {
   organizationId: string;
   /** Present means edit. Absent means create. */
   site?: { id: string; values: SiteValues };
+  /*
+   * CONTROLLED OPEN, OPTIONAL. Passing open/onOpenChange lets a parent drive this
+   * form and suppresses its own trigger — which is how the redesigned view
+   * header's single green "+ New" opens it. Left out, nothing changes for the
+   * existing call sites on the organisation page.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function SiteForm({ organizationId, site }: SiteFormProps) {
+export function SiteForm({
+  organizationId,
+  site,
+  open: controlledOpen,
+  // Renamed: this file already has a local onOpenChange that does the discard.
+  onOpenChange: onOpenChangeProp,
+}: SiteFormProps) {
   const router = useRouter();
   const editing = site !== undefined;
   const initial = site?.values ?? BLANK;
 
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = (next: boolean) => {
+    setUncontrolledOpen(next);
+    onOpenChangeProp?.(next);
+  };
   const [values, setValues] = useState<SiteValues>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,22 +142,25 @@ export function SiteForm({ organizationId, site }: SiteFormProps) {
 
   return (
     <>
-      {editing ? (
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setOpen(true)}
-          aria-label={`Edit ${initial.name}`}
-          title="Edit this site"
-        >
-          <Pencil />
-        </Button>
-      ) : (
-        <Button variant="secondary" size="sm" onClick={() => setOpen(true)} className="gap-2">
-          <Plus />
-          Add a site
-        </Button>
-      )}
+      {/* Suppressed entirely when a parent drives the dialog: both triggers,
+          the edit pencil and the add button, belong to the uncontrolled mode. */}
+      {controlledOpen === undefined &&
+        (editing ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setOpen(true)}
+            aria-label={`Edit ${initial.name}`}
+            title="Edit this site"
+          >
+            <Pencil />
+          </Button>
+        ) : (
+          <Button variant="secondary" size="sm" onClick={() => setOpen(true)} className="gap-2">
+            <Plus />
+            Add a site
+          </Button>
+        ))}
 
       <Modal
         open={open}

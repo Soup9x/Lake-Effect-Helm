@@ -74,10 +74,30 @@ const CREDENTIAL_TYPES = [
   ['shared_mailbox', 'Shared mailbox'],
 ] as const;
 
-export function NewSecretForm({ organizationId }: { organizationId: string }) {
+/*
+ * CONTROLLED OPEN, OPTIONAL. Passing `open`/`onOpenChange` lets a parent drive
+ * this form and suppresses its own trigger button — which is how the redesigned
+ * view header's single green "+ New" opens whichever form the current category
+ * needs. Left out, the form keeps its own button and its own state exactly as
+ * before, so every existing call site is untouched.
+ */
+export function NewSecretForm({
+  organizationId,
+  open: controlledOpen,
+  onOpenChange,
+}: {
+  organizationId: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const router = useRouter();
   const stepUp = useStepUp();
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = (next: boolean) => {
+    setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
   const [label, setLabel] = useState('');
   const [value, setValue] = useState('');
   const [sensitivity, setSensitivityState] = useState('standard');
@@ -195,10 +215,12 @@ export function NewSecretForm({ organizationId }: { organizationId: string }) {
   return (
     <>
       {stepUp.dialog}
-      <Button variant="primary" onClick={() => setOpen(true)} className="gap-2">
+      {controlledOpen === undefined && (
+        <Button variant="primary" onClick={() => setOpen(true)} className="gap-2">
         <Plus />
         Store a credential
       </Button>
+      )}
 
       <Modal
         open={open}
