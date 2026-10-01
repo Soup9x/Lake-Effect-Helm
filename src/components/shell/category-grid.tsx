@@ -19,6 +19,7 @@ import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Check, Copy, ExternalLink, EyeOff, KeyRound, Lock, Pencil, Trash2 } from 'lucide-react';
 import { FilterToolbar } from './filter-toolbar';
+import { ColumnMenu, useHiddenColumns, type ColumnChoice } from './column-menu';
 import { DataTable, type Column, type GridRow } from './data-table';
 import { RowRemoveDialog, type RemoveKind } from './row-remove-dialog';
 import { RowPermissionsDialog, type RowPermissions } from './row-permissions-dialog';
@@ -109,6 +110,7 @@ export function CategoryGrid({
   canWrite,
   labels,
   actorRoleRank,
+  columnScope,
 }: {
   records: readonly CategoryRecord[];
   total: number;
@@ -117,6 +119,8 @@ export function CategoryGrid({
   labels?: ColumnLabels;
   /** Caps the minimum-role select in the permissions dialog. */
   actorRoleRank: number;
+  /** Namespaces the viewer's column choice. One per category. */
+  columnScope: string;
 }) {
   const params = useSearchParams();
   const query = params?.get('q') ?? '';
@@ -127,6 +131,8 @@ export function CategoryGrid({
    * closed, all holding state — and the Radix portal for each is real work on
    * every render.
    */
+  const { hidden, toggle, reset } = useHiddenColumns(columnScope);
+
   const [removing, setRemoving] = useState<CategoryRecord | null>(null);
   const [permissioning, setPermissioning] = useState<CategoryRecord | null>(null);
 
@@ -264,12 +270,26 @@ export function CategoryGrid({
     return rows.filter((r) => (r.search ?? '').includes(needle)).length;
   }, [rows, query]);
 
+  /* The identity column is not hideable — see ColumnMenu. */
+  const choices: ColumnChoice[] = columns.map((c, i) => ({
+    key: c.key,
+    header: c.header,
+    hideable: i > 0,
+  }));
+
   return (
     <>
-      <FilterToolbar shown={shown} total={total} />
+      <FilterToolbar
+        shown={shown}
+        total={total}
+        columnMenu={
+          <ColumnMenu columns={choices} hidden={hidden} onToggle={toggle} onReset={reset} />
+        }
+      />
       <DataTable
         rows={rows}
         columns={columns}
+        hiddenColumns={hidden}
         query={query}
         selectable={canWrite}
         emptyMessage={`No ${categoryLabel.toLowerCase()} recorded for this client yet.`}
