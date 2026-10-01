@@ -103,6 +103,7 @@ export default async function FlexibleAssetPage({
         categoryLabel={data.type.name}
         canWrite={canWrite}
         actorRoleRank={data.actorRoleRank}
+        columnScope={`flexible:${typeId}`}
       />
     </>
   );

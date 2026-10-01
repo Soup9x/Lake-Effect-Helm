@@ -40,6 +40,23 @@ export default async function CategoryPage({
   if (!category) notFound();
 
   const includeArchived = search.archived === '1';
+  /*
+   * WHICH SET OF RECORDS, and the tab labels changed to match what Helm can
+   * actually express.
+   *
+   * These tabs said "Shared / Personal", borrowed from IT Glue, where Personal
+   * means a vault only you can open. Helm has no such thing — no per-user
+   * ownership, no personal vault, nothing in the schema that makes a record
+   * private to one technician. Leaving the label would have been the worst kind
+   * of wrong in a credential vault: somebody would reasonably read "Personal" as
+   * "only I can see this" and file a client's domain admin password there.
+   *
+   * What Helm DOES have is is_internal_only, which 0390 enforces through RLS —
+   * a client-side role does not see the row at all. That is a real and useful
+   * split for an MSP ("what can this customer see?"), so the tabs now say what
+   * they filter on.
+   */
+  const view = search.view === 'internal' ? 'internal' : search.view === 'shared' ? 'shared' : 'all';
   const identity = await getServerIdentity();
 
   const data = await withTenant(actorOf(identity), async (tx) => {
@@ -90,18 +107,37 @@ export default async function CategoryPage({
         WHERE n.organization_id = ${organizationId}::uuid
           AND n.node_type = ${category.source}::node_type
           ${includeArchived ? tx`` : tx`AND n.archived_at IS NULL`}
+          ${view === 'all' ? tx`` : tx`AND n.is_internal_only = ${view === 'internal'}`}
         ORDER BY n.name
         LIMIT 500
       `;
-      const [totalRow] = await tx<{ n: string }[]>`
-        SELECT count(*)::text AS n FROM asset_node
+      /*
+       * Both tab counts and the grand total in one pass. FILTER rather than
+       * three statements: the drawer already costs a query per page.
+       *
+       * It carries the SAME archived predicate as the list above, deliberately.
+       * Count every row regardless and "Include archived" would read "12 of 9";
+       * count only live rows and the archived view would read the same. The two
+       * numbers in "X of Y" have to be drawn from one population to mean
+       * anything, and the tab counts have to match what their tab will list.
+       */
+      const [totalRow] = await tx<{ n: string; shared: string; internal: string }[]>`
+        SELECT count(*)::text AS n,
+               count(*) FILTER (WHERE NOT is_internal_only)::text AS shared,
+               count(*) FILTER (WHERE is_internal_only)::text     AS internal
+        FROM asset_node
         WHERE organization_id = ${organizationId}::uuid
           AND node_type = ${category.source}::node_type
+          ${includeArchived ? tx`` : tx`AND archived_at IS NULL`}
       `;
       return {
         org,
         actorRoleRank,
         total: Number(totalRow?.n ?? 0),
+        tabCounts: {
+          shared: Number(totalRow?.shared ?? 0),
+          internal: Number(totalRow?.internal ?? 0),
+        },
         records: rows.map<CategoryRecord>((r) => ({
           id: r.id,
           name: r.name,
@@ -223,10 +259,13 @@ export default async function CategoryPage({
         ORDER BY a.filename
         LIMIT 500
       `,
+      // Same archived predicate as the list, for the reason given on the node
+      // branch above: "X of Y" is only readable if both come from one population.
       tx<{ n: string }[]>`
         SELECT count(*)::text AS n FROM attachment
         WHERE organization_id = ${organizationId}::uuid
           AND is_document AND deleted_at IS NULL
+          ${includeArchived ? tx`` : tx`AND archived_at IS NULL`}
       `,
     ]);
 
@@ -278,12 +317,6 @@ export default async function CategoryPage({
     : [];
   const base = `/organizations/${organizationId}`;
 
-  /*
-   * Shared / Personal exists only where Helm has a real distinction to draw.
-   * Passwords do: a credential is either client-visible or MSP-internal. Adding
-   * the tabs everywhere would be a control with one option on every other
-   * category.
-   */
   const importSpec = importSpecFor(category.slug);
   /*
    * SOPs are the one category with no create path: 'sop' is not in the assets
@@ -292,11 +325,22 @@ export default async function CategoryPage({
    */
   const canCreate = category.source !== 'sop' && category.source !== 'attachment';
 
+  /*
+   * Offered on every category whose rows carry is_internal_only — which is every
+   * node category. Restricting it to Passwords would have been arbitrary: "what
+   * can this client see?" is as live a question about their firewall as about
+   * their registrar login.
+   *
+   * Hidden entirely when nothing is internal-only, because a split with one
+   * populated side is a control that only ever says the same thing.
+   */
+  const counts = 'tabCounts' in data ? data.tabCounts : null;
   const tabs =
-    category.slug === 'passwords'
+    category.kind === 'node' && counts && counts.internal > 0
       ? [
-          { href: `${base}/passwords`, label: 'Shared' },
-          { href: `${base}/passwords?mine=1`, label: 'Personal' },
+          { href: `${base}/${category.slug}`, label: 'All', count: counts.shared + counts.internal },
+          { href: `${base}/${category.slug}?view=shared`, label: 'Shared with client', count: counts.shared },
+          { href: `${base}/${category.slug}?view=internal`, label: 'Internal only', count: counts.internal },
         ]
       : [];
 
@@ -347,15 +391,25 @@ export default async function CategoryPage({
       />
       <TabNav
         tabs={tabs}
-        activeHref={search.mine === '1' ? `${base}/passwords?mine=1` : `${base}/passwords`}
+        activeHref={view === 'all' ? `${base}/${category.slug}` : `${base}/${category.slug}?view=${view}`}
       />
       <CategoryGrid
         records={data.records}
-        total={data.total}
+        /*
+         * The denominator in "3 of 4" is the rows in THIS view, not in the
+         * category. On the Internal only tab, "3 of 12" would be comparing a
+         * filtered count against a total the tab is deliberately excluding.
+         */
+        total={
+          counts && view !== 'all'
+            ? (view === 'internal' ? counts.internal : counts.shared)
+            : data.total
+        }
         categoryLabel={category.label}
         canWrite={canWrite}
         labels={labels}
         actorRoleRank={data.actorRoleRank}
+        columnScope={category.slug}
       />
     </>
   );

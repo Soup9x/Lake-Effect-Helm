@@ -14,8 +14,8 @@
  */
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Columns3, Search } from 'lucide-react';
-import { cn } from '@/lib/ui/cn';
+import { Search } from 'lucide-react';
+import type { ReactNode } from 'react';
 
 export interface FilterToolbarProps {
   /** Rows after filtering, and rows in total: the "X of Y" readout. */
@@ -24,7 +24,12 @@ export interface FilterToolbarProps {
   placeholder?: string;
   /** Hidden where the underlying table has no archive flag. */
   showArchivedToggle?: boolean;
-  onOpenColumns?: (() => void) | undefined;
+  /**
+   * The column control, passed in rather than configured here. It owns its own
+   * persisted state and this bar owns the URL — keeping the two apart is what
+   * stops a column choice leaking into a link somebody pastes.
+   */
+  columnMenu?: ReactNode;
 }
 
 const DEBOUNCE_MS = 250;
@@ -34,7 +39,7 @@ export function FilterToolbar({
   total,
   placeholder = 'Filter columns or Search keywords...',
   showArchivedToggle = true,
-  onOpenColumns,
+  columnMenu,
 }: FilterToolbarProps) {
   const router = useRouter();
   const pathname = usePathname() ?? '';
@@ -99,19 +104,7 @@ export function FilterToolbar({
         {shown} of {total}
       </span>
 
-      <button
-        type="button"
-        onClick={onOpenColumns}
-        disabled={!onOpenColumns}
-        title="Choose columns"
-        aria-label="Choose columns"
-        className={cn(
-          'ml-auto flex size-8 shrink-0 items-center justify-center rounded-md border border-canvas-border text-ink-muted transition-colors',
-          onOpenColumns ? 'hover:bg-surface-sunken hover:text-ink' : 'opacity-40',
-        )}
-      >
-        <Columns3 className="size-4" aria-hidden />
-      </button>
+      <span className="ml-auto">{columnMenu}</span>
     </div>
   );
 }

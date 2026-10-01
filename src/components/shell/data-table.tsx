@@ -52,6 +52,7 @@ export function DataTable<T extends GridRow>({
   selectable = false,
   emptyMessage = 'Nothing here yet.',
   onSelectionChange,
+  hiddenColumns,
 }: {
   rows: readonly T[];
   columns: readonly Column<T>[];
@@ -60,7 +61,20 @@ export function DataTable<T extends GridRow>({
   selectable?: boolean;
   emptyMessage?: string;
   onSelectionChange?: ((ids: string[]) => void) | undefined;
+  /** Column keys the viewer has turned off. The first column is never in here. */
+  hiddenColumns?: ReadonlySet<string> | undefined;
 }) {
+  /*
+   * Hidden columns are filtered out HERE rather than at every use below, so the
+   * header, the body and the folder row's colSpan all agree. A folder spanning
+   * the original column count while the body renders fewer is how a table
+   * silently loses its alignment.
+   */
+  const visible = useMemo(
+    () => (hiddenColumns ? columns.filter((c) => !hiddenColumns.has(c.key)) : columns),
+    [columns, hiddenColumns],
+  );
+
   const [sort, setSort] = useState<{ key: string; direction: Direction } | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 
@@ -72,6 +86,8 @@ export function DataTable<T extends GridRow>({
 
   const sorted = useMemo(() => {
     if (!sort) return filtered;
+    // Looked up in the full list: a sort stays applied if the column it sorts
+    // by is hidden, rather than silently reverting to creation order.
     const column = columns.find((c) => c.key === sort.key);
     if (!column?.sortBy) return filtered;
     const { sortBy } = column;
@@ -139,7 +155,7 @@ export function DataTable<T extends GridRow>({
             <th scope="col" className={cn('w-8 py-2 pr-1', selectable ? 'pl-0' : 'pl-6')}>
               <span className="sr-only">Flag</span>
             </th>
-            {columns.map((column) => (
+            {visible.map((column) => (
               <th
                 key={column.key}
                 scope="col"
@@ -190,7 +206,7 @@ export function DataTable<T extends GridRow>({
           {sorted.length === 0 ? (
             <tr>
               <td
-                colSpan={columns.length + (selectable ? 3 : 2)}
+                colSpan={visible.length + (selectable ? 3 : 2)}
                 className="px-6 py-10 text-center text-sm text-ink-muted"
               >
                 {emptyMessage}
@@ -229,7 +245,7 @@ export function DataTable<T extends GridRow>({
                    * column having to answer "what does this mean for a folder",
                    * and the answer is almost always nothing.
                    */
-                  <td colSpan={columns.length} className="px-3 py-2">
+                  <td colSpan={visible.length} className="px-3 py-2">
                     <a
                       href={row.folder.href}
                       className="inline-flex items-center gap-2 font-medium text-ink hover:underline"
@@ -248,7 +264,7 @@ export function DataTable<T extends GridRow>({
                     </a>
                   </td>
                 ) : (
-                  columns.map((column) => (
+                  visible.map((column) => (
                     <td
                       key={column.key}
                       className={cn(
