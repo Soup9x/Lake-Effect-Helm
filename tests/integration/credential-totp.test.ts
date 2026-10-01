@@ -4,9 +4,14 @@
  * The property that matters most here is a negative one: the seed must never
  * reach a client. It is a permanent code-generating key, so a single leak hands
  * over every future code for the account with nothing in the audit log after the
- * first. Three tests below exist purely to assert that it does not — through the
- * store response, through the code response, and through the generic reveal
+ * first. Several tests below exist purely to assert that it does not — through
+ * the store response, through the code response, and through the generic reveal
  * route a browser could call directly.
+ *
+ * The last describe block also pins the AUDIT side of that, which 0590 fixed:
+ * refusing the seed is not enough if the refusal is recorded as a successful
+ * reveal, because then the log cannot distinguish an attempt to steal the key
+ * from ordinary use of the feature.
  */
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -69,11 +74,12 @@ async function storedSeed(totpSecretId: string): Promise<string> {
   } finally {
     await sql.end({ timeout: 5 });
   }
-  // Through the service, which is the only thing that can decrypt it.
+  // Through the service, which is the only thing that can decrypt it, and with
+  // the only purpose a seed is readable under — see 0590.
   const revealed = await h.secrets.reveal(
     { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' },
     totpSecretId,
-    { purpose: 'view' },
+    { purpose: 'totp' },
   );
   try {
     return revealed.value.expose();
@@ -329,8 +335,10 @@ describe('generating a code', () => {
 
     const sql = superuserSql();
     try {
-      const rows = await sql<{ action: string; entity_id: string }[]>`
-        SELECT action, entity_id::text FROM audit_log
+      const rows = await sql<
+        { action: string; entity_id: string; metadata: { purpose?: string } | null }[]
+      >`
+        SELECT action, entity_id::text, metadata FROM audit_log
         WHERE event_uid IN (${first.auditEventUid as string}::uuid,
                             ${second.auditEventUid as string}::uuid)
       `;
@@ -338,6 +346,13 @@ describe('generating a code', () => {
       for (const row of rows) {
         expect(row.action).toBe('secret.revealed');
         expect(row.entity_id).toBe(created.totpSecretId);
+        /*
+         * purpose 'totp', which is what makes this row mean something. Before
+         * 0590 it read 'view' — the same as the row a REFUSED attempt to pull
+         * the raw seed through /api/secrets/{id}/reveal left behind, so the two
+         * were indistinguishable in the log. This is the distinction.
+         */
+        expect(row.metadata?.purpose).toBe('totp');
       }
     } finally {
       await sql.end({ timeout: 5 });
@@ -422,66 +437,189 @@ describe('the seed is not revealable through the browser door', () => {
       secretParams(created.totpSecretId!),
     );
     expect(seed.status).toBe(403);
-    const refused = JSON.stringify(await body(seed));
-    expect(refused).not.toContain(RFC_SEED);
+    const refused = await body(seed);
+    expect(JSON.stringify(refused)).not.toContain(RFC_SEED);
+
+    /*
+     * The wire contract, pinned. 0590 moved the refusal from the route into
+     * reveal_secret, and the status and message are deliberately unchanged by
+     * that move — the UI reads the message. What the move ADDS is
+     * auditEventUid, which every other denial on this route already carried and
+     * this one could not: the route had no audit row to cite, because it was
+     * refusing something the database had just approved.
+     */
+    const error = refused.error as {
+      code: string;
+      message: string;
+      details?: { auditEventUid?: string };
+    };
+    expect(error.code).toBe('forbidden');
+    expect(error.message).toBe(
+      'a TOTP seed cannot be read directly — request the current code instead',
+    );
+    expect(error.details?.auditEventUid).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   /*
-   * The attempt is still audited. Refusing after the reveal rather than before
-   * means somebody probing for seeds through the browser route leaves a trail,
-   * which is worth more than saving one decryption.
+   * THE AUDIT-FIDELITY TEST, and the reason 0590 exists.
+   *
+   * The refusal always worked. What did not work was the record of it: the route
+   * refused AFTER helm.reveal_secret had granted the read and written
+   * `secret.revealed` / success, so an attempt to walk off with a permanent
+   * code-generating key produced the same audit row as a technician glancing at
+   * a code. An auditor had no way to tell them apart, which makes the log
+   * useless for exactly the event it is there to catch.
+   *
+   * Now the rule is a rung in reveal_secret's own ladder: one row, named, and no
+   * success row to explain away.
    */
-  it('records the attempt rather than silently turning it away', async () => {
+  it('records the refusal as a refusal, not as a successful reveal', async () => {
     asUser(IDS.admin1, 'admin@northwind.test');
     const created = await makeCredential('Audited refusal', { totpSeed: RFC_SEED });
 
-    const before = await countReveals(created.totpSecretId!);
-    expect((await revealSecret(
+    const revealsBefore = await countAudit(created.totpSecretId!, 'secret.revealed');
+    const deniedBefore = await countAudit(created.totpSecretId!, 'secret.reveal_denied');
+
+    const response = await revealSecret(
       request('POST', { purpose: 'view' }),
       secretParams(created.totpSecretId!),
-    )).status).toBe(403);
-    expect(await countReveals(created.totpSecretId!)).toBe(before + 1);
+    );
+    expect(response.status).toBe(403);
+
+    // A denial was recorded...
+    expect(await countAudit(created.totpSecretId!, 'secret.reveal_denied')).toBe(deniedBefore + 1);
+    // ...and no success was, which is the half that used to be wrong.
+    expect(await countAudit(created.totpSecretId!, 'secret.revealed')).toBe(revealsBefore);
+
+    const [row] = await auditRows(created.totpSecretId!, 'secret.reveal_denied');
+    expect(row!.outcome).toBe('denied');
+    expect(row!.metadata?.cause).toBe('seed_not_directly_revealable');
+    expect(row!.metadata?.purpose).toBe('view');
   });
 
   /*
-   * The refusal is in the ROUTE, not in the service or the database — and that
-   * distinction is the design, not an accident of where the check landed.
-   *
-   * The offboarding export has to emit seeds: a client taking their accounts back
-   * cannot re-enrol without them. That path calls SecretService.reveal from the
-   * export worker and never passes through the HTTP route, so blocking the
-   * browser door must not also block it. (The export's own 'export' purpose is
-   * granted only inside a live export job, which is why this asserts the service
-   * is reachable at all rather than driving a whole export.)
+   * And the two events are now distinguishable by the one field that separates
+   * them. This is what an auditor would actually run.
    */
-  it('still lets a server-side caller read one', async () => {
+  it('leaves a log an auditor can separate', async () => {
     asUser(IDS.admin1, 'admin@northwind.test');
-    const created = await makeCredential('Exportable', { totpSeed: RFC_SEED });
+    const created = await makeCredential('Separable', { totpSeed: RFC_SEED });
 
-    const revealed = await h.secrets.reveal(
-      { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' },
-      created.totpSecretId!,
-      { purpose: 'view' },
-    );
+    await postCode(request('POST', {}), nodeParams(created.credentialId));
+    await revealSecret(request('POST', { purpose: 'view' }), secretParams(created.totpSecretId!));
+
+    const sql = superuserSql();
     try {
-      // Decodes to the bytes the vendor enrolled, which is what makes an
-      // offboarding bundle usable.
+      const rows = await sql<{ action: string; outcome: string; purpose: string | null }[]>`
+        SELECT action, outcome::text, metadata->>'purpose' AS purpose
+        FROM audit_log
+        WHERE entity_id = ${created.totpSecretId!}::uuid
+          AND action IN ('secret.revealed', 'secret.reveal_denied')
+        -- By action, not by time. Both rows can land in the same occurred_at
+        -- tick, and then a chronological order is decided by the tiebreak rather
+        -- than by what happened — a flake waiting for a fast machine. What this
+        -- asserts is that the two events are separable, which does not depend on
+        -- which came first.
+        ORDER BY action
+      `;
+      expect(rows).toEqual([
+        { action: 'secret.reveal_denied', outcome: 'denied', purpose: 'view' },
+        { action: 'secret.revealed', outcome: 'success', purpose: 'totp' },
+      ]);
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  /*
+   * THE RULE IS IN THE DATABASE, not in the route, and that is the point of
+   * moving it. A route check binds one door; a rung in reveal_secret binds every
+   * caller — a worker, a service account, and whatever is added next.
+   *
+   * Before 0590 this same call succeeded, because the service was deliberately
+   * left open and only the HTTP route refused.
+   */
+  it('refuses a server-side caller too, purpose being the whole gate', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const created = await makeCredential('Service-side', { totpSeed: RFC_SEED });
+    const actor = { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' as const };
+
+    await expect(
+      h.secrets.reveal(actor, created.totpSecretId!, { purpose: 'view' }),
+    ).rejects.toMatchObject({ reason: 'seed_not_directly_revealable' });
+
+    // ...and the purpose that names the legitimate use is granted.
+    const revealed = await h.secrets.reveal(actor, created.totpSecretId!, { purpose: 'totp' });
+    try {
       expect(base32Decode(revealed.value.expose())).toEqual(RFC_SEED_BYTES);
     } finally {
       revealed.value.dispose();
     }
   });
+
+  /*
+   * The inverse rung. Without it 'totp' would be a purpose any caller could
+   * attach to a password reveal, and reading a domain admin password would leave
+   * a row that reads like somebody checking an MFA code — the same confusion
+   * 0590 set out to remove, pointed the other way.
+   */
+  it('refuses the totp purpose on something that is not a seed', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const created = await makeCredential('Not a seed', { totpSeed: RFC_SEED });
+    const actor = { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' as const };
+
+    await expect(
+      h.secrets.reveal(actor, created.secretId, { purpose: 'totp' }),
+    ).rejects.toMatchObject({ reason: 'not_a_totp_seed' });
+  });
+
+  /*
+   * THE EXPORT EXCEPTION IS STILL A GATE, not a hole.
+   *
+   * A seed is readable under purpose 'export' because a client taking their
+   * accounts back cannot re-enrol without it. That purpose was already gated on
+   * secret:export AND the secret belonging to a live export job, and 0590 must
+   * not have turned it into a way around the new rung: asking for 'export'
+   * outside a live job is refused for that reason, not granted.
+   */
+  it('does not let the export purpose become the way around it', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const created = await makeCredential('No live export', { totpSeed: RFC_SEED });
+    const actor = { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' as const };
+
+    await expect(
+      h.secrets.reveal(actor, created.totpSecretId!, { purpose: 'export' }),
+    ).rejects.toMatchObject({ reason: 'not_in_a_live_export' });
+  });
 });
 
-async function countReveals(secretId: string): Promise<number> {
+/** Audit rows for one secret and action, newest first. */
+async function auditRows(
+  secretId: string,
+  action: string,
+): Promise<{ outcome: string; metadata: { cause?: string; purpose?: string } | null }[]> {
+  const sql = superuserSql();
+  try {
+    return await sql<{ outcome: string; metadata: { cause?: string; purpose?: string } | null }[]>`
+      SELECT outcome::text, metadata FROM audit_log
+      WHERE entity_id = ${secretId}::uuid AND action = ${action}
+      ORDER BY occurred_at DESC
+    `;
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+async function countAudit(secretId: string, action: string): Promise<number> {
   const sql = superuserSql();
   try {
     const [row] = await sql<{ n: string }[]>`
       SELECT count(*)::text AS n FROM audit_log
-      WHERE entity_id = ${secretId}::uuid AND action = 'secret.revealed'
+      WHERE entity_id = ${secretId}::uuid AND action = ${action}
     `;
     return Number(row!.n);
   } finally {
     await sql.end({ timeout: 5 });
   }
 }
+

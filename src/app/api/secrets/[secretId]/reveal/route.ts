@@ -53,28 +53,48 @@ export const POST = tenantRoute(
     );
 
     /*
-     * A TOTP SEED IS NOT REVEALABLE HERE, and the reason is the whole point of
-     * the feature.
+     * A TOTP SEED IS NOT REVEALABLE HERE, and by 0590 this is no longer the
+     * check that enforces it.
      *
      * The seed is a code-generating key with an unbounded lifetime. Handing it
      * to a browser means every future code for that account can be computed off
      * the record, by anything that scraped the response, forever — which makes
-     * the secret:reveal gate on the code endpoint decorative. So this route,
-     * the one a browser can reach, refuses; POST /api/assets/{nodeId}/totp/code
-     * generates the code server-side and returns six digits.
+     * the secret:reveal gate on the code endpoint decorative. POST
+     * /api/assets/{nodeId}/totp/code generates the code server-side and returns
+     * six digits.
      *
-     * Refused AFTER the reveal, deliberately. The audit row is already written,
-     * so an attempt to pull a seed through the browser door is recorded rather
-     * than silently turned away — and the plaintext is disposed below either
-     * way.
+     * That rule now lives in helm.reveal_secret, which refuses a seed under any
+     * purpose but 'totp', 'export' and 'rotation'. So the ordinary attempt never
+     * gets here: it is denied before the key is unwrapped, and it writes one
+     * `secret.reveal_denied` row naming the cause. This check used to BE the
+     * enforcement, and refused after a successful reveal — which worked, but
+     * recorded the attempt as `secret.revealed` / success, indistinguishable
+     * from a technician legitimately reading a code.
      *
-     * The offboarding export still emits seeds, and must: a client taking their
-     * accounts back needs the seed to re-enrol. That path calls
-     * SecretService.reveal directly from the export worker and never comes
-     * through here.
+     * What still arrives here is purpose 'export' on a seed that really is in a
+     * live export job, held by a caller who really does have secret:export. The
+     * database is right to grant that; this route is still right to refuse it,
+     * because the offboarding bundle is rendered by the export worker and never
+     * travels through an HTTP response to a browser. The reveal genuinely
+     * happened, so its success row stands; auditRevealWithheld records that the
+     * material was then withheld, and carries the granted event's id so the two
+     * rows pair up.
      */
     if (revealed.kind === 'totp_seed') {
       revealed.value.dispose();
+      await getSecretService().auditRevealWithheld(
+        {
+          tenantId: identity.tenantId,
+          actorId: identity.actorId,
+          actorType: identity.actorType,
+        },
+        secretId,
+        {
+          cause: 'seed_not_directly_revealable',
+          purpose: body.purpose,
+          grantedEventUid: revealed.auditEventUid,
+        },
+      );
       throw ApiError.forbidden(
         'a TOTP seed cannot be read directly — request the current code instead',
       );

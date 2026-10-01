@@ -18,6 +18,8 @@
 \set s_wifi    '''1e000000-0000-0000-0000-000000000002'''
 \set s_gx      '''1e000000-0000-0000-0000-000000000003'''
 \set s_t2      '''2e000000-0000-0000-0000-000000000001'''
+-- The guest WiFi credential's TOTP seed. §46 probes the reveal ladder on it.
+\set s_seed    '''1e000000-0000-0000-0000-00000000000a'''
 \set n_fw      '''1d000000-0000-0000-0000-000000000001'''
 \set n_net     '''1d000000-0000-0000-0000-000000000002'''
 \set n_cred    '''1d000000-0000-0000-0000-000000000004'''
@@ -3135,6 +3137,112 @@ SELECT helm_test.check('permanent deletion covers the TOTP slot',
     JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'helm' AND p.proname = 'delete_credential')
   LIKE '%totp_secret_id%');
+
+\echo ''
+\echo '== 46. A seed comes out for a named reason, and the log says which =='
+
+/*
+ * THE DEFECT 0590 FIXED, asserted at the layer that now owns the rule.
+ *
+ * The route refused a seed AFTER reveal_secret had granted it and written
+ * secret.revealed / success, so a blocked attempt to walk off with a permanent
+ * code-generating key and a technician glancing at a code produced the same
+ * audit row. The refusal worked; the record of it did not, and the record is the
+ * entire point of gating reveal.
+ */
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+CREATE TEMP TABLE seed_view AS
+  SELECT * FROM helm.reveal_secret(:s_seed, NULL, 'view');
+SELECT helm_test.check('a seed is not readable for viewing',
+  (SELECT NOT granted FROM seed_view));
+SELECT helm_test.check('...and the refusal names the seed rule, not a rank or a permission',
+  (SELECT denial_reason FROM seed_view) = 'seed_not_directly_revealable');
+
+-- The same actor CAN read the password on the same credential, so the refusal
+-- above is about the kind and not about this actor's authority.
+SELECT helm_test.check('...while the password beside it is still readable',
+  (SELECT granted FROM helm.reveal_secret(:s_wifi, NULL, 'view')));
+
+CREATE TEMP TABLE seed_copy AS
+  SELECT * FROM helm.reveal_secret(:s_seed, NULL, 'copy');
+SELECT helm_test.check('nor for copying, which is the same act through a different button',
+  (SELECT denial_reason FROM seed_copy) = 'seed_not_directly_revealable');
+
+SELECT helm_test.check('a seed IS readable for computing the current code',
+  (SELECT granted FROM helm.reveal_secret(:s_seed, NULL, 'totp')));
+SELECT helm_test.check('...and for re-wrapping it under a new key, or KEK rotation stops',
+  (SELECT granted FROM helm.reveal_secret(:s_seed, NULL, 'rotation')));
+
+/*
+ * The export exception is still a GATE. A client taking their accounts back
+ * needs the seed to re-enrol, so 'export' is allowed through the seed rung — and
+ * then has to clear the rung it always had: membership of a live export job.
+ * There is no export job in these fixtures, so this must refuse.
+ */
+CREATE TEMP TABLE seed_export AS
+  SELECT * FROM helm.reveal_secret(:s_seed, NULL, 'export');
+SELECT helm_test.check('the export purpose did not become a way round the seed rule',
+  (SELECT denial_reason FROM seed_export) = 'not_in_a_live_export');
+
+-- The inverse rung: without it, 'totp' would be a label any caller could attach
+-- to a password reveal, and reading a domain admin password would leave a row
+-- that reads like somebody checking a code.
+CREATE TEMP TABLE not_seed AS
+  SELECT * FROM helm.reveal_secret(:s_wifi, NULL, 'totp');
+SELECT helm_test.check('the totp purpose is refused on anything that is not a seed',
+  (SELECT denial_reason FROM not_seed) = 'not_a_totp_seed');
+
+-- An unknown purpose is still a programming error rather than a silent deny.
+SELECT helm_test.check_raises('an unknown purpose is rejected outright',
+  $$SELECT * FROM helm.reveal_secret('1e000000-0000-0000-0000-00000000000a', NULL, 'totpp')$$);
+ROLLBACK;
+
+\echo '-- the audit row for a refused seed read is a REFUSAL --'
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+CREATE TEMP TABLE before_counts AS
+  SELECT count(*) FILTER (WHERE action = 'secret.revealed')      AS revealed,
+         count(*) FILTER (WHERE action = 'secret.reveal_denied') AS denied
+  FROM audit_log WHERE entity_id = :s_seed;
+
+CREATE TEMP TABLE attempt AS SELECT * FROM helm.reveal_secret(:s_seed, NULL, 'view');
+
+SELECT helm_test.check('a refused seed read writes a reveal_denied row',
+  (SELECT count(*) FROM audit_log
+    WHERE entity_id = :s_seed AND action = 'secret.reveal_denied')
+  = (SELECT denied + 1 FROM before_counts));
+
+-- The half that was wrong before 0590: it also wrote a success row.
+SELECT helm_test.check('...and no secret.revealed row at all',
+  (SELECT count(*) FROM audit_log
+    WHERE entity_id = :s_seed AND action = 'secret.revealed')
+  = (SELECT revealed FROM before_counts));
+
+SELECT helm_test.check('the denial is the row the caller was handed back',
+  (SELECT outcome = 'denied' AND metadata->>'cause' = 'seed_not_directly_revealable'
+     FROM audit_log WHERE event_uid = (SELECT audit_event_uid FROM attempt)));
+
+-- And the legitimate read is separable from it by the one field that differs.
+CREATE TEMP TABLE allowed AS SELECT * FROM helm.reveal_secret(:s_seed, NULL, 'totp');
+SELECT helm_test.check('an authorised code generation is a success row saying so',
+  (SELECT action = 'secret.revealed' AND outcome = 'success'
+          AND metadata->>'purpose' = 'totp'
+     FROM audit_log WHERE event_uid = (SELECT audit_event_uid FROM allowed)));
+ROLLBACK;
+
+\echo '-- a machine identity can be pinned to the new purpose --'
+-- Without this the constraint would refuse the very value reveal_secret now
+-- requires, and an automation needing codes would be unconfigurable.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check('service_account accepts totp in allowed_reveal_purposes',
+  (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+    WHERE conrelid = 'service_account'::regclass
+      AND conname = 'service_account_purposes_known') LIKE '%totp%');
+ROLLBACK;
 
 \echo ''
 \echo '== All security assertions passed =='

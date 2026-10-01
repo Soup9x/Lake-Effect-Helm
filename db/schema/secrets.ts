@@ -152,18 +152,51 @@ export interface RevealedSecretEnvelope {
   wrapContext: Record<string, unknown> | null;
 }
 
-export type RevealPurpose = 'view' | 'copy' | 'autofill' | 'export' | 'integration' | 'rotation';
+export type RevealPurpose =
+  | 'view'
+  | 'copy'
+  | 'autofill'
+  | 'export'
+  | 'integration'
+  | 'rotation'
+  /**
+   * Computing the current code from a TOTP seed, server-side.
+   *
+   * The only purpose a seed is readable under through a request path, and
+   * refused on anything that is not a seed — see 0590. It exists so that the
+   * audit log distinguishes authorised code generation from an attempt to pull
+   * the raw seed out, which were previously the same row.
+   */
+  | 'totp';
 
+/**
+ * Every value helm.reveal_secret can return in denial_reason.
+ *
+ * This list is a CONTRACT WITH THE SQL, and the only thing keeping it honest is
+ * somebody updating it when a rung is added — the `never` check in
+ * mapSecretDenial proves the switch covers this union, not that this union
+ * covers the function. Two causes had already drifted out of it: 'internal_only'
+ * (added by 0390) and 'not_in_a_live_export' (0400's rename of
+ * 'not_in_an_approved_export'), both of which fell through to the default and
+ * surfaced as the raw cause string. Checked against the function's own text by
+ * tests/integration/secrets.test.ts, so the next omission fails a test rather
+ * than reaching a technician.
+ */
 export type RevealDenialReason =
   | 'not_found'
+  | 'internal_only'
   | 'missing_permission'
   | 'insufficient_role_rank'
   | 'step_up_required'
   | 'reason_required'
   | 'export_not_permitted'
-  | 'not_in_an_approved_export'
+  | 'not_in_a_live_export'
   | 'not_an_integration_credential'
   | 'purpose_not_permitted_for_actor'
   | 'autofill_not_permitted_for_sensitivity'
+  /** A TOTP seed asked for through any door but code generation. */
+  | 'seed_not_directly_revealable'
+  /** The 'totp' purpose attached to something that is not a seed. */
+  | 'not_a_totp_seed'
   | 'no_such_version'
   | 'key_destroyed';
