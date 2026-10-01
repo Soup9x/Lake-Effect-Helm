@@ -5,7 +5,8 @@ import { categoryBySlug } from '@/lib/nav/org-categories';
 import { CategoryGrid, type CategoryRecord } from '@/components/shell/category-grid';
 import { ViewHeader } from '@/components/shell/view-header';
 import { TabNav } from '@/components/shell/tab-nav';
-import { Button } from '@/components/ui/button';
+import { CategoryActions } from '@/components/shell/category-actions';
+import { importSpecFor, templateFor } from '@/lib/import/specs';
 import { isClientRole } from '@/lib/ui/roles';
 
 export const dynamic = 'force-dynamic';
@@ -224,7 +225,20 @@ export default async function CategoryPage({
 
   if (!data) notFound();
 
+  /*
+   * Sites for the create form's picker, read through RLS so it can only ever
+   * offer sites this actor may already see. One extra query on a page that
+   * already makes three, and only when the person can create anything.
+   */
   const canWrite = !isClientRole(identity.roleKey);
+  const sites = canWrite
+    ? await withTenant(actorOf(identity), (tx) =>
+        tx<{ id: string; name: string }[]>`
+          SELECT id, name FROM site
+          WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+          ORDER BY name
+        `)
+    : [];
   const base = `/organizations/${organizationId}`;
 
   /*
@@ -233,6 +247,14 @@ export default async function CategoryPage({
    * the tabs everywhere would be a control with one option on every other
    * category.
    */
+  const importSpec = importSpecFor(category.slug);
+  /*
+   * SOPs are the one category with no create path: 'sop' is not in the assets
+   * route's CREATABLE list, so there is nothing for + New to call. Documents are
+   * created by uploading a file, which the documents page already does.
+   */
+  const canCreate = category.source !== 'sop' && category.source !== 'attachment';
+
   const tabs =
     category.slug === 'passwords'
       ? [
@@ -264,14 +286,25 @@ export default async function CategoryPage({
         title={category.label}
         actions={
           canWrite ? (
-            <>
-              <Button variant="action" size="sm">
-                Import
-              </Button>
-              <Button variant="cta" size="sm">
-                + New
-              </Button>
-            </>
+            <CategoryActions
+              organizationId={organizationId}
+              category={category.slug}
+              categoryLabel={category.label}
+              /*
+               * Only asset categories pin a node type. Contacts, locations and
+               * passwords each have their own form, and documents and SOPs have
+               * no create path at all — CategoryActions renders nothing for
+               * those rather than a button that cannot work.
+               */
+              {...(category.kind === 'node' && category.source !== 'credential'
+                ? { nodeType: category.source }
+                : {})}
+              {...(importSpec
+                ? { importSpec: { templateHeader: templateFor(importSpec), hint: importSpec.hint } }
+                : {})}
+              sites={sites}
+              canCreate={canCreate}
+            />
           ) : null
         }
       />

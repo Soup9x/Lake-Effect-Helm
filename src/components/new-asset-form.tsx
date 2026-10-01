@@ -72,16 +72,40 @@ interface Site {
   name: string;
 }
 
+/*
+ * CONTROLLED OPEN, OPTIONAL. Passing `open`/`onOpenChange` lets a parent drive
+ * this form and suppresses its own trigger button — which is how the redesigned
+ * view header's single green "+ New" opens whichever form the current category
+ * needs. Left out, the form keeps its own button and its own state exactly as
+ * before, so every existing call site is untouched.
+ */
 export function NewAssetForm({
   organizationId,
   sites,
+  open: controlledOpen,
+  onOpenChange,
+  lockedNodeType,
 }: {
   organizationId: string;
   sites: Site[];
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /**
+   * Pin the form to one kind of asset and hide the picker. Set when the form is
+   * opened from inside a category: somebody who clicked "+ New" on Networks has
+   * already said what they are making, and offering the choice again is a way to
+   * file a switch under Domains.
+   */
+  lockedNodeType?: string;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
-  const [nodeType, setNodeType] = useState<string>('device');
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = (next: boolean) => {
+    setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
+  const [nodeType, setNodeType] = useState<string>(lockedNodeType ?? 'device');
   const [name, setName] = useState('');
   const [siteId, setSiteId] = useState('');
   const [extra, setExtra] = useState('');
@@ -169,10 +193,12 @@ export function NewAssetForm({
 
   return (
     <>
-      <Button variant="secondary" size="sm" onClick={() => setOpen(true)} className="gap-2">
+      {controlledOpen === undefined && (
+        <Button variant="secondary" size="sm" onClick={() => setOpen(true)} className="gap-2">
         <Plus />
         Document an asset
       </Button>
+      )}
 
       <Modal
         open={open}
@@ -182,30 +208,41 @@ export function NewAssetForm({
           // and a half-filled form should not survive any of them.
           if (!next) { close() }
         }}
-        title="Document an asset"
+        /* Named for what is being made when the caller pinned the type: a
+           dialog headed "Document an asset" after pressing "+ New" on Networks
+           makes somebody check they are in the right place. */
+        title={
+          lockedNodeType
+            ? `New ${(KINDS.find(([v]) => v === lockedNodeType)?.[1] ?? 'asset').toLowerCase()}`
+            : 'Document an asset'
+        }
         icon={Server}
         size="lg"
       >
         <form onSubmit={submit} className="space-y-4">
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <Label htmlFor="asset-type">Kind</Label>
-              <Select
-                id="asset-type"
-                value={nodeType}
-                onChange={(e) => {
-                  setNodeType(e.target.value);
-                  setExtra('');
-                }}
-              >
-                {KINDS.map(([v, l]) => (
-                  <option key={v} value={v}>
-                    {l}
-                  </option>
-                ))}
-              </Select>
-            </div>
+            {/* Hidden when the caller already said what this is — see
+                lockedNodeType. The field below then takes the full row. */}
+            {!lockedNodeType && (
+              <div>
+                <Label htmlFor="asset-type">Kind</Label>
+                <Select
+                  id="asset-type"
+                  value={nodeType}
+                  onChange={(e) => {
+                    setNodeType(e.target.value);
+                    setExtra('');
+                  }}
+                >
+                  {KINDS.map(([v, l]) => (
+                    <option key={v} value={v}>
+                      {l}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
 
             <div>
               <Label htmlFor="asset-name">Name</Label>
