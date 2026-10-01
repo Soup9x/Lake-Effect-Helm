@@ -321,9 +321,38 @@ function mapSecretDenial(error: SecretAccessDeniedError): ApiError {
     case 'missing_permission':
     case 'export_not_permitted':
       return new ApiError('forbidden', 'your role does not permit viewing this credential', details);
+    case 'internal_only':
+      /*
+       * A co-managed client asking for a credential on an asset the MSP marked
+       * internal-only. Said plainly rather than as "your role does not permit
+       * it", because it is a different fact and it is the one the MSP has to
+       * answer for when the client asks — and the audit row says the same.
+       */
+      return new ApiError(
+        'forbidden',
+        'this credential is not shared with your organisation',
+        details,
+      );
+    case 'seed_not_directly_revealable':
+      /*
+       * The seed is never served through this door — see 0590. The message says
+       * where the code comes from instead, because the caller is usually our own
+       * UI and the next request it should make is the useful thing to say.
+       */
+      return new ApiError(
+        'forbidden',
+        'a TOTP seed cannot be read directly — request the current code instead',
+        details,
+      );
+    case 'not_a_totp_seed':
+      return new ApiError(
+        'forbidden',
+        'this credential has no TOTP seed to generate a code from',
+        details,
+      );
     case 'purpose_not_permitted_for_actor':
     case 'not_an_integration_credential':
-    case 'not_in_an_approved_export':
+    case 'not_in_a_live_export':
       // Only a machine identity can hit these: its reveal purposes are pinned,
       // and for 'integration' and 'export' the scope is re-derived from the
       // database. A human seeing one means a service account token is being

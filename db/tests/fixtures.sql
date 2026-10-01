@@ -35,6 +35,9 @@
 
 \set s_dom_adm '''1e000000-0000-0000-0000-000000000001'''
 \set s_wifi    '''1e000000-0000-0000-0000-000000000002'''
+-- The guest WiFi credential's second factor. Exists so the reveal ladder can
+-- be probed on a seed as well as on a password.
+\set s_seed    '''1e000000-0000-0000-0000-00000000000a'''
 \set s_gx      '''1e000000-0000-0000-0000-000000000003'''
 \set s_t2      '''2e000000-0000-0000-0000-000000000001'''
 
@@ -121,7 +124,9 @@ INSERT INTO secret (id, tenant_id, organization_id, kind, sensitivity, label,
   (:s_dom_adm, :t1, :t1_acme,   'password', 'critical', 'ACME Domain Admin', true,  true,  60),
   (:s_wifi,    :t1, :t1_acme,   'password', 'standard', 'ACME Guest WiFi',   false, false, 40),
   (:s_gx,      :t1, :t1_globex, 'password', 'standard', 'Globex App Admin',  false, false, 40),
-  (:s_t2,      :t2, :t2_contoso,'password', 'standard', 'Contoso Router',    false, false, 40);
+  (:s_t2,      :t2, :t2_contoso,'password', 'standard', 'Contoso Router',    false, false, 40),
+  -- 'elevated', which is what the TOTP write path stores a seed as.
+  (:s_seed,    :t1, :t1_acme,   'totp_seed','elevated', 'ACME Guest WiFi OTP', false, false, 40);
 
 INSERT INTO secret_version (tenant_id, secret_id, version, data_key_id, ciphertext, nonce, auth_tag, aad,
                             plaintext_length, strength_score) VALUES
@@ -132,10 +137,12 @@ INSERT INTO secret_version (tenant_id, secret_id, version, data_key_id, cipherte
   (:t1, :s_gx,      1, :k1, gen_random_bytes(32), gen_random_bytes(12), gen_random_bytes(16),
    '11111111-1111-1111-1111-111111111111|1e000000-0000-0000-0000-000000000003|value|1', 16, 3),
   (:t2, :s_t2,      1, :k2, gen_random_bytes(32), gen_random_bytes(12), gen_random_bytes(16),
-   '22222222-2222-2222-2222-222222222222|2e000000-0000-0000-0000-000000000001|value|1', 16, 3);
+   '22222222-2222-2222-2222-222222222222|2e000000-0000-0000-0000-000000000001|value|1', 16, 3),
+  (:t1, :s_seed,    1, :k1, gen_random_bytes(32), gen_random_bytes(12), gen_random_bytes(16),
+   '11111111-1111-1111-1111-111111111111|1e000000-0000-0000-0000-00000000000a|value|1', 32, 0);
 
 UPDATE secret SET current_version = 1
-WHERE id IN (:s_dom_adm, :s_wifi, :s_gx, :s_t2);
+WHERE id IN (:s_dom_adm, :s_wifi, :s_gx, :s_t2, :s_seed);
 
 INSERT INTO credential (id, tenant_id, credential_type, username, secret_id, url) VALUES
   (:n_cred, :t1, 'domain_admin', 'ACME\\Administrator', :s_dom_adm, 'https://dc01.acme.test');
@@ -144,8 +151,8 @@ INSERT INTO credential (id, tenant_id, credential_type, username, secret_id, url
 -- credential. Leaving it attached to nothing — as this fixture did until
 -- 0460 — made it invisible to every client-side role, which is the new
 -- fail-closed default and not what the reveal-ladder tests below are probing.
-INSERT INTO credential (id, tenant_id, credential_type, username, secret_id) VALUES
-  (:n_wifi, :t1, 'standard_user', 'guest', :s_wifi);
+INSERT INTO credential (id, tenant_id, credential_type, username, secret_id, totp_secret_id) VALUES
+  (:n_wifi, :t1, 'standard_user', 'guest', :s_wifi, :s_seed);
 
 INSERT INTO credential_domain (tenant_id, credential_id, host, match_type, allow_autofill) VALUES
   (:t1, :n_cred, 'dc01.acme.test', 'exact_host', false);

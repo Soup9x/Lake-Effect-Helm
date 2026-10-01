@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SecretAccessDeniedError } from '../../src/lib/secrets/errors';
+import type { RevealDenialReason } from '../../db/schema/secrets';
 import { base32Encode, generateTotp, verifyTotp } from '../../src/lib/crypto/totp';
 import {
   actor,
@@ -557,5 +558,91 @@ describe('SecretValue resists accidental disclosure', () => {
     const length = revealed.value.use((plaintext) => plaintext.length);
     expect(length).toBe('scoped-value'.length);
     expect(revealed.value.disposed).toBe(true);
+  });
+});
+
+/*
+ * The denial-cause list in db/schema/secrets.ts is a contract with PL/pgSQL, and
+ * nothing in the type system can enforce it: `denial_reason` arrives as a string
+ * at runtime, and the `never` check in mapSecretDenial proves only that the
+ * switch covers the union — not that the union covers the function. So the two
+ * drifted, twice, and both drifts shipped: 0390 added 'internal_only' and 0400
+ * renamed 'not_in_an_approved_export' to 'not_in_a_live_export', neither of
+ * which reached the union. A co-managed client refused a credential therefore
+ * got "access denied: internal_only" from the fall-through branch rather than a
+ * sentence, and the exhaustiveness comment claimed a guarantee it did not have.
+ *
+ * Read out of the live function body, so the next rung added without a mapping
+ * fails here instead of surfacing as a raw cause string to a technician.
+ */
+describe('the denial causes the SQL can return are all mapped', () => {
+  /** Every value reveal_secret assigns to v_deny, read from its own source. */
+  async function causesInFunction(): Promise<string[]> {
+    const sql = superuserSql();
+    try {
+      const rows = await sql<{ cause: string }[]>`
+        SELECT DISTINCT m[1] AS cause
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace,
+             -- [[:space:]] rather than \s on purpose. This is a JS template
+             -- literal, where a backslash escape is consumed before Postgres
+             -- ever sees it: \s arrives as a bare "s", the pattern matches
+             -- nothing, and every assertion built on an empty list passes. The
+             -- POSIX class has no backslash to lose.
+             regexp_matches(p.prosrc, $re$v_deny[[:space:]]*:=[[:space:]]*'([a-z_]+)'$re$, 'g') AS m
+        WHERE n.nspname = 'helm' AND p.proname = 'reveal_secret'
+        ORDER BY 1
+      `;
+      return rows.map((r) => r.cause);
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  }
+
+  it('finds the rungs at all, so an empty result cannot pass this suite', async () => {
+    const causes = await causesInFunction();
+    expect(causes.length).toBeGreaterThanOrEqual(8);
+    expect(causes).toContain('seed_not_directly_revealable');
+  });
+
+  it('declares every one of them in RevealDenialReason', async () => {
+    /*
+     * Listed here rather than derived, because a union is erased at runtime.
+     * Keeping it in step with the type is the point — if this literal and the
+     * type disagree, the `satisfies` below stops compiling.
+     */
+    const declared = [
+      'not_found', 'internal_only', 'missing_permission', 'insufficient_role_rank',
+      'step_up_required', 'reason_required', 'export_not_permitted',
+      'not_in_a_live_export', 'not_an_integration_credential',
+      'purpose_not_permitted_for_actor', 'autofill_not_permitted_for_sensitivity',
+      'seed_not_directly_revealable', 'not_a_totp_seed', 'no_such_version',
+      'key_destroyed',
+    ] satisfies RevealDenialReason[];
+
+    const unmapped = (await causesInFunction()).filter(
+      (c) => !(declared as readonly string[]).includes(c),
+    );
+    expect(unmapped).toEqual([]);
+  });
+
+  /*
+   * The two causes raised outside the v_deny ladder, which the regex above
+   * cannot see: reveal_secret audits them and returns a literal directly.
+   */
+  it('also covers the causes returned without going through v_deny', async () => {
+    const sql = superuserSql();
+    try {
+      const [row] = await sql<{ src: string }[]>`
+        SELECT p.prosrc AS src FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'helm' AND p.proname = 'reveal_secret'
+      `;
+      for (const literal of ['not_found', 'no_such_version', 'key_destroyed']) {
+        expect(row!.src).toContain(`'${literal}'`);
+      }
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
   });
 });

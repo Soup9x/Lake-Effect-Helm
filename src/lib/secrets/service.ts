@@ -14,7 +14,7 @@
  * without an audit row, cannot bypass the role/step-up/reason ladder, and cannot
  * reach another tenant's material. Those properties live in Postgres.
  */
-import type { RevealDenialReason } from '@db/schema/secrets';
+import type { RevealDenialReason, RevealPurpose } from '@db/schema/secrets';
 import type { DbRole, HelmTx } from '../db/client';
 import { withTenant } from '../db/client';
 import type { DekCache } from '../crypto/dek-cache';
@@ -49,7 +49,12 @@ function isSerializationFailure(error: unknown): boolean {
   );
 }
 
-export type RevealPurpose = 'view' | 'copy' | 'autofill' | 'export' | 'integration' | 'rotation';
+/*
+ * Re-exported rather than redeclared. It was a second copy of the same union
+ * here, which is how the two drift: a purpose added to one list and not the
+ * other compiles everywhere and is then refused by the database at runtime.
+ */
+export type { RevealPurpose };
 
 export interface RevealOptions {
   /** Required (>= 10 chars) when the secret has requires_reason. */
@@ -471,6 +476,52 @@ export class SecretService {
   }
 
   /**
+   * Record that a GRANTED reveal was refused anyway, after the fact.
+   *
+   * 0590 moved the TOTP-seed rule into reveal_secret, so the ordinary attempt is
+   * refused before anything is decrypted and produces one correctly labelled
+   * `secret.reveal_denied` row. One narrow path still reaches a route holding
+   * seed plaintext: purpose 'export' is legitimately granted to a caller with
+   * secret:export whose seed is in a live export job, and the browser reveal
+   * route declines to serve it even then — the offboarding bundle is built by
+   * the export worker, which never comes through an HTTP route.
+   *
+   * On that path the database has already written `secret.revealed` / success,
+   * truthfully: the material WAS decrypted. This adds the second half of the
+   * story — that it was then withheld — so the pair reads as what happened
+   * rather than as a successful read of a seed through the browser. It cannot
+   * replace the first row: audit_log is append-only and a reveal that happened
+   * is not something to erase.
+   *
+   * Best-effort, like the write-denial counterpart: the caller is already
+   * throwing, and a logging failure must not become the error they see.
+   */
+  async auditRevealWithheld(
+    actor: ActorRef,
+    secretId: string,
+    details: { cause: string; purpose: string; grantedEventUid: string },
+  ): Promise<void> {
+    try {
+      await withTenant(actor, async (tx) => {
+        await tx`
+          SELECT helm.audit(
+            'secret.reveal_denied', 'secret', ${secretId}::uuid, 'denied',
+            NULL, NULL, NULL,
+            ${tx.json({
+              cause: details.cause,
+              purpose: details.purpose,
+              /* So an auditor can pair the two rows without guessing by timestamp. */
+              withheld_after_event: details.grantedEventUid,
+            })}::jsonb
+          )
+        `;
+      });
+    } catch {
+      // Swallowed deliberately. See the doc comment.
+    }
+  }
+
+  /**
    * Record a refused WRITE.
    *
    * helm.write_secret_version raises on refusal — which is the right shape for
@@ -536,9 +587,21 @@ export class SecretService {
     config: { algorithm?: TotpAlgorithm; digits?: 6 | 7 | 8; periodSeconds?: number } = {},
     options: RevealOptions = {},
   ): Promise<TotpCode & { auditEventUid: string }> {
+    /*
+     * purpose 'totp', not 'view', and this is the whole audit story of the
+     * feature. Until 0590 both this and a refused attempt to pull the raw seed
+     * through POST /api/secrets/{id}/reveal wrote `secret.revealed` with purpose
+     * 'view' on the same secret, so the log could not tell a technician reading
+     * a code from somebody trying to walk off with the key that generates every
+     * future one. The purpose is what separates them, and reveal_secret now
+     * refuses a seed under any other.
+     *
+     * Spread first, so a caller cannot quietly relabel this read as something
+     * else: the purpose is a property of what this method does.
+     */
     const revealed = await this.reveal(actor, totpSecretId, {
-      purpose: 'view',
       ...options,
+      purpose: 'totp',
     });
 
     try {

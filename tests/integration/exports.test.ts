@@ -45,6 +45,10 @@ let exportActorId: string;
 let harness: ReturnType<typeof buildHarness>;
 let stepUpSecretId: string;
 let ordinarySecretId: string;
+let seedSecretId: string;
+
+/** Base32, because a seed is stored and exported in the form an authenticator takes. */
+const EXPORTED_SEED = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 
 const exportWorker = () => ({
   tenantId: IDS.tenant1,
@@ -122,20 +126,46 @@ describe('export engine', () => {
     );
     stepUpSecretId = stepUp.secretId;
 
+    /*
+     * A SEED ON THE EXPORTABLE CREDENTIAL, and this fixture is load-bearing.
+     *
+     * 0590 made a totp_seed readable only under purposes 'totp', 'export' and
+     * 'rotation'. The export renderer asks for 'export', so the bundle keeps
+     * working — but if that allowance were ever dropped, the renderer catches
+     * SecretAccessDeniedError and turns it into an OMISSION. The export would
+     * succeed, the PDF would look plausible, and a client offboarding to another
+     * MSP would silently receive accounts they cannot re-enrol into. Nothing
+     * would raise. So the seed has to be in the fixture, or the most expensive
+     * regression this change could cause is the one nothing tests.
+     */
+    const seed = await harness.secrets.create(
+      ADMIN,
+      {
+        organizationId: IDS.orgAcme,
+        kind: 'totp_seed',
+        label: 'Acme firewall admin OTP',
+        sensitivity: 'elevated',
+      },
+      EXPORTED_SEED,
+    );
+    seedSecretId = seed.secretId;
+
     await withTenant(ADMIN, async (tx) => {
       await tx`UPDATE secret SET requires_step_up = true WHERE id = ${stepUpSecretId}::uuid`;
 
-      for (const [nodeId, name, secretId] of [
-        ['1d000000-0000-0000-0000-0000000000c1', 'Acme firewall admin', ordinarySecretId],
-        ['1d000000-0000-0000-0000-0000000000c2', 'Acme domain admin', stepUpSecretId],
+      for (const [nodeId, name, secretId, totpId] of [
+        ['1d000000-0000-0000-0000-0000000000c1', 'Acme firewall admin', ordinarySecretId, seedSecretId],
+        ['1d000000-0000-0000-0000-0000000000c2', 'Acme domain admin', stepUpSecretId, null],
       ] as const) {
         await tx`
           INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name)
           VALUES (${nodeId}::uuid, ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'credential', ${name})
         `;
         await tx`
-          INSERT INTO credential (id, tenant_id, credential_type, username, secret_id)
-          VALUES (${nodeId}::uuid, ${IDS.tenant1}::uuid, 'local_admin', 'administrator', ${secretId}::uuid)
+          INSERT INTO credential
+            (id, tenant_id, credential_type, username, secret_id, totp_secret_id)
+          VALUES (${nodeId}::uuid, ${IDS.tenant1}::uuid, 'local_admin', 'administrator',
+                  ${secretId}::uuid, ${totpId}::uuid)
         `;
       }
     });
@@ -359,7 +389,10 @@ describe('export engine', () => {
 
       const stored = await getExportService().get(ADMIN, jobId);
       expect(stored.encryptionMethod).toMatch(/^AES-256-GCM\/scrypt/);
-      expect(stored.secretCount).toBe(1);
+      // Two: the firewall password and its TOTP seed. The domain admin password
+      // is omitted (step-up), and the seed is counted because an authenticator a
+      // client cannot re-enrol is a credential they did not actually get back.
+      expect(stored.secretCount).toBe(2);
 
       // The passphrase is nowhere in the database. That is the property that
       // makes the artefact at rest useless to anyone holding only the file.
@@ -426,7 +459,7 @@ describe('export engine', () => {
           requestedBy: string | null;
           approvedBy: string | null;
         };
-        credentials: { name: string; material?: string | null }[];
+        credentials: { name: string; material?: string | null; totp_seed?: string | null }[];
       };
 
       // The four-eyes evidence has to survive into the document: it is the
@@ -444,6 +477,21 @@ describe('export engine', () => {
       const domainAdmin = document.credentials.find((c) => c.name === 'Acme domain admin');
       expect(domainAdmin?.material).toBeUndefined();
 
+      /*
+       * AND THE SEED, which is the regression 0590 could have caused silently.
+       *
+       * The seed rung allows purpose 'export' precisely so this keeps working: a
+       * client moving to another provider cannot re-enrol an authenticator
+       * without it. Had that allowance been missed, the renderer would have
+       * caught the denial, filed an omission, and produced a bundle that looks
+       * complete — so this asserts the material, not merely that the render
+       * succeeded.
+       */
+      expect(firewall?.totp_seed).toBe(EXPORTED_SEED);
+      expect(document.helm.omittedSecrets.map((o) => o.label)).not.toContain(
+        'Acme firewall admin (TOTP seed)',
+      );
+
       expect(pdfText(unpacked)).toContain('could not be included');
     });
 
@@ -454,8 +502,14 @@ describe('export engine', () => {
           WHERE action = 'secret.revealed' AND metadata ->> 'purpose' = 'export'
         `;
       });
-      // Two successful reveals across two credential-bearing renders.
-      expect(Number(rows[0]?.n)).toBe(2);
+      /*
+       * Four: two secrets — the firewall password and its seed — across two
+       * credential-bearing renders. The point of the assertion is the shape, not
+       * the number: one row per secret per render, never one row per export. An
+       * export that decrypted four credentials and logged once would understate
+       * what left the vault.
+       */
+      expect(Number(rows[0]?.n)).toBe(4);
     });
   });
 
