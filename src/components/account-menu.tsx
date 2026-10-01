@@ -82,20 +82,30 @@ export function AccountMenu({
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
+        /*
+         * THE TRIGGER SITS ON THE DARK GLOBAL BAR, so its colours come from the
+         * nav scale rather than the page scale. This used to be `text-ink` on
+         * `hover:bg-surface-sunken`, which was correct when the bar was white and
+         * became near-black-on-near-black the moment the bar went dark — the name
+         * was still there and nobody could read it.
+         *
+         * The DROPDOWN below is unchanged: it is a panel floating over the page,
+         * not part of the bar, so it keeps the page's own surface and ink.
+         */
         className={cn(
           'flex max-w-56 items-center gap-2 rounded-md py-1 pl-1 pr-2 text-left',
-          'hover:bg-surface-sunken',
+          'hover:bg-white/10',
         )}
       >
         <span
-          className="grid size-7 shrink-0 place-items-center rounded-full bg-surface-sunken text-xs font-medium text-ink-muted"
+          className="grid size-7 shrink-0 place-items-center rounded-full bg-white/15 text-xs font-medium text-nav-ink-active"
           aria-hidden
         >
           {initials(name)}
         </span>
         <span className="hidden min-w-0 sm:block">
-          <span className="block truncate text-sm leading-tight text-ink">{name}</span>
-          <span className="block truncate text-xs leading-tight text-ink-faint">{roleName}</span>
+          <span className="block truncate text-sm leading-tight text-nav-ink-active">{name}</span>
+          <span className="block truncate text-xs leading-tight text-nav-ink">{roleName}</span>
         </span>
         <span className="sr-only">Your account</span>
       </button>

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { AppShell } from '@/components/app-shell';
+import { AppChrome } from '@/components/shell/app-chrome';
 import {
   getServerIdentity,
   NoMembershipError,
@@ -36,5 +36,10 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     throw error;
   }
 
-  return <AppShell identity={identity}>{children}</AppShell>;
+  /*
+   * Pages that are NOT inside an organization get the content column straight
+   * from here. The organization layout supplies its own, because it has to put
+   * the drawer beside it — see organizations/[organizationId]/layout.tsx.
+   */
+  return <AppChrome identity={identity}>{children}</AppChrome>;
 }
