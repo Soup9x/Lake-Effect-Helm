@@ -47,15 +47,15 @@
     "ajv-formats": "^3.0.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "drizzle-orm": "^0.45.2",
-    "lucide-react": "^1.46.0",
+    "drizzle-orm": "^0.45.3",
+    "lucide-react": "^1.52.0",
     "next": "^16.3.8",
     "next-auth": "5.0.0-beta.32",
     "postgres": "^3.4.7",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "tailwind-merge": "^3.7.0",
-    "tsx": "^4.20.6",
+    "tsx": "^4.23.15",
     "zod": "^4.1.12"
   },
   "devDependencies": {
@@ -63,11 +63,11 @@
     "@types/node": "^22.18.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "drizzle-kit": "^0.31.10",
+    "drizzle-kit": "^0.31.11",
     "esbuild": "^0.28.2",
     "postcss": "^8.5.28",
     "tailwindcss": "^4.3.3",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   },
   "pnpm": {
