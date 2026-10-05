@@ -47,6 +47,8 @@
  * is where this project puts it. What it does catch is every hand-written SQL
  * string in a page, and every prop a page hands across the client boundary.
  */
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { withTenant } from '../../src/lib/db/client';
 import { useSessionResolver } from '../../src/lib/auth/session';
@@ -73,6 +75,9 @@ const ADMIN = actor(IDS.tenant1, IDS.admin1);
 
 /** Pages take params and searchParams as promises, so this is what Next passes. */
 const p = <T,>(value: T) => Promise.resolve(value);
+
+/** Set in beforeAll: the flexible grid needs a real type id in its path. */
+let flexibleTypeId = '';
 
 beforeAll(async () => {
   resetDatabase();
@@ -107,6 +112,23 @@ beforeAll(async () => {
         decode(repeat('ab', 32), 'hex'), ${IDS.admin1}::uuid
       )
     `;
+
+    /*
+     * A flexible asset type, because fixtures.sql ships none and the flexible
+     * grid takes a type id in its path. Made here rather than in fixtures.sql
+     * so no existing count or search assertion moves: a shared fixture is read
+     * by the whole suite, and "the catalogue has one more row than it did"
+     * is a change to every test that counts.
+     */
+    const [type] = await tx<{ id: string }[]>`
+      INSERT INTO flexible_asset_type (tenant_id, key, name, description, created_by)
+      VALUES (
+        ${IDS.tenant1}::uuid, 'rendered_type', 'Rendered Type',
+        'exists so the flexible grid has something to render', ${IDS.admin1}::uuid
+      )
+      RETURNING id
+    `;
+    flexibleTypeId = type!.id;
   });
 });
 
@@ -120,7 +142,9 @@ afterAll(async () => {
  * Listed explicitly rather than globbed. A glob would silently cover a new page
  * with no arguments and silently SKIP one that needed them, and "the suite
  * grew a page and nobody noticed it was untested" is the same failure this file
- * exists to stop. Adding a page means adding a line here.
+ * exists to stop. Adding a page means adding a line here — and the test below
+ * this list enforces that, because for two releases the sentence you are
+ * reading was the only thing enforcing it, and it did not.
  */
 const PAGES: { name: string; load: () => Promise<unknown> }[] = [
   {
@@ -199,7 +223,86 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     name: 'the account page',
     load: async () => (await import('../../src/app/(app)/account/page')).default(),
   },
+  {
+    name: 'the per-category grid',
+    load: async () =>
+      (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({
+        params: p({ organizationId: IDS.orgAcme, category: 'passwords' }),
+        searchParams: p({}),
+      }),
+  },
+  {
+    // The filter and sort state this page reads lives in the URL on purpose, so
+    // the populated case is a different code path from the bare one and worth
+    // its own line rather than a second argument to the same entry.
+    name: 'the per-category grid, filtered and sorted',
+    load: async () =>
+      (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({
+        params: p({ organizationId: IDS.orgAcme, category: 'configurations' }),
+        searchParams: p({ q: 'acme', sort: 'name', dir: 'desc', archived: '1' }),
+      }),
+  },
+  {
+    name: 'the flexible-asset grid',
+    load: async () =>
+      (await import('../../src/app/(app)/organizations/[organizationId]/flexible/[typeId]/page'))
+        .default({ params: p({ organizationId: IDS.orgAcme, typeId: flexibleTypeId }) }),
+  },
 ];
+
+/**
+ * The list above is EXPLICIT, which only works while it is COMPLETE.
+ *
+ * It was not. The IT Glue shell added the per-category grid and the
+ * flexible-asset grid and added no lines here, so two pages shipped with no
+ * query execution and no boundary check — the precise gap this file was written
+ * after. The instruction above ("adding a page means adding a line here") was
+ * the only thing holding the contract, and an instruction in a comment is not a
+ * check.
+ *
+ * So the glob comes back, for the one job a glob is right for: not LOADING
+ * pages — the objection to that stands, since a page needs arguments only a
+ * human knows — but PROVING the handwritten list names them all. A new page now
+ * fails this test by path until somebody writes its line, which is a sentence
+ * telling them what to do rather than a silent pass.
+ *
+ * Scoped to (app) because that is what this file is about: everything under it
+ * resolves an identity and a tenant. src/app/page.tsx and the sign-in pages do
+ * not, and sweeping them in would mean inventing an unauthenticated harness to
+ * satisfy a count.
+ */
+const APP_DIR = join(import.meta.dirname, '..', '..', 'src', 'app', '(app)');
+
+function pageFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...pageFiles(full));
+    else if (entry === 'page.tsx') out.push(full);
+  }
+  return out;
+}
+
+describe('the list above names every page', () => {
+  it('has a line for each page.tsx under (app)', () => {
+    const source = readFileSync(join(import.meta.dirname, 'pages.test.ts'), 'utf8');
+
+    // The specifier as it appears in an import() above: posix separators,
+    // relative to this directory, no extension.
+    const missing = pageFiles(APP_DIR)
+      .map((file) => relative(import.meta.dirname, file).replaceAll('\\', '/').replace(/\.tsx$/, ''))
+      .filter((specifier) => !source.includes(`import('${specifier}')`));
+
+    expect(
+      missing,
+      missing.length === 0
+        ? 'every page is listed'
+        : `these pages have no line in PAGES, so nothing runs their queries or ` +
+          `checks what they hand across the client boundary:\n` +
+          missing.map((m) => `  ${m}`).join('\n'),
+    ).toEqual([]);
+  });
+});
 
 describe('every page runs its queries', () => {
   for (const page of PAGES) {
