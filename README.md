@@ -260,7 +260,7 @@ install:
 
 ## Getting started
 
-Requires PostgreSQL 16+ (`security_invoker` views), Node 22+, pnpm 10+.
+Requires PostgreSQL 16+ (`security_invoker` views), Node 26+, pnpm 10+.
 
 ```bash
 pnpm install

@@ -48,7 +48,7 @@ updates:
       actions:
         patterns: ['*']
 
-  # The Dockerfile pins node:22-alpine. A base image that stops receiving
+  # The Dockerfile pins node:26-alpine. A base image that stops receiving
   # patches is the quietest way to ship a vulnerable runtime.
   - package-ecosystem: docker
     directory: /

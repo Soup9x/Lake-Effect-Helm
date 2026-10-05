@@ -16,10 +16,16 @@
 # -----------------------------------------------------------------------------
 # deps — install once, cached on the lockfile alone
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 
-RUN corepack enable
+# node:26-alpine does not ship corepack — Node unbundled it, so `corepack
+# enable` here exits 127 on anything past 24. It is installed rather than
+# replaced by `npm i -g pnpm`, because corepack is what reads
+# `packageManager` from package.json, and that field being the one place the
+# pnpm version is written is the property worth keeping. Pinned for the same
+# reason the lockfile is frozen below.
+RUN npm i -g corepack@0.36.0 && corepack enable
 COPY package.json pnpm-lock.yaml ./
 # --frozen-lockfile: a build that silently resolves a different dependency tree
 # than the one that was reviewed is not a reproducible build.
@@ -39,20 +45,20 @@ RUN pnpm install --frozen-lockfile
 # and key-rotation entry points are TypeScript executed directly, so tsx is not
 # build tooling here, it is the runtime.
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS deps-prod
+FROM node:26-alpine AS deps-prod
 WORKDIR /app
 
-RUN corepack enable
+RUN npm i -g corepack@0.36.0 && corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 # -----------------------------------------------------------------------------
 # builder — Next standalone output plus the bundled worker
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 
-RUN corepack enable
+RUN npm i -g corepack@0.36.0 && corepack enable
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
@@ -64,7 +70,7 @@ RUN pnpm build && pnpm build:worker
 # -----------------------------------------------------------------------------
 # runtime — the web tier and the worker
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 WORKDIR /app
 
 # A fixed uid, because it is not an implementation detail: the master key file
@@ -128,7 +134,7 @@ CMD ["node", "server.js"]
 # Dependencies come from deps-prod, NOT deps: this image must not carry the test
 # runner and the build toolchain alongside superuser credentials.
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS migrate
+FROM node:26-alpine AS migrate
 WORKDIR /app
 
 RUN addgroup -g 10001 -S helm && adduser -u 10001 -S helm -G helm

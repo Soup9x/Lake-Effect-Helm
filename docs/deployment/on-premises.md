@@ -75,7 +75,7 @@ reverse proxy, or under a scheduler that is not Compose.
   without a terminator sign-in appears to succeed and every page then reports
   you signed out. Caddy is in the bundled stack for this; your own proxy,
   ingress or load balancer does just as well.
-- **Node 22 or newer** if you are running the application outside the bundled
+- **Node 26 or newer** if you are running the application outside the bundled
   images.
 - **`openssl`**, for key generation.
 
