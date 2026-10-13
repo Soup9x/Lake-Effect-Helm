@@ -1,0 +1,167 @@
+# IT Glue parity — gap analysis
+
+Reference product: IT Glue. This is an information-architecture comparison, not a
+visual one: Helm keeps its own look, wording and assets.
+
+Assessed against `main` at `0eebae3`. 76 tables, 61 migrations, next free
+migration number **0600** (the `09xx` range is seed data and stays last).
+
+**The short version:** far more of this exists than the feature list assumes.
+The documentation model (#5) is built and versioned — what it lacks is an
+authoring screen. The client sidebar (#3) is built. Cross-client expirations
+(#6) are built. The genuinely absent things are four: sidebar customization,
+the Global completion grid, the Personal section, and the user-profile
+preferences. Several "widgets" are already-stored data needing only a reader.
+
+---
+
+## Summary table
+
+| # | Feature | Status | Where it lives / what's missing |
+| --- | --- | --- | --- |
+| 1 | Four top-nav scopes | **Partial** | `src/components/shell/top-nav.tsx` has all four. `Personal`→`/account` and `Global`→`/search` are aliases, not sections |
+| 1 | Global search in header | **Exists** | `/search`, `src/app/api/search/route.ts` |
+| 1 | Recent-items dropdown | **Partial** | Data and API exist (`user_recent_view`, `/api/workspace/recent`); no header dropdown, no per-type icons |
+| 1 | Notifications + help icons | **Missing** | `webhook_endpoint` is outbound-only; there is no in-app notification surface |
+| 1 | User menu | **Exists** | Top-right account menu |
+| 2 | Recents + Favorites strip | **Partial** | `user_favorite`, `user_recent_view`, both dashboard widgets. Not present on `/organizations` |
+| 2 | Clients table, star, Name, Status | **Partial** | `src/app/(app)/organizations/page.tsx`; `organization.status` exists; star wired |
+| 2 | **Type** (Client/Prospect/Vendor/…) | **Missing** | No `organization.type`. `is_msp_internal` covers only "Internal" |
+| 2 | Sync Status column | **Partial** | `psa_company_id`, `rmm_organization_id`, `integration_sync_run` exist; not surfaced |
+| 2 | Result count, sorting, column chooser | **Partial** | Built in `shell/data-table.tsx`, `shell/column-menu.tsx`, `shell/filter-toolbar.tsx` — but only used by category grids, **not** the clients list |
+| 2 | Client logo + initials fallback | **Partial** | `organization.logo_url` column exists; no upload route, no avatar component |
+| 3 | Per-client sidebar, collapsible, counts | **Exists** | `shell/sidebar.tsx`, `src/lib/nav/org-categories.ts`, collapse persisted per browser |
+| 3 | Core asset entries | **Exists** | 16 categories incl. Domain Tracker, SSL Tracker, Locations, Networks, Passwords. Only "Checklists" absent — see #8 |
+| 3 | Apps & Services in sidebar | **Exists** | Tenant's own `flexible_asset_type` rows with their configured icons |
+| 3 | "Customize Sidebar" link | **Missing** | See #4 |
+| 3 | Quick Notes, inline | **Exists** | `organization.quick_notes`, `components/notes-card.tsx` |
+| 3 | Credential Strength + buckets | **Partial** | **`secret.current_strength_score` is already stored.** Needs bucketing and a widget only |
+| 3 | Documentation Health ring | **Missing** | `client_health` widget is a different measure; "not viewed recently"/"stale" needs defining |
+| 3 | Recently Viewed By You (this client) | **Partial** | `user_recent_view` is global; needs an org filter |
+| 3 | Important Contacts | **Partial** | `contact` + `organization.primary_contact_id`; no "important" flag |
+| 3 | Recently Updated (this client) | **Missing** | `audit_log` holds it; no reader |
+| 3 | Popular Credentials | **Partial** | `secret.access_count` + `last_accessed_at` already maintained |
+| 3 | Upcoming Expirations + due tag | **Exists** | "Expiring" section, `expiration` table, `criticality` |
+| 3 | Locations | **Exists** | "Sites" section |
+| 3 | Activity Feed | **Partial** | `audit_log`, `/api/audit`, `/audit` page; not on the client page |
+| 4 | Customize Your Sidebar | **Missing** | No table, no page. `user_dashboard.widgets` is the precedent to copy |
+| 5 | Flexible/custom asset types | **Partial** | **Schema is complete and versioned**: `flexible_asset_type` (icon, colour, client_visible), `flexible_asset_type_version` (json_schema, ui_schema, secret_fields, searchable_fields), `flexible_asset_record`, `flexible_asset_secret`, API `/api/flexible-assets/{types,records}`, render page. **Missing: any UI to define or edit a type.** Today a type arrives by API call or SQL |
+| 6 | Assets completion grid + % badges | **Missing** | Needs a per-type/per-client coverage query |
+| 6 | Per-client completion scores | **Missing** | `client_health` widget is adjacent, not the same |
+| 6 | Cross-client expirations, filterable | **Exists** | `/expirations` page + `/api/expirations`, filters by severity and org |
+| 7 | My Tasks | **Missing** | `sop_step`/`sop_run_step` have no assignee and no due date |
+| 7 | Personal Credentials (private vault) | **Missing** | `credential` is org-scoped via `asset_node`. Needs a policy decision — see below |
+| 8 | Reusable checklist templates → per client | **Partial** | `sop`/`sop_version`/`sop_step` (template) and `sop_run`/`sop_run_step` (instance) already model exactly this |
+| 8 | Assignable tasks + due dates | **Missing** | Columns absent on both step tables |
+| 8 | Email notification on assign/due | **Missing** | No email channel anywhere; `webhook_endpoint` is Discord/Teams/Slack |
+| 9 | Domain tracker fields | **Exists** | `domain`: registrar, registered_at, expires_at, nameservers, dns_provider, dnssec, transfer_locked |
+| 9 | SSL tracker fields | **Exists** | `ssl_certificate`: issuer, not_before, not_after, subject_alt_names, fingerprint, key_algorithm |
+| 9 | Both feed Upcoming Expirations | **Exists** | `expiration.kind` + `source_table`/`source_id` |
+| 9 | Auto-fill expiry (RDAP + TLS probe) | **Missing** | Not among the ten worker jobs. `expiration.refreshed_at` is the slot waiting for it |
+| 10 | Change password | **Exists** | `/api/auth/local/change-password` |
+| 10 | First/last name split | **Partial** | `app_user.name` is one field |
+| 10 | MFA status, enable/disable | **Partial** | `mfa_enrolled_at`, `auth_authenticator` |
+| 10 | One-time MFA recovery token | **Missing** | No column, no route |
+| 10 | Time zone | **Missing** | `timezone` exists on `organization` and `site`, not on a user |
+| 10 | Theme (default/light/dark) | **Missing** | No stored preference |
+| 10 | Email notification toggles | **Missing** | Depends on an email channel existing at all |
+| 10 | "Enable side panel" | **Missing** | No stored preference; credentials open as a page |
+
+---
+
+## Design notes on the four that need a decision before code
+
+### Personal Credentials is a security-model change, not a feature
+
+Every secret in Helm is reachable through `helm.reveal_secret()` under
+tenant + organization RLS, and super_admin holds `tenant:write`. A private
+vault means rows that **no other user may read, including a tenant
+administrator**, which the current policy shape cannot express.
+
+Three questions to answer first, because each changes the schema:
+
+1. Does break-glass access apply? If an administrator can reveal a personal
+   credential in an emergency, it is not private, and the UI must not claim
+   otherwise.
+2. Do personal credentials appear in offboarding export bundles? If a
+   technician leaves, does their vault go to the handover pack or vanish?
+3. Are they encrypted under the tenant DEK (so a tenant key rotation covers
+   them) or a per-user key (so they survive differently)?
+
+My recommendation: tenant DEK, `owner_user_id` on the secret, an RLS policy
+that adds `owner_user_id = helm.current_user_id()` and **excludes** them from
+export bundles and cross-client search, with administrator access refused
+rather than audited. That is defensible and simple. But it is your call, and
+it should be written down before the migration.
+
+### Credential Strength is nearly free, and the empty bucket is already right
+
+`secret.current_strength_score` and `current_plaintext_length` are maintained
+on write, so the widget is a `GROUP BY` over a bucket expression — no
+decryption, no backfill job, no new write path. Secrets stored before that
+column existed are `NULL`, which maps cleanly onto ITG's "Not evaluated"
+bucket rather than needing a migration to invent a value.
+
+### Checklists should extend SOPs, not add tables
+
+`sop` → `sop_version` → `sop_step` is the template, `sop_run` → `sop_run_step`
+is the instance. That is ITG's checklist model already. What is missing is
+two columns on each step table (`assigned_to`, `due_at`) plus an index for
+"tasks assigned to me". Adding a parallel `checklist` tree would leave two
+half-used features.
+
+Naming: the sidebar should probably say "Checklists" for the runs and keep
+"SOPs" for the templates, rather than exposing the internal word twice.
+
+### Sidebar customization should copy the dashboard's pattern exactly
+
+`user_dashboard.widgets` is a jsonb layout validated by
+`helm.dashboard_layout_valid()` in `0370`, with `WIDGET_KEYS` in
+`src/lib/workspace/widgets.ts` as the TS mirror and a test asserting the two
+lists agree. Reuse that shape for sidebar order and visibility, including the
+test — it is the thing that stops a key being added in one place only.
+
+### One operational note
+
+A new worker job for the RDAP/TLS refresh needs its own advisory lock key.
+Keys run `0x48_45_4c_4d_01` … `0x..0a` and a duplicate crash-loops the worker
+on startup — this repo has already lost three days to exactly that. Use
+`0x48_45_4c_4d_0b`; `tests/unit/worker-jobs.test.ts` will catch a collision.
+
+---
+
+## Proposed order of work
+
+Smallest high-impact first. Each group is its own branch, migration(s), tests
+and PR.
+
+| Group | Scope | Migration | Why here |
+| --- | --- | --- | --- |
+| **A** | Clients list parity: reuse `data-table`/`column-menu`/`filter-toolbar` on `/organizations`; add Recents + Favorites strip; `organization.type` enum; surface Status and Sync Status | 0600 | Pure reuse of components already written. Highest visible change per line of code |
+| **B** | Client-page widgets from data already stored: Credential Strength buckets, Popular Credentials, Recently Updated, Recently Viewed (org-scoped), Activity Feed | none | No schema at all. Four widgets out of existing columns and `audit_log` |
+| **C** | Flexible asset **type authoring UI** — create/edit a type, its fields, icon, colour | none (maybe one for field ordering) | Unblocks the whole documentation model. The engine exists; nobody can drive it |
+| **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link | 0610 | Follows the dashboard pattern; small and self-contained |
+| **E** | Profile/preferences: user timezone, theme, side-panel toggle, first/last name, MFA recovery token | 0620 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
+| **F** | Checklists: `assigned_to` + `due_at` on both step tables, My Tasks under Personal | 0630 | Delivers half of the Personal section by extending SOPs |
+| **G** | Global section: completion grid with % badges, per-client completion scores | 0640 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
+| **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0650 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
+| **I** | Documentation Health ring; client logo upload | 0660 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
+| **J** | Personal Credentials vault | 0670 | Last, deliberately — blocked on the three policy questions above |
+| **K** | Email channel + notification toggles | 0680 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles |
+
+Deferred, flagged rather than silently dropped:
+
+- **In-app notifications and help icon (#1)** — needs a notification *store*,
+  which is a feature in its own right, not a header icon.
+- **Checklist email reminders (#8)** — folded into K, since they cannot work
+  before an email channel exists.
+
+## Open questions
+
+1. Personal Credentials: the three questions above.
+2. Does the Global completion grid count archived clients? (`archived_at`,
+   `status`, and `is_msp_internal` all plausibly exclude a row.)
+3. "Not viewed recently" for Documentation Health — per user, or per tenant?
+   `user_recent_view` is per user, so a tenant-wide answer needs `audit_log`.
+4. Air-gapped installs: should H be opt-in, given `docs/deployment` promises a
+   working air-gapped deployment?
