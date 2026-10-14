@@ -319,11 +319,16 @@ export default async function CategoryPage({
 
   const importSpec = importSpecFor(category.slug);
   /*
-   * SOPs are the one category with no create path: 'sop' is not in the assets
-   * route's CREATABLE list, so there is nothing for + New to call. Documents are
-   * created by uploading a file, which the documents page already does.
+   * Documents are created by uploading a file, which the documents page already
+   * does, so + New has nothing to open there.
+   *
+   * SOPs were the other exception until F1 and are not any more: 'sop' is still
+   * absent from the assets route's CREATABLE list — a procedure's payload is its
+   * steps, so creating one through the generic path would make a node that
+   * documents nothing — but POST /api/sops exists now and CategoryActions opens
+   * NewProcedureForm for this category.
    */
-  const canCreate = category.source !== 'sop' && category.source !== 'attachment';
+  const canCreate = category.source !== 'attachment';
 
   /*
    * Offered on every category whose rows carry is_internal_only — which is every

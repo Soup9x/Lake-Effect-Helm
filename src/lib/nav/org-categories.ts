@@ -8,8 +8,14 @@
  * which is the kind of navigation that teaches people not to trust the sidebar.
  *
  * WHAT HAS NO HELM EQUIVALENT, and is therefore absent rather than stubbed:
- * Checklists. There is no table for a recurring task list; adding a nav item
- * for one would promise a feature that does not exist.
+ * a RECURRING task list. The sentence here used to say "Checklists. There is no
+ * table for a recurring task list", and the first half of that was never true —
+ * 0090 has modelled procedures, published versions and runs since the schema
+ * was written, and since F1 the application creates them, under SOPs. What is
+ * still missing is the recurring part: something that raises a run on a
+ * schedule, which needs the job channel K builds. A "Checklists" item today
+ * would route to the same rows SOPs already lists, under a word that promises
+ * scheduling.
  *
  * `kind` is how the count and the listing are derived:
  *   'node'  — asset_node filtered to one node_type
@@ -60,6 +66,37 @@ export const ORG_CATEGORIES: readonly OrgCategory[] = [
   { slug: 'sops',         label: 'SOPs',         kind: 'node', source: 'sop',               icon: 'BookOpen',   secondary: true },
   { slug: 'ip-addresses', label: 'IP Addresses', kind: 'node', source: 'ip_address',        icon: 'Binary',     secondary: true },
 ];
+
+/**
+ * Which create form "+ New" opens on a category page, or null for none.
+ *
+ * ONE ANSWER RATHER THAN FIVE CONDITIONS. CategoryActions used to test each
+ * form's condition independently, and the generic asset form's condition was
+ * "this category has a node_type" — which is true of SOPs, because a procedure
+ * IS an asset_node of type 'sop'. That needed a `category !== 'sops'` guard
+ * standing between a right screen and a wrong one, and nothing but the guard's
+ * own comment said so. A function that returns ONE form cannot render two, so
+ * the class of bug is gone rather than guarded against.
+ *
+ * It is here, beside the taxonomy, because the answer is a property of the
+ * category: 'passwords' means a credential whatever page is asking.
+ */
+export type CreateForm = 'contact' | 'secret' | 'site' | 'procedure' | 'asset';
+
+export function createFormFor(category: string, nodeType?: string | undefined): CreateForm | null {
+  switch (category) {
+    case 'contacts': return 'contact';
+    case 'passwords': return 'secret';
+    case 'locations': return 'site';
+    case 'sops': return 'procedure';
+    default:
+      // Every remaining node category shares one form, pinned to its type.
+      // 'documents' is a file upload and has no node_type, so it lands here
+      // with nothing to offer — which is why Import exists on that category
+      // and + New does not.
+      return nodeType ? 'asset' : null;
+  }
+}
 
 const BY_SLUG = new Map(ORG_CATEGORIES.map((c) => [c.slug, c]));
 

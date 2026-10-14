@@ -25,6 +25,8 @@ import { NotesCard } from '@/components/notes-card';
 import { HealthDot } from '@/components/ui/health-dot';
 import { isFavorite, listRecentInOrganization, recordView } from '@/lib/workspace/queries';
 import { listClientActivity, listRecentlyUpdated } from '@/lib/clients/activity';
+import { listRunsForOrganization } from '@/lib/sops/queries';
+import { ChecklistRunsCard } from '@/components/checklist-runs-card';
 import {
   ActivityFeedWidget, ClientRecentlyViewedWidget, CredentialStrengthWidget,
   PopularCredentialsWidget, RecentlyUpdatedWidget, type PopularCredential,
@@ -122,7 +124,7 @@ export default async function OrganizationPage({
 
     const [
       sites, contacts, assets, credentials, expiries, health, pinned, folders, documents,
-      recentlyUpdated, recentlyViewed, activity,
+      recentlyUpdated, recentlyViewed, activity, runs,
     ] = await Promise.all([
       tx<SiteRow[]>`
         SELECT id, name, code, is_primary, address_line1, city, region, main_phone, notes
@@ -213,12 +215,21 @@ export default async function OrganizationPage({
       listRecentlyUpdated(tx, organizationId),
       listRecentInOrganization(tx, organizationId),
       listClientActivity(tx, organizationId),
+      /*
+       * Checklist runs for this client, open ones first.
+       *
+       * Added in F1, which is also when anything could create one: the model in
+       * 0090 was complete and no code path had ever written sop_run. Read
+       * through v_sop_run_progress so the counts come from one place rather than
+       * being recomputed per card.
+       */
+      listRunsForOrganization(tx, organizationId),
     ]);
 
     return {
       organization, sites, contacts, assets, credentials, expiries,
       health: health[0], pinned, folders, documents,
-      recentlyUpdated, recentlyViewed, activity,
+      recentlyUpdated, recentlyViewed, activity, runs,
       canDeleteDocuments: session.permissions.includes('asset:delete'),
       canReadAudit: session.permissions.includes('audit:read'),
       /*
@@ -249,7 +260,7 @@ export default async function OrganizationPage({
 
   const {
     organization, sites, contacts, assets, credentials, expiries, health, pinned,
-    folders, documents, recentlyUpdated, recentlyViewed, activity,
+    folders, documents, recentlyUpdated, recentlyViewed, activity, runs,
     canDeleteDocuments, canReadAudit, canSeeAccessCounts,
   } = data;
   const canWrite = !isClientRole(identity.roleKey);
@@ -409,6 +420,14 @@ export default async function OrganizationPage({
           <RecentlyUpdatedWidget items={recentlyUpdated} organizationId={organization.id} />
           <ActivityFeedWidget activity={activity} canReadAudit={canReadAudit} />
         </div>
+        {/*
+          Checklist runs. Rendered only when there are any, rather than as a
+          permanent empty card: a client with no runs is the common case while
+          procedures are being written, and a card that says "none" on every
+          client is furniture. Starting one happens on the procedure, which is
+          where the version being run is visible.
+        */}
+        {runs.length > 0 && <ChecklistRunsCard runs={runs} />}
         {/*
           FIVE SECTIONS, FIVE CARDS, and the lists themselves in modals.
           Each of these used to render inline and in full: every credential,
