@@ -56,6 +56,15 @@ const viewer = actor(IDS.tenant1, IDS.acmeViewer);
 const USERS = {
   admin: { id: IDS.admin1, email: 'admin@northwind.test', name: 'Northwind Admin' },
   viewer: { id: IDS.acmeViewer, email: 'viewer@acme.test', name: 'Acme Viewer' },
+  /*
+   * client_admin, and it is here for one specific reason. It is the only
+   * fixture actor that holds `secret:read` WITHOUT `secret:reveal`, so it is
+   * the only one that can tell those two permissions apart. A sabotage run
+   * gating the read counts on `secret:read` passed every test, because
+   * client_read_only lacks both — the gate looked right and was checked
+   * against an actor that could not see the difference.
+   */
+  clientAdmin: { id: IDS.acmeAdmin, email: 'it@acme.test', name: 'Acme IT Manager' },
 } as const satisfies Record<string, SessionUser>;
 
 /** Whose session the page render sees. Swapped per test, not per file. */
@@ -127,6 +136,33 @@ async function renderClientPage(organizationId = IDS.orgAcme): Promise<unknown> 
   return (
     await import('../../src/app/(app)/organizations/[organizationId]/page')
   ).default({ params: Promise.resolve({ organizationId }) });
+}
+
+/**
+ * Every object key anywhere in a rendered tree.
+ *
+ * JSON.stringify cannot do this: an element tree holds module objects that
+ * close cycles, and it throws on the first one. The WeakSet is what makes the
+ * walk terminate, and it has to be a walk rather than a text search because
+ * the thing being proven absent is a key, not a word in some prose.
+ */
+function keysIn(node: unknown, seen = new WeakSet<object>()): Set<string> {
+  const found = new Set<string>();
+  const walk = (value: unknown): void => {
+    if (value === null || typeof value !== 'object') return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item);
+      return;
+    }
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      found.add(key);
+      walk(child);
+    }
+  };
+  walk(node);
+  return found;
 }
 
 /** The props a named component was handed, found anywhere in the tree. */
@@ -260,6 +296,70 @@ describe('most used credentials', () => {
     // A number, not the string postgres.js hands back for a bigint. If this is
     // a string the sort above passed by luck of the digits.
     expect(typeof rows[0]!.accessCount).toBe('number');
+  });
+
+  it('ships no read count at all to an actor without secret:reveal', async () => {
+    /*
+     * ASSERTED ON THE PAYLOAD, not on what is drawn. This is a server
+     * component, so anything it hands a child is serialised and travels to the
+     * browser whether or not a card renders it — building the list and then
+     * hiding it would deliver every count to exactly the actor it was being
+     * withheld from. So the assertion is that the array is EMPTY, and the
+     * search below is the stronger version of the same claim: the specific
+     * number ten must not appear anywhere in the tree this page returns.
+     *
+     * client_read_only is the actor because RLS does NOT withhold these
+     * columns from it — secret_rls_select consults org scope and
+     * helm.secret_node_visible(), not secret:read — so this gate is the only
+     * thing standing between it and the counts.
+     */
+    currentUser = USERS.viewer;
+    try {
+      const rendered = await renderClientPage();
+      const card = propsOf(rendered, 'PopularCredentialsWidget');
+      expect(card, 'the card should still render, saying which kind of empty').toBeTruthy();
+      expect(card!.canSeeAccessCounts).toBe(false);
+      expect(card!.credentials).toEqual([]);
+
+      // 'Strong by construction' was revealed ten times. Neither key may be
+      // anywhere in the tree this page returns — not merely absent from the
+      // card that would have drawn it.
+      expect(keysIn(rendered)).not.toContain('accessCount');
+      expect(keysIn(rendered)).not.toContain('lastAccessedAt');
+    } finally {
+      currentUser = USERS.admin;
+    }
+  });
+
+  it('withholds them from client_admin, which may read but not reveal', async () => {
+    // The role the gate is actually about: a co-managed customer's own
+    // administrator. It holds secret:read and audit:read and NOT
+    // secret:reveal, so it can see that a credential exists, can read its own
+    // organisation's audit trail, and cannot learn how many times the MSP
+    // revealed the domain admin password.
+    currentUser = USERS.clientAdmin;
+    try {
+      const rendered = await renderClientPage();
+      const card = propsOf(rendered, 'PopularCredentialsWidget');
+      expect(card!.canSeeAccessCounts).toBe(false);
+      expect(card!.credentials).toEqual([]);
+      expect(keysIn(rendered)).not.toContain('accessCount');
+
+      // And the audit card IS available to it, so this is a gate on the counts
+      // rather than on the role seeing anything at all.
+      const activity = propsOf(rendered, 'ActivityFeedWidget');
+      expect(activity!.canReadAudit).toBe(true);
+    } finally {
+      currentUser = USERS.admin;
+    }
+  });
+
+  it('...and still shows them to a role that can reveal', async () => {
+    // The other half, so the test above cannot pass because the page broke.
+    // super_admin holds secret:reveal.
+    const card = propsOf(await renderClientPage(), 'PopularCredentialsWidget')!;
+    expect(card.canSeeAccessCounts).toBe(true);
+    expect((card.credentials as unknown[]).length).toBeGreaterThan(0);
   });
 
   it('omits credentials nobody has read', async () => {

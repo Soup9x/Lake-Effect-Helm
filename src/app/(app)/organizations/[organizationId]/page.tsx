@@ -221,6 +221,26 @@ export default async function OrganizationPage({
       recentlyUpdated, recentlyViewed, activity,
       canDeleteDocuments: session.permissions.includes('asset:delete'),
       canReadAudit: session.permissions.includes('audit:read'),
+      /*
+       * Who may see HOW OFTEN a credential has been read.
+       *
+       * Not gated by RLS, and that is the point of gating it here.
+       * secret_rls_select admits any actor in the organisation's scope whose
+       * credential node is visible — it does not consult `secret:read`, let
+       * alone `secret:reveal` — so v_secret_metadata hands access_count and
+       * last_accessed_at to a client_read_only actor as readily as to a
+       * technician. The columns were always readable; until this card they had
+       * nowhere to surface.
+       *
+       * `secret:reveal` is the right gate because it is the permission that
+       * PRODUCES the number. Every increment happens inside
+       * helm.reveal_secret(), which refuses an actor without it, so "how many
+       * times was this revealed" is answerable only by somebody who could have
+       * done the revealing. In the shipped catalogue that is super_admin,
+       * tier1, tier2 and api_service — and notably NOT client_admin, which
+       * holds secret:read and audit:read but not secret:reveal.
+       */
+      canSeeAccessCounts: session.permissions.includes('secret:reveal'),
     };
   });
 
@@ -230,7 +250,7 @@ export default async function OrganizationPage({
   const {
     organization, sites, contacts, assets, credentials, expiries, health, pinned,
     folders, documents, recentlyUpdated, recentlyViewed, activity,
-    canDeleteDocuments, canReadAudit,
+    canDeleteDocuments, canReadAudit, canSeeAccessCounts,
   } = data;
   const canWrite = !isClientRole(identity.roleKey);
 
@@ -251,20 +271,33 @@ export default async function OrganizationPage({
    */
   const withSecret = credentials.filter((c) => c.secret_id !== null);
   const strengthCounts = countStrength(withSecret.map((c) => c.strength_score));
-  const popularCredentials: PopularCredential[] = withSecret
-    .map((c) => ({
-      nodeId: c.node_id,
-      name: c.name,
-      accessCount: Number(c.access_count ?? 0),
-      lastAccessedAt: c.last_accessed_at,
-    }))
-    // Never-read credentials are not "least popular", they are absent from the
-    // question. access_count is a bigint, so it arrives as a string and
-    // Number() above is what makes this a numeric sort rather than a lexical
-    // one — '9' > '10' is true for strings and would put nine reads above ten.
-    .filter((c) => c.accessCount > 0)
-    .sort((a, b) => b.accessCount - a.accessCount)
-    .slice(0, 5);
+
+  /*
+   * THE GATE IS ON THE DATA, not on the rendering, and the difference is the
+   * whole point. This is a server component: whatever it hands a child is
+   * serialised into the RSC payload and travels to the browser whether or not
+   * anything draws it. Building the list and then hiding the card would ship
+   * every read count to exactly the actor it was being withheld from, where
+   * the network tab is one keypress away. So an actor without secret:reveal
+   * gets an empty array, and the numbers never leave the server.
+   */
+  const popularCredentials: PopularCredential[] = !canSeeAccessCounts
+    ? []
+    : withSecret
+        .map((c) => ({
+          nodeId: c.node_id,
+          name: c.name,
+          accessCount: Number(c.access_count ?? 0),
+          lastAccessedAt: c.last_accessed_at,
+        }))
+        // Never-read credentials are not "least popular", they are absent from
+        // the question. access_count is a bigint, so it arrives as a string
+        // and Number() above is what makes this a numeric sort rather than a
+        // lexical one — '9' > '10' is true for strings and would put nine
+        // reads above ten.
+        .filter((c) => c.accessCount > 0)
+        .sort((a, b) => b.accessCount - a.accessCount)
+        .slice(0, 5);
 
   const documentRows: DocumentRow[] = documents.map((d) => ({
     id: d.id,
@@ -366,7 +399,10 @@ export default async function OrganizationPage({
             counts={strengthCounts}
             withoutSecret={credentials.length - withSecret.length}
           />
-          <PopularCredentialsWidget credentials={popularCredentials} />
+          <PopularCredentialsWidget
+            credentials={popularCredentials}
+            canSeeAccessCounts={canSeeAccessCounts}
+          />
           <ClientRecentlyViewedWidget items={recentlyViewed} />
         </div>
         <div className="grid gap-4 lg:grid-cols-2">

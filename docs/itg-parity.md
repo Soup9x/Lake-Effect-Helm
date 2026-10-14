@@ -244,19 +244,39 @@ happened to. The page passes `session.permissions.includes('audit:read')` so
 the card can say "your role does not include reading the audit log" instead of
 "nothing recorded yet". Tested by rendering the page as `client_read_only`.
 
-**What a co-managed client user now sees, stated rather than left implicit.**
-`access_count` and `last_accessed_at` were already columns on
-`v_secret_metadata`, and `secret_rls_select` gates that view on org scope and
-`helm.secret_node_visible()` — **not** on `secret:read`. So a
-`client_read_only` actor could already read both and simply had nowhere to see
-them; the Most used card now displays them. That is a display change, not a
-new grant, and it is consistent with the existing model: `client_admin` holds
-`audit:read` deliberately so a co-managed customer can see who touched their
-documentation, and the Credentials list already shows them `strength_score`
-and `sensitivity` from the same view on the same page. Worth knowing because
-"the MSP read our domain admin password 47 times" is now on a client's screen
-where before it was only in the database. Reversible in one line (gate the
-card on `secret:reveal`) if that is not wanted.
+**Read counts are gated on `secret:reveal`.** `access_count` and
+`last_accessed_at` are columns on `v_secret_metadata`, and `secret_rls_select`
+gates that view on org scope and `helm.secret_node_visible()` — **not** on
+`secret:read`, let alone `secret:reveal`. So RLS hands both to a
+`client_read_only` actor as readily as to a technician; they were always
+readable and simply had nowhere to surface. The first cut of this card
+displayed them to anyone who could open the client page, which would have put
+"the MSP read our domain admin password 47 times" on a customer's screen. It
+is now restricted, at the user's direction, to roles holding `secret:reveal`.
+
+`secret:reveal` is the right gate because it is the permission that *produces*
+the number: every increment happens inside `helm.reveal_secret()`, which
+refuses an actor without it. So the count is answerable only by somebody who
+could have done the revealing. In the shipped catalogue that is `super_admin`,
+`tier1`, `tier2` and `api_service` — and **not** `client_admin`, which holds
+`secret:read` and `audit:read` but not `secret:reveal`.
+
+**The gate is on the data, not the rendering**, and that distinction is the
+substance of it. The client page is a server component: anything it hands a
+child is serialised into the RSC payload and reaches the browser whether or
+not a card draws it. Building the list and hiding the card would have
+delivered every count to exactly the actor it was being withheld from. So the
+page passes an empty array and the numbers never leave the server; the card's
+`canSeeAccessCounts` prop exists only so it can say which kind of empty it is.
+A test asserts the payload, not the markup: `accessCount` must not appear as a
+key anywhere in the tree the page returns.
+
+That test needed the right actor to mean anything. A sabotage run gating on
+`secret:read` instead passed everything, because `client_read_only` holds
+neither permission and could not tell them apart. `client_admin` is now a
+fixture actor for exactly that reason — it is the only one that distinguishes
+`secret:read` from `secret:reveal`, and it is also the role the restriction is
+most about.
 
 **Known under-report, found while building this and not fixed here.**
 `helm.write_secret_version()` audits `secret.created`/`secret.rotated` with
@@ -292,6 +312,14 @@ only in a conversation gets re-litigated.
    the UI shows "last checked: never/failed" rather than erroring. An
    air-gapped install must keep working with zero configuration. Lock key
    `0x48_45_4c_4d_0b`.
+
+5. **Credential read counts (B).** `access_count` and `last_accessed_at` are
+   shown only to roles holding `secret:reveal` — the permission that produces
+   the number, since every increment happens inside `helm.reveal_secret()`.
+   RLS does not withhold these columns, so this is a product restriction
+   enforced in the page: an actor without the permission is handed an empty
+   array, so no count is serialised into the RSC payload. `client_admin` sees
+   the audit trail for its own organisation and not the reveal counts.
 
 Two further decisions taken at the same time:
 

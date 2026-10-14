@@ -179,14 +179,34 @@ export interface PopularCredential {
  * Only rows that have been read at least once. A list padded out with zeros is
  * not a list of popular anything, and the empty state says something useful
  * instead.
+ *
+ * `canSeeAccessCounts` IS `secret:reveal`, and this card is the only place in
+ * Helm that shows a read count. RLS does not gate these columns —
+ * secret_rls_select admits any actor in the organisation's scope — so the
+ * restriction is a product decision rather than a policy, and it is enforced
+ * where the decision lives: the PAGE passes an empty array to an actor without
+ * the permission, so no count is serialised into the RSC payload. This prop
+ * exists only so the card can say which kind of empty it is, exactly as the
+ * activity feed does. It is not the enforcement; do not make it the
+ * enforcement.
  */
-export function PopularCredentialsWidget({ credentials }: { credentials: PopularCredential[] }) {
+export function PopularCredentialsWidget({
+  credentials,
+  canSeeAccessCounts,
+}: {
+  credentials: PopularCredential[];
+  canSeeAccessCounts: boolean;
+}) {
   return (
     <Widget
       icon={<Flame className="size-4 text-ink-faint" aria-hidden />}
       title="Most used credentials"
     >
-      {credentials.length === 0 ? (
+      {!canSeeAccessCounts ? (
+        <Nothing>
+          Reveal counts are shown to roles that can reveal a credential.
+        </Nothing>
+      ) : credentials.length === 0 ? (
         <Nothing>No credential here has been revealed yet.</Nothing>
       ) : (
         <ul className="space-y-1.5">

@@ -146,6 +146,18 @@ not in Recently updated (it touches `secret`, not the credential's
 in Activity. Each card carries a footer line saying so, because a reader who
 expects one list to contain everything will conclude an edit was lost.
 
+**Reveal counts are gated on `secret:reveal`, in the page rather than the
+card.** `v_secret_metadata.access_count` is not withheld by RLS —
+`secret_rls_select` consults org scope and `helm.secret_node_visible()`, not
+`secret:read` — so the restriction is a product decision. It is enforced on
+the *data*: a server component serialises whatever it hands a child, so a card
+that hid the list would still ship every count to the browser of the actor it
+was withheld from. The page passes an empty array instead, and the card's
+`canSeeAccessCounts` prop only decides which empty state to print.
+`secret:reveal` is the gate because it is the permission that produces the
+number — every increment is inside `helm.reveal_secret()` — so the count is
+answerable only by a role that could have done the revealing.
+
 **An empty audit feed says *which* kind of empty it is.** `audit_log`'s policy
 requires `audit:read`, so an actor without it receives zero rows from a query
 that succeeded. The page passes `session.permissions.includes('audit:read')`
