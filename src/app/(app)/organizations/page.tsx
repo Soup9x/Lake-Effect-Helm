@@ -205,7 +205,25 @@ export default async function OrganizationsPage({
             ? 'Hidden from the client list and from search. Nothing has been deleted; select and restore to bring one back.'
             : 'Every organisation documented in this tenant, and what is in each.'
         }
-        actions={canWrite && !showArchived ? <NewOrganizationForm /> : undefined}
+        actions={
+          <>
+            {/*
+              The way in to the coverage grid until L builds the Global landing
+              page that collects it. Hidden from client-side roles on purpose:
+              the grid is a cross-client overview, and for somebody who can see
+              one organisation it is a single row — a page not worth a link.
+            */}
+            {!isClientRole(identity.roleKey) && !showArchived && (
+              <Link
+                href="/coverage"
+                className="rounded-md border border-border px-3 py-1.5 text-sm text-ink-muted hover:text-ink"
+              >
+                Coverage
+              </Link>
+            )}
+            {canWrite && !showArchived && <NewOrganizationForm />}
+          </>
+        }
       />
       <PageBody>
         {!showArchived && (
