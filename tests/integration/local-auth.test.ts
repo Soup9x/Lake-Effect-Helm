@@ -26,6 +26,9 @@ import {
   setLocalPassword,
 } from '../../src/lib/auth/local';
 import { hash as argon2Hash } from '@node-rs/argon2';
+// The throttle test calibrates against a real verification rather than a
+// hard-coded millisecond budget. See it for why.
+import { verifyDummyPassword } from '../../src/lib/auth/password';
 import { db } from '../../src/lib/db/client';
 import {
   connectPools,
@@ -360,14 +363,47 @@ describe('lockout', () => {
       });
     }
 
+    /*
+     * CALIBRATED ON THIS MACHINE, NOT AGAINST A CONSTANT.
+     *
+     * This assertion used to be `expect(elapsed).toBeLessThan(100)`, with a
+     * comment reasoning from "~260ms per Argon2 verification". It failed in CI
+     * at 151ms on a contended runner while the identical job on the identical
+     * commit passed in a parallel run — which is the signature of a test that
+     * measures the runner rather than the code. 151ms is not evidence that
+     * Argon2 ran; it is evidence that the box was busy.
+     *
+     * The property under test is a RATIO, so the test is now a ratio. One real
+     * verification is measured here, in this process, moments before the
+     * throttled attempt, and the refusal has to come back in a fraction of it.
+     * verifyDummyPassword() is the right probe: it is the unknown-account path,
+     * so it is a genuine Argon2 verification against a real hash rather than a
+     * sleep, and it tracks ARGON2_PARAMS automatically if those ever change.
+     *
+     * Argon2 is thoroughly warm by now — the thirty sprayed attempts above all
+     * took the unknown-account path — so the probe is not paying a first-call
+     * cost the measured attempt would avoid.
+     */
+    const probeStart = performance.now();
+    await verifyDummyPassword('calibration probe, never a real password');
+    const oneVerification = performance.now() - probeStart;
+
     const start = performance.now();
     await attemptLocalLogin({ email: EMAIL, password: GOOD, ip: '203.0.113.98' });
     const elapsed = performance.now() - start;
 
-    // Well under one Argon2 verification (~260ms). If the refusal hashed first,
-    // the rate limiter would be a lever for exhausting the server rather than
-    // a defence against one.
-    expect(elapsed).toBeLessThan(100);
+    // The probe has to have measured something, or the ratio below could be
+    // satisfied by two numbers that are both noise.
+    expect(oneVerification, 'the Argon2 probe did no measurable work').toBeGreaterThan(10);
+
+    // If the refusal hashed first, elapsed would be ~oneVerification and the
+    // rate limiter would be a lever for exhausting the server rather than a
+    // defence against one. Short-circuiting puts this two orders of magnitude
+    // apart, so half is a threshold with room for a very slow runner.
+    expect(
+      elapsed,
+      `refusal took ${elapsed.toFixed(1)}ms against a ${oneVerification.toFixed(1)}ms verification`,
+    ).toBeLessThan(oneVerification / 2);
   });
 
   it('lets an administrator clear a lockout without changing the password', async () => {
