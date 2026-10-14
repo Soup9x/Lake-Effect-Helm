@@ -7,6 +7,8 @@ import {
 } from '@/lib/auth/server-identity';
 import { installSessionResolver } from '@/lib/auth/bootstrap';
 import { SignedOut } from '@/components/signed-out';
+import { ThemeSync } from '@/components/theme-sync';
+import { readMyPreferences } from '@/lib/ui/account-queries';
 
 /**
  * The authenticated shell.
@@ -37,9 +39,23 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   }
 
   /*
+   * The account's own preferences, read here because this is the one place
+   * every authenticated page passes through and the theme has to be applied
+   * before the page below it paints. One query, and the only consumer so far
+   * is the script — the preferences FORM reads its own copy on the account
+   * page, because that page needs the name halves too.
+   */
+  const preferences = await readMyPreferences(identity);
+
+  /*
    * Pages that are NOT inside an organization get the content column straight
    * from here. The organization layout supplies its own, because it has to put
    * the drawer beside it — see organizations/[organizationId]/layout.tsx.
    */
-  return <AppChrome identity={identity}>{children}</AppChrome>;
+  return (
+    <>
+      <ThemeSync accountTheme={preferences.theme} />
+      <AppChrome identity={identity}>{children}</AppChrome>
+    </>
+  );
 }

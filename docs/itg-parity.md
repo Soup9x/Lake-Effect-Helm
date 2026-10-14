@@ -70,13 +70,13 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 9 | Both feed Upcoming Expirations | **Exists** | `expiration.kind` + `source_table`/`source_id` |
 | 9 | Auto-fill expiry (RDAP + TLS probe) | **Missing** | Not among the ten worker jobs. `expiration.refreshed_at` is the slot waiting for it |
 | 10 | Change password | **Exists** | `/api/auth/local/change-password` |
-| 10 | First/last name split | **Partial** | `app_user.name` is one field |
+| 10 | First/last name split | **Exists** | Group E: `first_name`/`last_name` on `app_user`, with `name` still the display column and a trigger composing it |
 | 10 | MFA status, enable/disable | **Partial** | `mfa_enrolled_at`, `auth_authenticator` |
-| 10 | One-time MFA recovery token | **Missing** | No column, no route |
-| 10 | Time zone | **Missing** | `timezone` exists on `organization` and `site`, not on a user |
-| 10 | Theme (default/light/dark) | **Missing** | No stored preference |
+| 10 | One-time MFA recovery token | **Deferred** | Group E deliberately did not build it: nothing reads `mfa_enrolled_at` and the sign-in path enforces no second factor, so a bypass token would be a second password — see decision 15 |
+| 10 | Time zone | **Exists** | Group E: `app_user.timezone`, validated against `pg_timezone_names`. Shared facts stay UTC-suffixed; a reader's own sessions show their local time beside it |
+| 10 | Theme (default/light/dark) | **Exists** | Group E: `app_user.theme` is the account DEFAULT; the shell's existing per-browser toggle still overrides it locally |
 | 10 | Email notification toggles | **Missing** | Depends on an email channel existing at all |
-| 10 | "Enable side panel" | **Missing** | No stored preference; credentials open as a page |
+| 10 | "Enable side panel" | **Deferred** | Group E deliberately did not store it: there is no side panel to switch. Needs the panel first — see decision 15 |
 
 ---
 
@@ -169,7 +169,7 @@ and PR.
 | **C** | Flexible asset **type authoring UI** — create/edit a type, its fields, icon, colour | none | Unblocks the documentation model. The engine exists; nobody can drive it. Needed three API routes too — see below |
 | **C2** | Records: the schema-driven **record** form behind the dead `+ New` button, a record `PATCH` route, and the `flexible_asset` rendering path `/assets/[nodeId]` never had | none | C lets a type be defined. Without this a record of one cannot be created, cannot be corrected, and renders none of its fields |
 | **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link — **landed** | 0620 | Follows the dashboard pattern; small and self-contained |
-| **E** | Profile/preferences: user timezone, theme, side-panel toggle, first/last name, MFA recovery token | 0630 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
+| **E** | Profile/preferences: user timezone, theme, first/last name — **landed**. Side-panel toggle and MFA recovery token deferred, decision 15 | 0630 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
 | **F** | Checklists: `assigned_to` + `due_at` on both step tables, My Tasks under Personal | 0640 | Delivers half of the Personal section by extending SOPs |
 | **G** | Global section: completion grid with % badges, per-client completion scores | 0650 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
 | **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0660 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
@@ -584,6 +584,64 @@ validator's literal list, and the drawer already lists the ones with at least on
 record. "Do I want this in my sidebar" is already answered by whether anything is
 documented under it.
 
+### Group E — profile and preferences (migration 0630)
+
+Three of the five items on this group's list, with the other two deferred for
+the same reason and that reason written down rather than left as a gap.
+
+**What landed.** `first_name`/`last_name` on `app_user` with `name` still the
+display column, so the forty-odd queries selecting `u.name` are untouched and a
+trigger composes it from the halves; `timezone`, validated against
+`pg_timezone_names`; and `theme` as the account default.
+
+**The columns are on `app_user`, not in a preferences table,** because they are
+per-PERSON and not per-tenant. `user_dashboard` (0370) and `user_sidebar` (0620)
+are keyed `(tenant_id, user_id)` because what they hold *is* per-tenant — a
+layout of one tenant's categories means nothing in another. Somebody working for
+two MSPs through one account has one name, one time zone and one pair of eyes,
+and a theme keyed by tenant would change colour when they switched.
+
+**No new database functions, which is a correction rather than a
+simplification.** The plan was to copy `helm.set_my_profile()` from 0360 — a
+SECURITY DEFINER "write my own profile" entry point — and extend it. A guard
+written into 0630 caught the premise as false: `app_user` *is* readable and
+writable by `helm_app` under RLS (0220's deny list covers the `auth_*` tables and
+`secret_version`, not `app_user`, because the password hash lives in
+`local_credential`), and `set_my_profile()` is owned by `postgres`, so it runs as
+a superuser with RLS switched off — its `WHERE id = v_actor` is its *only*
+confinement. A plain scoped `UPDATE` is therefore both simpler and safer: the
+route's predicate and `app_user_rls_update` are two locks where a definer
+function has one.
+
+**The route's `WHERE id` is load-bearing and looks redundant,** which is why
+there is a test aimed squarely at it. `app_user_rls_update` is
+`id = helm.current_actor_id() OR helm.has_permission('user:write')` — because an
+administrator edits colleagues from the People page — so the policy alone would
+let a `super_admin`'s "save my preferences" rewrite every row in the tenant.
+
+**The theme has two homes and one precedence rule.** `ThemeToggle` has stored
+the choice in `localStorage` since the theme was built, and its header argued
+against ever putting it on the server: per-browser, costs no request, cannot
+fail. All of that is still true and none of it is undone. What it could not do
+is the thing the parity item asks for — sign in on a new machine and Helm is
+light again, forever. So the account value is a **default** and the local choice
+is an **override**: localStorage, then `app_user.theme`, then
+`prefers-color-scheme`. That is the same precedence `globals.css` already uses
+one level down, so it is one chain with three links rather than a new idea. A
+second pre-paint inline script (`ThemeSync`) applies the account value only when
+the first script set nothing, and deliberately does **not** write
+`localStorage` — writing would turn the default into a permanent local override
+and a later change would never reach that browser again.
+
+**The time zone does something, which was not true of the first draft.** A
+stored preference nothing reads is the placeholder problem this plan has just
+finished removing elsewhere. `formatDateTimeLocal()` renders UTC *and* the
+reader's own local time, and it is used on the one surface where the reader is
+the subject rather than a shared fact: their own sessions. An expiry date, a
+rotation due date and an audit timestamp stay UTC-suffixed and unconverted —
+"expires 2026-03-01" meaning three different instants is how a certificate
+lapses on a Sunday, and that rule is not being relaxed.
+
 ## Decisions
 
 The questions this document opened with have been answered. Recorded here
@@ -745,6 +803,32 @@ is how the same argument gets had twice.
     opens (break-glass, offboarding bundles, which key) do not go away with the
     change of approach; they move to a different boundary, and two of them stop
     being Helm's to answer.
+
+15. **A preference is not stored until the thing it controls exists (E).** Two
+    items on group E's list were deliberately *not* built, and both for the
+    same reason rather than for want of time:
+
+    - **"Enable side panel".** There is no side panel. Credentials open as a
+      page and no sheet, drawer or overlay component exists anywhere in
+      `src/components`, so the toggle would store a preference nothing reads.
+      Building the panel — an overlay rendering path, routing, focus
+      management — is a feature, not a preference, and belongs in a group of
+      its own.
+    - **One-time MFA recovery token.** `mfa_enrolled_at` and
+      `auth_authenticator` exist in the schema, but **nothing in the
+      application reads `mfa_enrolled_at`** and the sign-in path enforces no
+      second factor. Every MFA reference in the codebase is about documenting a
+      *client's* TOTP seed, not about signing in to Helm. A one-time token that
+      bypasses a check which is not performed is a second password, and a
+      security-sensitive one. It needs MFA sign-in enrolment first, which is
+      its own group.
+
+    This is the same rule decision 14 applies to Personal Credentials on the
+    Personal page, stated generally: a control that stores an answer nobody
+    acts on is worse than its absence, because somebody sets it and then
+    reasons about a system that is not listening. Both rows read **Deferred**
+    in the summary table rather than Missing, so the distinction between "not
+    done" and "not done on purpose" survives in the one place people look.
 
 Two further decisions taken at the same time:
 

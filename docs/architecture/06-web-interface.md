@@ -194,6 +194,50 @@ organisation-scoped (0200), so a client-side role is shown nothing from it. The
 secret's label is `"<template> — <field>"`, so without that join the page would
 name a template the reader's role may not read.
 
+### Your own account
+
+`/account` holds what is yours rather than the tenant's: the password, the
+sessions, and since group E the name halves, a time zone and a default theme.
+All four of the latter live on `app_user` because they are per-PERSON, not
+per-tenant — unlike the dashboard and drawer layouts, which are keyed
+`(tenant_id, user_id)` because what they hold is per-tenant.
+
+`PATCH /api/account` writes them in **one scoped UPDATE**, not through a
+SECURITY DEFINER function. `app_user` holds no credential material — that is
+`local_credential` — and `helm_app` may read and write it under RLS, so the
+route's `WHERE id = <actor>` plus `app_user_rls_update` are two locks where a
+definer function running as `postgres` would be one. The predicate is not
+redundant: that policy is `id = current_actor_id() OR has_permission('user:write')`,
+because an administrator edits colleagues from the People page.
+
+**The display name is composed, not competing.** `name` stays the display
+column so nothing that selects it changes, and a trigger derives it from the
+halves on any save that includes them. The form shows the box as read-only when
+the halves are set, because a third independently-typed answer would be one the
+trigger silently discards. With both halves empty the box is editable, which is
+the case for a mononym and for cleaning up what a directory import produced.
+
+**The theme has two homes and one precedence rule:** this browser's explicit
+choice (`localStorage`, via the shell's toggle), then the account default
+(`app_user.theme`), then `prefers-color-scheme`. That is the same precedence
+`globals.css` already uses between an explicit choice and the system — one chain
+with three links. `ThemeSync` is a second pre-paint inline script that applies
+the account value only when the first set nothing, and never writes
+`localStorage`: doing so would make the default a permanent local override and a
+later change would never reach that browser.
+
+**Time zones do not relax the UTC rule.** A shared fact — an expiry, a rotation
+due date, an audit timestamp — stays UTC-suffixed and unconverted, because
+"expires 2026-03-01" meaning three different instants is how a certificate
+lapses on a Sunday. `formatDateTimeLocal()` is for the other case the format
+module's header already names: a timestamp whose subject is the reader, which
+today means their own sessions.
+
+**Two preferences are deliberately not stored.** "Enable side panel" has no
+panel to switch, and a one-time MFA recovery token would bypass a check the
+sign-in path does not perform. Both appear as *Deferred* in the parity table
+rather than silently absent; decision 15 has the reasoning.
+
 ### Arranging the drawer
 
 The organization drawer's primary list is a per-user layout, not a hardcoded

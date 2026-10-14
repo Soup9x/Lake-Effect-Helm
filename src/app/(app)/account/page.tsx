@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ChangePasswordCard } from '@/components/change-password-card';
 import { ProfileForm } from '@/components/profile-form';
+import { readMyPreferences } from '@/lib/ui/account-queries';
 import { SessionList, type SessionRow } from '@/components/session-list';
 import { formatDateTime } from '@/lib/ui/format';
 
@@ -47,8 +48,8 @@ export default async function AccountPage() {
   const token = (await cookies()).get(sessionCookieName())?.value;
   const currentRef = token ? sessionRef(token) : null;
 
-  const { credential, sessions } = await withTenant(actorOf(identity), async (tx) => {
-    const [credentialRows, sessionRows] = await Promise.all([
+  const { credential, sessions, timezones } = await withTenant(actorOf(identity), async (tx) => {
+    const [credentialRows, sessionRows, timezoneRows] = await Promise.all([
       // The view carries no hash — helm_app holds column grants that exclude
       // it. Its only job is to answer "do you have a local password, and did
       // somebody else choose it".
@@ -57,9 +58,32 @@ export default async function AccountPage() {
       // SECURITY DEFINER, resolves the owner from the session context, and
       // returns a hash of each token rather than the token.
       tx<RawSession[]>`SELECT * FROM helm.my_sessions()`,
+      /*
+       * The zone names this server knows, so the picker cannot offer one the
+       * 0630 trigger would refuse. Read from the catalogue rather than from
+       * Intl.supportedValuesOf() in the browser: the database is what validates
+       * the value, and the two lists differ at the edges — a browser shipped
+       * with newer tzdata than the server would offer a zone that is then
+       * rejected on save, which is a confusing way to learn about tzdata.
+       *
+       * Filtered to the Region/City shape: pg_timezone_names also carries
+       * legacy aliases, POSIX strings and abbreviations (EST5EDT, posix/Zulu,
+       * GMT+0) that are either duplicates or not zones anybody means.
+       */
+      tx<{ name: string }[]>`
+        SELECT name FROM pg_timezone_names
+        WHERE name LIKE '%/%' AND name NOT LIKE 'posix/%' AND name NOT LIKE 'right/%'
+        ORDER BY name
+      `,
     ]);
-    return { credential: credentialRows[0] ?? null, sessions: sessionRows };
+    return {
+      credential: credentialRows[0] ?? null,
+      sessions: sessionRows,
+      timezones: timezoneRows.map((r) => r.name),
+    };
   });
+
+  const preferences = await readMyPreferences(identity);
 
   const rows: SessionRow[] = sessions.map((s) => ({
     ref: s.session_ref,
@@ -94,7 +118,13 @@ export default async function AccountPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
-            <ProfileForm currentName={identity.name === identity.email ? null : identity.name} />
+            {/*
+              Read here rather than taken from `identity`: identity.name comes
+              from the session and falls back to the email address, and this
+              form needs the halves and the preferences too — which live only
+              on the row.
+            */}
+            <ProfileForm preferences={preferences} timezones={timezones} />
 
             <div className="border-t border-border pt-4">
               <div className="flex items-start gap-2">
@@ -128,7 +158,7 @@ export default async function AccountPage() {
               it and change your password — in that order, so the session cannot outlive
               the password it was created with.
             </p>
-            <SessionList sessions={rows} />
+            <SessionList sessions={rows} timezone={preferences.timezone} />
           </CardContent>
         </Card>
 

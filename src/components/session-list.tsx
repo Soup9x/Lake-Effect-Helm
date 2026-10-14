@@ -6,7 +6,7 @@ import { Loader2, Monitor } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge, type BadgeTone } from './ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
-import { formatDateTime } from '@/lib/ui/format';
+import { formatDateTimeLocal } from '@/lib/ui/format';
 
 export interface SessionRow {
   ref: string;
@@ -38,7 +38,21 @@ const METHOD: Record<SessionRow['method'], { label: string; tone: BadgeTone }> =
  * that signs you out while pretending to be session management is just a
  * confusing sign-out button. There is one of those in the account menu.
  */
-export function SessionList({ sessions }: { sessions: SessionRow[] }) {
+export function SessionList({
+  sessions,
+  /**
+   * The reader's own zone, or null for "UTC only".
+   *
+   * These timestamps are the one case on this page where a person's own local
+   * time is the point rather than an ambiguity: "you signed in at 14:30 UTC"
+   * is hard to recognise as yours. Shared facts — an expiry, an audit row —
+   * stay UTC-suffixed; see formatDateTimeLocal's header.
+   */
+  timezone,
+}: {
+  sessions: SessionRow[];
+  timezone: string | null;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -85,7 +99,7 @@ export function SessionList({ sessions }: { sessions: SessionRow[] }) {
           {sessions.map((session) => (
             <TableRow key={session.ref}>
               <TableCell className="text-ink-muted">
-                {formatDateTime(session.createdAt)}
+                {formatDateTimeLocal(session.createdAt, timezone)}
                 {session.current && (
                   <Badge tone="ok" className="ml-2">
                     This device
@@ -106,7 +120,7 @@ export function SessionList({ sessions }: { sessions: SessionRow[] }) {
                 )}
               </TableCell>
               <TableCell className="text-xs text-ink-muted">
-                {formatDateTime(session.expires)}
+                {formatDateTimeLocal(session.expires, timezone)}
               </TableCell>
               <TableCell className="text-right">
                 {!session.current && (
