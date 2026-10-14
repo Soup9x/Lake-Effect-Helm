@@ -60,9 +60,9 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 6 | Assets completion grid + % badges | **Missing** | Needs a per-type/per-client coverage query |
 | 6 | Per-client completion scores | **Missing** | `client_health` widget is adjacent, not the same |
 | 6 | Cross-client expirations, filterable | **Exists** | `/expirations` page + `/api/expirations`, filters by severity and org |
-| 7 | My Tasks | **Missing** | `sop_step`/`sop_run_step` have no assignee and no due date |
+| 7 | My Tasks | **Exists** | F2. `/tasks`, defaulting to incomplete and mine, over `sop_run_step.assigned_to`/`due_at` (0650). The open count is in the dashboard's fixed strip. L collects the page under Personal |
 | 7 | Personal Credentials (private vault) | **Dropped** | Not built natively. Personal credentials will come from a Bitwarden/Vaultwarden integration — decision 14. The vault design that was drafted for it is kept below as background for that work |
-| 8 | Reusable checklist templates → per client | **Exists** | F1. `sop`/`sop_step` authored on `/assets/{id}`, published into an immutable `sop_version`, and `sop_run`/`sop_run_step` started against a client with the step copy 0090 describes. Assignment and due dates are F2; reminders are K |
+| 8 | Reusable checklist templates → per client | **Exists** | F1. `sop`/`sop_step` authored on `/assets/{id}`, published into an immutable `sop_version`, and `sop_run`/`sop_run_step` started against a client with the step copy 0090 describes. F2 added `assigned_to` and `due_at` to runs and their steps. Reminders are K |
 | 8 | Assignable tasks + due dates | **Missing** | Columns absent on both step tables |
 | 8 | Email notification on assign/due | **Missing** | No email channel anywhere; `webhook_endpoint` is Discord/Teams/Slack |
 | 9 | Domain tracker fields | **Exists** | `domain`: registrar, registered_at, expires_at, nameservers, dns_provider, dnssec, transfer_locked |
@@ -171,13 +171,13 @@ and PR.
 | **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link — **landed** | 0620 | Follows the dashboard pattern; small and self-contained |
 | **E** | Profile/preferences: user timezone, theme, first/last name — **landed**. Side-panel toggle and MFA recovery token deferred, decision 15 | 0630 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
 | **F1** | Checklists you can actually use: template authoring, publishing a version, starting a run against a client, the run page, SOP rows in the integration fixture — **landed** | 0640, for the purge conflict publishing exposed | 0090 modelled all of this and nothing in the application ever created a run. Assignment is meaningless until a run exists |
-| **F2** | `assigned_to` + `due_at` on run steps, a default assignee and due date on the run, My Tasks, an open-task count | 0650 | Delivers half of the Personal section by extending SOPs |
-| **G** | Global section: completion grid with % badges, per-client completion scores | 0650 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
-| **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0660 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
-| **I** | Documentation Health ring; client logo upload | 0670 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
+| **F2** | `assigned_to` + `due_at` on run steps, a default assignee and due date on the run, My Tasks, an open-task count — **landed** | 0650, plus 0660 for a defect it exposed | Delivers half of the Personal section by extending SOPs |
+| **G** | Global section: completion grid with % badges, per-client completion scores | 0670 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
+| **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0680 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
+| **I** | Documentation Health ring; client logo upload | 0690 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
 | ~~**J**~~ | ~~Personal Credentials vault~~ — **dropped**, see decision 14 | — | Superseded by a future Bitwarden/Vaultwarden integration, which is not in this plan |
-| **K** | Email channel + notification toggles | 0680 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles |
-| **L** | Header and navigation parity: recent-items dropdown, notifications and help icons, Personal and Global as real landing pages, Important Contacts | 0690 | Last because three of its four parts are *assembly* — the dropdown, My Tasks, profile/preferences and the completion grid all have to exist before a page can collect them |
+| **K** | Email channel + notification toggles | 0700 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles |
+| **L** | Header and navigation parity: recent-items dropdown, notifications and help icons, Personal and Global as real landing pages, Important Contacts | 0710 | Last because three of its four parts are *assembly* — the dropdown, My Tasks, profile/preferences and the completion grid all have to exist before a page can collect them |
 
 **On the migration numbers.** Two shifts have happened and both are recorded
 here so nobody reuses a number:
@@ -191,8 +191,12 @@ here so nobody reuses a number:
 - **F1 needed no migration for its feature** — 0090 had the whole model
   already, which was the finding the group turned on. It needed one for the
   client-purge conflict it exposed: **0640 is F1's**
-  (`0640_purgeable_sop_versions.sql`, decision 17), so **F2 is 0650**, G 0660,
-  H 0670, I 0680, K 0690 and L 0700. **0640 must not be reused.**
+  (`0640_purgeable_sop_versions.sql`, decision 17). **0640 must not be
+  reused.**
+- **F2 took 0650** (`0650_run_step_assignment.sql`) and **0660**
+  (`0660_topology_set_null_repair.sql`), the second for a pre-existing defect
+  its own work exposed — see decision 19. So **G is 0670**, H 0680, I 0690,
+  K 0700 and L 0710. Both numbers are spent.
 
 The numbers above are intentions rather than reservations — the next free
 number at the time of writing is what a group actually takes.
@@ -741,6 +745,82 @@ written where it was fixed. The two worth naming:
   matching policy demands: both layers refuse, with the same 403. The tests now
   assert the gate's own message, so they can tell which layer spoke.
 
+### Group F2 — work somebody is given (migrations 0650 and 0660)
+
+F1 made a checklist runnable. This makes it work that belongs to somebody, which
+is the parity item "tasks assigned to me".
+
+**What landed.** `assigned_to` and `due_at` on `sop_run` and on `sop_run_step`;
+an assignee and due date on the start-a-run dialog, stamped onto every step;
+per-step handover from the run page; `/tasks`, defaulting to incomplete and
+mine, with filters for overdue, everything and anyone; and **My open tasks** in
+the dashboard's fixed counter strip, which is where that file's own rule puts it
+— "the things that mean somebody has to do something today" are not widgets,
+because a number that can be switched off is a number that will be.
+
+**THE ASSIGNEE IS A COMPOSITE KEY TO `membership`, NOT TO `app_user`.** Every
+other person column in the schema — `sop.owner_user_id`, `completed_by`,
+`created_by` — references `app_user(id)`, and that is right for them: they
+record who DID something, so the actor was by definition present. An assignee is
+the opposite, a claim about the future, and assigning a step to somebody with no
+membership in this tenant creates work nobody will ever see, because My Tasks
+reads through RLS and RLS starts from the tenant. `membership` already carries
+`UNIQUE (tenant_id, user_id)`, so `FOREIGN KEY (tenant_id, assigned_to)` makes
+invisible work unrepresentable rather than merely refused by a route.
+
+The route additionally requires an **active** membership, which a foreign key
+cannot express, and the asymmetry is deliberate: a revoked colleague can still
+HOLD a task, because the work exists and somebody has to take it over, but
+nobody can be handed a new one.
+
+**"Mine" is resolved in SQL, not from a parameter.** `listMyTasks` compares
+against `helm.current_actor_id()`, so there is no id in the URL to change and no
+way to ask for somebody else's list by editing one.
+
+**`overdue` is computed in the database.** A client component comparing a date
+to `Date.now()` during render answers one way on the server and another in the
+browser moments later, which is a hydration mismatch — and it would put the
+meaning of "overdue" in three places, since the dashboard count needs it too.
+One predicate, in SQL, read by everybody.
+
+**The run's assignee is a default, applied once.** Starting a run stamps it onto
+every step; a step's value is then concrete. The alternative — leaving a step
+NULL and inheriting the run's at read time — makes the central query
+`COALESCE(s.assigned_to, r.assigned_to) = me` across a join, which no index can
+serve, on what will be the most-opened page in the product. It also makes
+"assigned to nobody" and "assigned to whoever owns the run" the same state, so a
+step could never be taken off somebody.
+
+**What the sabotage pass found, and it was not in F2.** 20 deliberate
+breakages, 14 caught immediately and 5 not. Two were real test gaps, now
+closed; three are not independently observable and each says so where it lives.
+One of the five opened something larger:
+
+Writing a bare composite `ON DELETE SET NULL` on the new assignee key broke no
+test — **and it should have broken `db/tests/security.sql` §41(g)**, the
+assertion 0510 left behind precisely to stop the thirty-first such constraint.
+Postgres reports `pg_constraint.confdelsetcols` as **NULL**, not `{}`, when no
+column list was given, so `confdelsetcols = '{}'::int2[]` evaluated to NULL, the
+`EXISTS` came back false, and the check reported ok with the defect present.
+
+Repairing the predicate immediately failed, on a constraint nobody had touched:
+`topology_node_asset_fk`, added in 0570 — after 0510's sweep — with the bare
+form over `(asset_node_id, tenant_id)`. Measured consequence:
+
+```
+DELETE FROM asset_node WHERE id = <a device on a site drawing>
+ERROR: null value in column "tenant_id" of relation "topology_node"
+       violates not-null constraint
+```
+
+So **deleting any asset that appeared on a site topology drawing failed**, and
+since `helm.delete_organization` ends by deleting all of a client's
+`asset_node` rows, **a client with a drawing could not be purged** — the same
+shape as the `sop_version` conflict F1 found one migration earlier, reached from
+the other direction. 0660 repairs it with the column list 0570's own header
+describes ("a drawing is client data" and survives on its own), and §41(g) can
+now see the shape it was written for. Decision 19.
+
 ## Decisions
 
 The questions this document opened with have been answered. Recorded here
@@ -1017,6 +1097,64 @@ is how the same argument gets had twice.
     sop_version}`, and `db/tests/security.sql` §41(f) with it, so a third table
     joining the list still fails the build until somebody writes the migration
     that says why.
+
+18. **A task is a step, and its assignee is a membership (F2, 0650).** Three
+    choices that each had a plausible alternative, recorded because the
+    alternatives are what a reader will wonder about.
+
+    **The unit of work is a STEP, not a run.** What somebody is handed is
+    "forward the mailbox", and one run can be split across several people — so
+    My Tasks lists steps and names the run each belongs to, rather than listing
+    runs and making somebody open each to find their part.
+
+    **The run's assignee is a default, stamped once** rather than inherited at
+    read time. Inheriting would make the central query
+    `COALESCE(s.assigned_to, r.assigned_to) = me` across a join, which no index
+    can serve, on the page people will open most; and it would make "assigned
+    to nobody" and "assigned to whoever owns the run" the same state, so a step
+    could never be taken off somebody. The cost is that reassigning a whole run
+    is not a single act in F2 — the run's own columns are set at creation and
+    are the record of what it was started as, and handover happens per step,
+    which is where the work is. Bulk reassignment is a clear follow-up rather
+    than something half-built.
+
+    **`due_at` is a timestamptz, not a date.** The schema is split on purpose:
+    warranties, domains and licences use `date`, because they expire on a day in
+    the world and "expires 2026-03-01" meaning three different instants is how a
+    certificate lapses on a Sunday. A task is the other case — "restart it at
+    02:00" is a real step, and a task assigned to you is the one kind of date
+    where the READER is the subject rather than a shared fact, which is exactly
+    when decision 15's `formatDateTimeLocal()` renders local time beside UTC.
+    Overdue is computed against `now()` in SQL, so it is correct for everybody
+    wherever they read it.
+
+19. **0510's sweep was one constraint short, and the test that should have
+    caught it was blind (F2, 0660).** Not a judgement call so much as a defect
+    worth recording where the next person will look, because the mechanism will
+    recur.
+
+    0510 repaired thirty composite `ON DELETE SET NULL` keys that nulled
+    `tenant_id` along with the reference, and `db/tests/security.sql` §41(g) was
+    written to stop the thirty-first. It could not: Postgres reports
+    `pg_constraint.confdelsetcols` as **NULL**, not `{}`, when no column list
+    was given, so the predicate `confdelsetcols = '{}'::int2[]` evaluated to
+    NULL rather than true and the `EXISTS` came back false. The assertion
+    reported ok for every bare constraint it was meant to catch.
+
+    Found while adding F2's assignee key: writing it the wrong way on purpose
+    broke no test. Fixing the predicate then failed immediately, on
+    `topology_node_asset_fk` from 0570 — added after the sweep — and the
+    consequence was live: deleting any asset that appeared on a site topology
+    drawing raised *"null value in column tenant_id violates not-null
+    constraint"*, which also meant a client with a drawing could not be purged.
+
+    0660 repairs the constraint with the column list, restoring what 0570's own
+    header says a drawing is ("client data", surviving on its own and simply
+    letting go of a deleted asset). §41(g) keeps its NOT EXISTS form, now with
+    `coalesce(confdelsetcols, '{}')`, plus a companion assertion that the
+    predicate can still tell a bare key from a correct one — because a NOT
+    EXISTS passes both when the schema is clean and when the question is broken,
+    and that is the whole reason this went unnoticed.
 
 Two further decisions taken at the same time:
 

@@ -2236,6 +2236,19 @@ SELECT helm_test.check_raises('helm_app cannot purge credential history itself',
 
 -- (g) AND SET NULL NO LONGER NULLS THE TENANT. The defect that made every hard
 --     delete in this schema impossible.
+--
+--     THIS ASSERTION WAS BLIND UNTIL 0650. Postgres reports confdelsetcols as
+--     NULL — not '{}' — for a constraint declared without a column list, so
+--     `c.confdelsetcols = '{}'::int2[]` evaluated to NULL, the EXISTS came back
+--     false, and the check reported ok with exactly the defect it exists to
+--     catch sitting in the catalogue. Found by deliberately writing a bare
+--     composite ON DELETE SET NULL while adding the assignee key in 0650:
+--     removing a membership then failed with "null value in column tenant_id
+--     violates not-null constraint", and this line said nothing.
+--
+--     `coalesce(confdelsetcols, '{}')` restores the intent. Both forms are kept
+--     in the predicate because an empty array is what a future Postgres might
+--     report, and the point is to catch the shape rather than the encoding.
 SELECT helm_test.check('no composite SET NULL key nulls a NOT NULL column',
   NOT EXISTS (
     SELECT 1 FROM pg_constraint c
@@ -2244,7 +2257,17 @@ SELECT helm_test.check('no composite SET NULL key nulls a NOT NULL column',
         SELECT 1 FROM unnest(c.conkey) k
         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k
         WHERE a.attnotnull
-          AND (c.confdelsetcols = '{}'::int2[] OR k = ANY (c.confdelsetcols)))));
+          AND (coalesce(c.confdelsetcols, '{}'::int2[]) = '{}'::int2[]
+               OR k = ANY (c.confdelsetcols)))));
+SELECT helm_test.check('...and the check can actually see a bare column list',
+  -- The assertion above is a NOT EXISTS, which passes both when the schema is
+  -- clean and when the predicate is broken. This proves the predicate still
+  -- distinguishes the two, against a constraint built for the purpose.
+  (SELECT count(*) FROM (
+     SELECT coalesce(c.confdelsetcols, '{}'::int2[]) = '{}'::int2[] AS bare
+     FROM pg_constraint c
+     WHERE c.conname = 'sop_run_step_assignee_fk'
+   ) probe WHERE NOT probe.bare) = 1);
 
 -- (h) A CLIENT WITH A PUBLISHED CHECKLIST CAN STILL BE DELETED (0640), AND
 --     NOTHING ELSE ABOUT sop_version MOVED.
@@ -3337,5 +3360,99 @@ SELECT helm_test.check('service_account accepts totp in allowed_reveal_purposes'
 ROLLBACK;
 
 \echo ''
+\echo ''
+\echo '== 47. A task can only be given to somebody who can see it =='
+-- 0650 added an assignee and a due date to runs and their steps. The assignee
+-- is the first person column in this schema that is a claim about the FUTURE
+-- rather than a record of who did something, and that difference is the whole
+-- design: every other one (sop.owner_user_id, completed_by, created_by)
+-- references app_user(id), because the actor was by definition present. An
+-- assignee who is not a member of this tenant creates work that nobody will
+-- ever see, because My Tasks reads through RLS and RLS starts from the tenant.
+--
+-- So the constraint is composite against membership (tenant_id, user_id), and
+-- these assertions are what makes that claim true rather than stated.
+
+-- (a) THE TENANT BOUNDARY, as a foreign key. Not a route check — the rival
+--     tenant's administrator is a real user with a real id, and the row simply
+--     cannot exist.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name)
+VALUES ('1d000000-0000-0000-0000-0000000000a1', :t1, :t1_acme, 'sop', 'zz assignable');
+INSERT INTO sop (id, tenant_id, node_type, current_version)
+VALUES ('1d000000-0000-0000-0000-0000000000a1', :t1, 'sop', 1);
+INSERT INTO sop_version (id, tenant_id, sop_id, version, snapshot, snapshot_sha256)
+VALUES ('1f000000-0000-0000-0000-0000000000a1', :t1, '1d000000-0000-0000-0000-0000000000a1', 1,
+        '{"format": 1, "steps": [{"position": 1, "title": "zz"}]}'::jsonb, digest('zz', 'sha256'));
+INSERT INTO sop_run (id, tenant_id, organization_id, sop_id, sop_version_id, title, status,
+                     started_at, started_by)
+VALUES ('af000000-0000-0000-0000-0000000000a1', :t1, :t1_acme,
+        '1d000000-0000-0000-0000-0000000000a1', '1f000000-0000-0000-0000-0000000000a1',
+        'zz run', 'in_progress', now(), :u_admin1);
+INSERT INTO sop_run_step (id, tenant_id, run_id, position, title, kind, assigned_to, due_at)
+VALUES ('b0000000-0000-0000-0000-0000000000a1', :t1, 'af000000-0000-0000-0000-0000000000a1',
+        1, 'zz step', 'manual', :u_tech1, now() + interval '1 day');
+
+SELECT helm_test.check('a step can be assigned to a member of this tenant',
+  EXISTS (SELECT 1 FROM sop_run_step
+           WHERE id = 'b0000000-0000-0000-0000-0000000000a1' AND assigned_to = :u_tech1));
+SELECT helm_test.check_raises('...and NOT to somebody with no membership here',
+  format($$UPDATE sop_run_step SET assigned_to = %L
+            WHERE id = 'b0000000-0000-0000-0000-0000000000a1'$$, :u_admin2));
+SELECT helm_test.check_raises('...nor can a run be',
+  format($$UPDATE sop_run SET assigned_to = %L
+            WHERE id = 'af000000-0000-0000-0000-0000000000a1'$$, :u_admin2));
+
+-- (b) AND WHEN A COLLEAGUE LEAVES, the work stays and loses its owner. The
+--     column list on ON DELETE SET NULL is what makes this possible: the bare
+--     form would null tenant_id with the assignee, on a NOT NULL column, which
+--     is 0510's defect in a constraint written five hundred migrations later.
+DELETE FROM membership WHERE tenant_id = :t1 AND user_id = :u_tech1;
+SELECT helm_test.check('a departed colleague"s step survives them',
+  EXISTS (SELECT 1 FROM sop_run_step WHERE id = 'b0000000-0000-0000-0000-0000000000a1'));
+SELECT helm_test.check('...unassigned',
+  (SELECT assigned_to IS NULL FROM sop_run_step
+    WHERE id = 'b0000000-0000-0000-0000-0000000000a1'));
+SELECT helm_test.check('...with its due date and its tenant intact',
+  (SELECT due_at IS NOT NULL AND tenant_id = :t1 FROM sop_run_step
+    WHERE id = 'b0000000-0000-0000-0000-0000000000a1'));
+ROLLBACK;
+
+-- (c) A DRAWING OUTLIVES THE ASSET IT POINTED AT (0660). The same column-list
+--     defect, in topology_node from 0570 — which arrived after 0510's sweep
+--     and was invisible because the assertion in §41(g) was comparing
+--     confdelsetcols to '{}' when Postgres reports NULL. Deleting a device
+--     that appeared on a site drawing failed outright, which also meant a
+--     client with a drawing could not be purged.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+-- Its own site: this fixture has no sites, and a drawing needs one.
+INSERT INTO site (id, tenant_id, organization_id, name)
+VALUES ('a1000000-0000-0000-0000-0000000000a1', :t1, :t1_acme, 'zz drawing site');
+INSERT INTO topology_node (id, tenant_id, site_id, asset_node_id, label, device_type, pos_x, pos_y)
+VALUES ('b1000000-0000-0000-0000-0000000000a1', :t1, 'a1000000-0000-0000-0000-0000000000a1',
+        :n_fw, 'zz drawn firewall', 'firewall', 40, 60);
+DELETE FROM asset_node WHERE id = :n_fw;
+SELECT helm_test.check('the drawing survives the asset it pointed at',
+  EXISTS (SELECT 1 FROM topology_node WHERE id = 'b1000000-0000-0000-0000-0000000000a1'));
+SELECT helm_test.check('...having let go of the asset',
+  (SELECT asset_node_id IS NULL FROM topology_node
+    WHERE id = 'b1000000-0000-0000-0000-0000000000a1'));
+SELECT helm_test.check('...and kept its tenant, its label and where it was drawn',
+  (SELECT tenant_id = :t1 AND label = 'zz drawn firewall' AND pos_x = 40 AND pos_y = 60
+     FROM topology_node WHERE id = 'b1000000-0000-0000-0000-0000000000a1'));
+ROLLBACK;
+
+-- (d) ANOTHER TENANT SEES NO TASKS. The assignment columns do not widen what
+--     RLS shows: sop_run_step is reachable only through a run this actor's
+--     organisation scope reaches, and that is unchanged by somebody's name
+--     being on it.
+BEGIN;
+SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('the rival tenant sees no assigned steps at all',
+  NOT EXISTS (SELECT 1 FROM sop_run_step WHERE assigned_to IS NOT NULL));
+ROLLBACK;
+
 \echo '== All security assertions passed =='
 

@@ -36,6 +36,14 @@ const createSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   ticketRef: z.string().trim().max(120).nullable().optional(),
   subjectNodeId: z.guid().nullable().optional(),
+  /**
+   * The run's default assignee and due date, stamped onto every step it
+   * creates. 0650's header says why they are stamped rather than inherited at
+   * read time: My Tasks filters on the step's own column, and an index can
+   * serve that where COALESCE across a join cannot.
+   */
+  assignedTo: z.guid().nullable().optional(),
+  dueAt: z.iso.datetime({ offset: true }).nullable().optional(),
 });
 
 interface VersionRow {
@@ -78,6 +86,27 @@ export const POST = tenantRoute(
       throw ApiError.notFound('no published version of that procedure');
     }
 
+    /*
+     * The assignee must be an ACTIVE member of this tenant.
+     *
+     * sop_run_step_assignee_fk already makes a stranger unrepresentable — it is
+     * a composite key against membership (tenant_id, user_id) — but a foreign
+     * key cannot ask about `status`, and it would answer 23503, which this
+     * route already maps to "no such client, site or subject". Checking here
+     * means the answer names the actual problem. The constraint remains the
+     * backstop for everything this query cannot see.
+     */
+    if (body.assignedTo) {
+      const [member] = await tx<{ ok: boolean }[]>`
+        SELECT true AS ok FROM membership
+        WHERE tenant_id = ${identity.tenantId}::uuid
+          AND user_id = ${body.assignedTo}::uuid
+          AND status = 'active'
+          AND (expires_at IS NULL OR expires_at > now())
+      `;
+      if (!member) throw ApiError.invalid('that person is not an active member of this tenant');
+    }
+
     const steps = stepsFromSnapshot(version.snapshot);
     if (steps.length === 0) {
       /*
@@ -97,14 +126,16 @@ export const POST = tenantRoute(
       [run] = await tx<{ id: string }[]>`
         INSERT INTO sop_run (
           tenant_id, organization_id, site_id, sop_id, sop_version_id,
-          title, ticket_ref, subject_node_id, status, started_at, started_by
+          title, ticket_ref, subject_node_id, status, started_at, started_by,
+          assigned_to, due_at
         )
         VALUES (
           ${identity.tenantId}::uuid, ${body.organizationId}::uuid,
           ${body.siteId ?? null}::uuid, ${body.sopId}::uuid, ${version.version_id}::uuid,
           ${body.title ?? version.sop_name}, ${body.ticketRef ?? null},
           ${body.subjectNodeId ?? null}::uuid,
-          'in_progress', now(), ${identity.actorId}::uuid
+          'in_progress', now(), ${identity.actorId}::uuid,
+          ${body.assignedTo ?? null}::uuid, ${body.dueAt ?? null}::timestamptz
         )
         RETURNING id
       `;
@@ -127,15 +158,24 @@ export const POST = tenantRoute(
      */
     for (const step of steps) {
       await tx`
-        INSERT INTO sop_run_step (tenant_id, run_id, position, title, body, kind, status)
+        INSERT INTO sop_run_step (
+          tenant_id, run_id, position, title, body, kind, status, assigned_to, due_at
+        )
         VALUES (
           ${identity.tenantId}::uuid, ${run.id}::uuid, ${step.position},
-          ${step.title}, ${step.body}, 'manual', 'pending'
+          ${step.title}, ${step.body}, 'manual', 'pending',
+          ${body.assignedTo ?? null}::uuid, ${body.dueAt ?? null}::timestamptz
         )
       `;
     }
 
-    return { runId: run.id, steps: steps.length, version: version.version };
+    return {
+      runId: run.id,
+      steps: steps.length,
+      version: version.version,
+      assignedTo: body.assignedTo ?? null,
+      dueAt: body.dueAt ?? null,
+    };
   },
   { permissions: ['sop:execute'] },
 );

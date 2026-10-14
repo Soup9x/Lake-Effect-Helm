@@ -1,5 +1,7 @@
 import Link from 'next/link';
-import { AlertTriangle, Building2, CalendarClock, FileDown, KeyRound, Plug } from 'lucide-react';
+import {
+  AlertTriangle, Building2, CalendarClock, FileDown, KeyRound, ListChecks, Plug,
+} from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
@@ -14,6 +16,7 @@ import {
 import { QuickActionsWidget } from '@/components/widgets/quick-actions';
 import { isClientRole } from '@/lib/ui/roles';
 import { getLayout, listFavorites, listRecent } from '@/lib/workspace/queries';
+import { countMyOpenTasks } from '@/lib/sops/queries';
 import type { WidgetKey } from '@/lib/workspace/widgets';
 
 interface Counts {
@@ -56,6 +59,12 @@ interface HealthRow {
  * Only the widgets in the layout are queried. Somebody who removed the activity
  * widget does not read the audit log on every dashboard load, and that is
  * visible here rather than buried in five components that each fetch their own.
+ *
+ * MY OPEN TASKS IS IN THE FIXED STRIP, not a widget, by the rule above: it is
+ * not a list somebody chose to look at, it is the count of work that has been
+ * handed to them personally, and a number that can be switched off is a number
+ * that will be. It is also the only figure on this page that is about the
+ * reader rather than about the estate.
  */
 interface UsageRow {
   organizations: string; secrets: string; assets: string;
@@ -171,17 +180,22 @@ export default async function DashboardPage() {
         : [],
     ]);
 
+    // Not conditional on a widget: the strip is fixed, so this runs on every
+    // load. Two counts out of one index scan over this actor's own steps.
+    const tasks = await countMyOpenTasks(tx);
+
     return {
       layout, counts: countRow, favorites, recent, upcoming, activity, health,
-      usage: usage[0], quickClients, mappings,
+      usage: usage[0], quickClients, mappings, tasks,
     };
   });
 
   const {
     layout, counts, favorites, recent, upcoming, activity, health,
-    usage, quickClients, mappings,
+    usage, quickClients, mappings, tasks,
   } = data;
   const expired = Number(counts?.expired ?? 0);
+  const openTasks = tasks.open;
   const secretExports = Number(counts?.secret_exports_7d ?? 0);
 
   const clients: ClientHealthRow[] = health.map((row) => ({
@@ -289,7 +303,7 @@ export default async function DashboardPage() {
           </Link>
         )}
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <Stat icon={Building2} label="Clients" value={counts?.organizations} href="/organizations" />
           <Stat icon={KeyRound} label="Assets" value={counts?.assets} />
           <Stat icon={KeyRound} label="Credentials" value={counts?.secrets} />
@@ -304,6 +318,12 @@ export default async function DashboardPage() {
             label="Integrations degraded"
             value={counts?.degraded_integrations}
             href="/settings"
+          />
+          <Stat
+            icon={ListChecks}
+            label={tasks.overdue > 0 ? `My open tasks (${tasks.overdue} overdue)` : 'My open tasks'}
+            value={String(openTasks)}
+            href="/tasks"
           />
         </div>
 

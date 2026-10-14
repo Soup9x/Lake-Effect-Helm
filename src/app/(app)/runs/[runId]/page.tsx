@@ -3,7 +3,7 @@ import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { ChecklistRun } from '@/components/checklist-run';
-import { readRun } from '@/lib/sops/queries';
+import { listAssignableUsers, readRun } from '@/lib/sops/queries';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +20,11 @@ export const dynamic = 'force-dynamic';
  * because a run IS the evidence: six months later the question is "which steps
  * did we complete, and what did the procedure say at the time", and the answer
  * has to be legible without a database.
+ *
+ * The assignable list is fetched only for somebody who may execute, because it
+ * exists to fill a picker they will not be shown otherwise — and it is a list
+ * of colleagues' names, which is not something to hand to a client-side role
+ * for no reason.
  */
 export default async function RunPage({ params }: { params: Promise<{ runId: string }> }) {
   const identity = await getServerIdentity();
@@ -34,11 +39,13 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
     const [perm] = await tx<{ allowed: boolean }[]>`
       SELECT helm.has_permission('sop:execute') AS allowed
     `;
-    return { run, canExecute: perm?.allowed ?? false };
+    const canExecute = perm?.allowed ?? false;
+    const assignable = canExecute ? await listAssignableUsers(tx) : [];
+    return { run, canExecute, assignable };
   });
 
   if (!data) notFound();
-  const { run, canExecute } = data;
+  const { run, canExecute, assignable } = data;
 
   return (
     <>
@@ -51,7 +58,7 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
         ]}
       />
       <PageBody>
-        <ChecklistRun run={run} canExecute={canExecute} />
+        <ChecklistRun run={run} canExecute={canExecute} assignable={assignable} />
       </PageBody>
     </>
   );

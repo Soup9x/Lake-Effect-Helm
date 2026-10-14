@@ -28,12 +28,25 @@ import { RUN_STEP_STATES } from '@/lib/sops/steps';
  *
  * A COMPLETED RUN IS CLOSED. Editing a step after the run is finished would
  * rewrite the evidence the run exists to be — so this refuses rather than
- * silently reopening it.
+ * silently reopening it. That covers reassignment too: handing somebody a step
+ * on a run that is already over is not a smaller act than checking one off.
+ *
+ * EVERY FIELD IS OPTIONAL, AND AT LEAST ONE IS REQUIRED (0650). Checking a step
+ * off and handing it to somebody else are separate acts that happen at
+ * separate moments, so `status` cannot be mandatory — but a PATCH with nothing
+ * in it is a mistake rather than a no-op, and saying so beats a 200 that did
+ * nothing. Each column is left alone unless its key was sent, which is why
+ * every assignment below is a ternary against `undefined` rather than a
+ * COALESCE: null means "clear this" and COALESCE cannot tell the two apart.
  */
-const patchSchema = z.object({
-  status: z.enum(RUN_STEP_STATES),
-  note: z.string().trim().max(4000).nullable().optional(),
-});
+const patchSchema = z
+  .object({
+    status: z.enum(RUN_STEP_STATES).optional(),
+    note: z.string().trim().max(4000).nullable().optional(),
+    assignedTo: z.guid().nullable().optional(),
+    dueAt: z.iso.datetime({ offset: true }).nullable().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'no changes to make' });
 
 interface StepRow {
   id: string;
@@ -51,7 +64,7 @@ export const PATCH = tenantRoute(
     const body = await readJson(request, (raw) => {
       const result = patchSchema.safeParse(raw);
       if (!result.success) {
-        throw ApiError.invalid('a step status of pending, done or skipped', {
+        throw ApiError.invalid('a step status of pending, done or skipped, an assignee or a due date', {
           issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
         });
       }
@@ -80,13 +93,38 @@ export const PATCH = tenantRoute(
       });
     }
 
-    const terminal = body.status !== 'pending';
+    // Active membership, for the reason POST /api/sop-runs gives: the composite
+    // key to membership refuses a stranger but cannot ask about `status`.
+    if (body.assignedTo) {
+      const [member] = await tx<{ ok: boolean }[]>`
+        SELECT true AS ok FROM membership
+        WHERE tenant_id = helm.current_tenant_id()
+          AND user_id = ${body.assignedTo}::uuid
+          AND status = 'active'
+          AND (expires_at IS NULL OR expires_at > now())
+      `;
+      if (!member) throw ApiError.invalid('that person is not an active member of this tenant');
+    }
+
+    /*
+     * completed_at/completed_by move only when the STATUS moves. A PATCH that
+     * reassigns a step must not stamp it as finished, and must not wipe the
+     * stamp off one that already is — so the timestamp follows `body.status`
+     * being present, not merely the step being terminal.
+     */
+    const terminal = body.status !== undefined && body.status !== 'pending';
     const [updated] = await tx<{ id: string; status: string }[]>`
       UPDATE sop_run_step SET
-        status       = ${body.status}::sop_step_status,
+        status       = ${body.status === undefined
+          ? tx`status` : tx`${body.status}::sop_step_status`},
         note         = ${body.note === undefined ? tx`note` : body.note},
-        completed_at = ${terminal ? tx`now()` : tx`NULL`},
-        completed_by = ${terminal ? tx`${identity.actorId}::uuid` : tx`NULL`}
+        assigned_to  = ${body.assignedTo === undefined
+          ? tx`assigned_to` : tx`${body.assignedTo}::uuid`},
+        due_at       = ${body.dueAt === undefined ? tx`due_at` : tx`${body.dueAt}::timestamptz`},
+        completed_at = ${body.status === undefined
+          ? tx`completed_at` : terminal ? tx`now()` : tx`NULL`},
+        completed_by = ${body.status === undefined
+          ? tx`completed_by` : terminal ? tx`${identity.actorId}::uuid` : tx`NULL`}
       WHERE id = ${stepId.data}::uuid
       RETURNING id, status::text
     `;

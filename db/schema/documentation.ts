@@ -3,7 +3,7 @@
  */
 import { sql } from 'drizzle-orm';
 import {
-  bigint, boolean, index, integer, jsonb, pgTable, primaryKey,
+  bigint, boolean, foreignKey, index, integer, jsonb, pgTable, primaryKey,
   smallint, text, uniqueIndex, uuid,
 } from 'drizzle-orm/pg-core';
 import { bytea, citext, inet, integerArray, textArray, tstz, tsvector } from './_types';
@@ -12,7 +12,7 @@ import {
   expirationKind, exportKind, exportStatus, nodeType, schemaVersionStatus,
   sopRunStatus, sopStepKind, sopStepStatus,
 } from './enums';
-import { appUser } from './identity';
+import { appUser, membership } from './identity';
 import { secretKind } from './enums';
 import { secret } from './secrets';
 import { tenant } from './tenancy';
@@ -196,11 +196,28 @@ export const sopRun = pgTable('sop_run', {
   completedAt: tstz('completed_at'),
   completedBy: uuid('completed_by').references(() => appUser.id, { onDelete: 'set null' }),
   abandonedReason: text('abandoned_reason'),
+  /*
+   * The run's DEFAULT assignee and due date (0650), stamped onto each step as
+   * the run is created. Not a plain appUser reference: the constraint is
+   * composite against membership (tenant_id, user_id), so a step cannot be
+   * assigned to somebody with no membership in this tenant — work nobody would
+   * ever see. Drizzle cannot express a composite foreign key inline, so it is
+   * declared in the table's extras below.
+   */
+  assignedTo: uuid('assigned_to'),
+  dueAt: tstz('due_at'),
   approvedAt: tstz('approved_at'),
   approvedBy: uuid('approved_by').references(() => appUser.id, { onDelete: 'set null' }),
   createdAt: tstz('created_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
-}, (t) => [index('sop_run_org_idx').on(t.tenantId, t.organizationId, t.status)]);
+}, (t) => [
+  index('sop_run_org_idx').on(t.tenantId, t.organizationId, t.status),
+  foreignKey({
+    name: 'sop_run_assignee_fk',
+    columns: [t.tenantId, t.assignedTo],
+    foreignColumns: [membership.tenantId, membership.userId],
+  }),
+]);
 
 export const sopRunStep = pgTable('sop_run_step', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -219,8 +236,27 @@ export const sopRunStep = pgTable('sop_run_step', {
   startedAt: tstz('started_at'),
   completedAt: tstz('completed_at'),
   completedBy: uuid('completed_by').references(() => appUser.id, { onDelete: 'set null' }),
+  /*
+   * Who this step belongs to and when it is due (0650). The composite key to
+   * membership is in the extras below, and its ON DELETE SET NULL names the
+   * assignee column alone — the bare form would null tenant_id with it, which
+   * is the defect 0510 fixed in thirty constraints.
+   */
+  assignedTo: uuid('assigned_to'),
+  dueAt: tstz('due_at'),
   auditEventUid: uuid('audit_event_uid'),
-}, (t) => [uniqueIndex('sop_run_step_position_uk').on(t.runId, t.position)]);
+}, (t) => [
+  uniqueIndex('sop_run_step_position_uk').on(t.runId, t.position),
+  // Leads with the two equality predicates My Tasks filters on and carries the
+  // column it orders by.
+  index('sop_run_step_assignee_idx').on(t.tenantId, t.assignedTo, t.status, t.dueAt),
+  index('sop_run_step_due_idx').on(t.tenantId, t.dueAt),
+  foreignKey({
+    name: 'sop_run_step_assignee_fk',
+    columns: [t.tenantId, t.assignedTo],
+    foreignColumns: [membership.tenantId, membership.userId],
+  }),
+]);
 
 // ---------------------------------------------------------------------------
 // Expirations and alerts

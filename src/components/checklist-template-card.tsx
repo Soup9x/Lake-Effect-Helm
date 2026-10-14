@@ -31,12 +31,12 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { FieldHint, Input, Label, Textarea } from './ui/field';
+import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
 import { reorder } from '@/lib/workspace/widgets';
 import { STEP_LIMITS, validateSteps, type StepDraft } from '@/lib/sops/steps';
 import type { TemplateView } from '@/lib/sops/queries';
-import { formatDateTime } from '@/lib/ui/format';
+import { formatDateTime, fromDateTimeLocalInput } from '@/lib/ui/format';
 import { cn } from '@/lib/ui/cn';
 
 export function ChecklistTemplateCard({
@@ -46,6 +46,7 @@ export function ChecklistTemplateCard({
   template,
   canAuthor,
   canRun,
+  assignable = [],
 }: {
   sopId: string;
   organizationId: string;
@@ -53,6 +54,8 @@ export function ChecklistTemplateCard({
   template: TemplateView;
   canAuthor: boolean;
   canRun: boolean;
+  /** Active members of this tenant, for the assignee picker (0650). */
+  assignable?: readonly { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -65,6 +68,8 @@ export function ChecklistTemplateCard({
   );
   const [runTitle, setRunTitle] = useState('');
   const [ticketRef, setTicketRef] = useState('');
+  const [assignedTo, setAssignedTo] = useState('');
+  const [dueAt, setDueAt] = useState('');
 
   const issues = validateSteps(steps);
   const stepIssue = (index: number) => issues.find((i) => i.index === index)?.message;
@@ -130,6 +135,11 @@ export function ChecklistTemplateCard({
           organizationId,
           ...(runTitle.trim() === '' ? {} : { title: runTitle.trim() }),
           ...(ticketRef.trim() === '' ? {} : { ticketRef: ticketRef.trim() }),
+          ...(assignedTo === '' ? {} : { assignedTo }),
+          // datetime-local is zoneless local wall clock; the conversion and
+          // its inverse live together in lib/ui/format for the reason given
+          // there, which is that slicing toISOString() moves the deadline.
+          ...(dueAt === '' ? {} : { dueAt: fromDateTimeLocalInput(dueAt) }),
         }),
       });
       if (!response.ok) {
@@ -393,6 +403,35 @@ export function ChecklistTemplateCard({
               onChange={(e) => setTicketRef(e.target.value)}
               maxLength={120}
             />
+          </div>
+          {assignable.length > 0 && (
+            <div>
+              <Label htmlFor="run-assignee">Assign to</Label>
+              <Select
+                id="run-assignee"
+                value={assignedTo}
+                onChange={(e) => setAssignedTo(e.target.value)}
+              >
+                <option value="">Nobody in particular</option>
+                {assignable.map((person) => (
+                  <option key={person.id} value={person.id}>{person.name}</option>
+                ))}
+              </Select>
+              <FieldHint>
+                Every step starts assigned to them, and each one can be handed on
+                individually afterwards.
+              </FieldHint>
+            </div>
+          )}
+          <div>
+            <Label htmlFor="run-due">Due</Label>
+            <Input
+              id="run-due"
+              type="datetime-local"
+              value={dueAt}
+              onChange={(e) => setDueAt(e.target.value)}
+            />
+            <FieldHint>In your own time zone. Applies to every step.</FieldHint>
           </div>
 
           {error && (

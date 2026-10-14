@@ -119,7 +119,8 @@ they can verify the file survived whatever channel they hand it over on.
 | `/organizations` | Every client, with counts from independently RLS-scoped subqueries rather than a join that would fan out. |
 | `/organizations/:id` | One client: five widgets, then sites, contacts, expiring items, credentials with reveal controls, assets and documents. |
 | `/assets/:nodeId` | One asset, its type-specific detail, its **dependencies**, and its credentials. The dependency list is why this page exists: "what breaks if I take this offline" is answered by the graph, not by a description field somebody wrote in 2021. A flexible asset record renders here too, against the schema version it is pinned to — see *Filling in an asset type* — and a procedure gets its step editor, its published versions and the control that starts a run, see *Writing a procedure, and following one*. |
-| `/runs/:runId` | One checklist run: its steps, where it got to, and who checked each one off. Deliberately not under `/organizations/:id` — a run belongs to the person working through it as much as to the client it is for, which is where F2's My Tasks will link. |
+| `/runs/:runId` | One checklist run: its steps, where it got to, who each one belongs to and when it is due. Deliberately not under `/organizations/:id` — a run belongs to the person working through it as much as to the client it is for, which is where My Tasks links. |
+| `/tasks` | My Tasks: checklist steps assigned to the reader, soonest first, defaulting to the incomplete ones. The first page in Helm that is about a PERSON rather than a client, and the only one where "mine" is a filter — resolved in SQL against `helm.current_actor_id()`, so there is no id in the URL to edit. |
 | `/expirations` | Certificates, domains, warranties, licences and contracts in one list, filtered by a severity that is computed at read time. |
 | `/search` | A plain GET form, not live filtering — a keystroke-per-request design puts a partial hostname on the wire and in the server log on every character. |
 | `/exports` | The ledger and the approval queue. Readable by anyone who may create an export, so "who exported this client's credentials and who approved it" needs no administrator. |
@@ -226,6 +227,45 @@ references `sop_step.id`, so the replace cannot orphan anything.
 **A run drives three statuses** — pending, done, skipped — out of the seven
 `sop_step_status` holds. The other four each want behaviour nothing has built
 yet; the enum keeps them and the page offers no control for them.
+
+### Being given a step
+
+A run step can belong to somebody and be due at a time, which turns a checklist
+into work that can be handed out.
+
+**The assignee is a membership, not a user.** Every other person column in the
+schema records who DID something, so a plain `app_user` reference is right for
+them. An assignee is a claim about the future, and a step assigned to somebody
+with no membership in this tenant is work nobody will ever see — My Tasks reads
+through RLS and RLS starts from the tenant. So the constraint is composite
+against `membership (tenant_id, user_id)`, and the row is unrepresentable rather
+than merely refused. The route adds the one thing a key cannot ask about,
+`status = 'active'`: a revoked colleague can still hold a task, because the work
+exists and somebody must take it over, but nobody can be handed a new one.
+
+**`/tasks` defaults to incomplete and mine**, because a list that opens on
+everything ever assigned is a list nobody reads twice. Each filter is a link
+rather than a control, so a view can be bookmarked and sent to somebody. "Mine"
+is compared against `helm.current_actor_id()` in SQL, so it cannot be made to
+mean somebody else by editing a URL.
+
+**A pending step on an abandoned run is not a task.** Abandoning a run leaves
+its steps alone — how far it got is the point — so a query that asked only about
+step status would offer them forever.
+
+**Overdue is computed in the database**, not in the component. A date compared
+to `Date.now()` during render answers one way on the server and another in the
+browser, which is a hydration mismatch, and the dashboard count needs the same
+answer. One predicate, three readers.
+
+**The due date crosses the browser boundary twice**, and that is where a
+deadline can drift. `<input type="datetime-local">` holds local wall clock with
+no zone; the column is a timestamptz. `toDateTimeLocalInput` and
+`fromDateTimeLocalInput` in `lib/ui/format.ts` are the pair, built from the
+local getters rather than by slicing `toISOString()` — slicing puts UTC into a
+field the browser reads as local, so every open-and-save would push the deadline
+by the offset. They are unit-tested as a round trip under a forced non-UTC time
+zone, because in UTC the correct conversion and the broken one are identical.
 
 ### Your own account
 

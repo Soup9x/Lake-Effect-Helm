@@ -88,3 +88,44 @@ export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2);
   return parts.map((p) => p[0]?.toUpperCase() ?? '').join('') || '?';
 }
+
+/**
+ * An ISO instant into the value `<input type="datetime-local">` expects.
+ *
+ * WHY THIS IS NOT `iso.slice(0, 16)`, which is the obvious version and is
+ * wrong. toISOString() is UTC, and a datetime-local input means LOCAL wall
+ * clock with no zone at all. Slicing shows a task due at 17:00 in Chicago as
+ * "21:00" — and then saving the form, which converts the field back with
+ * `new Date(value).toISOString()`, moves the deadline four hours later. Every
+ * open-and-save would push it again.
+ *
+ * So the string is built from the local getters, which is the only way to get
+ * the browser's own wall clock. Seconds are dropped because the input does not
+ * show them by default and a value carrying them is rejected by some browsers.
+ *
+ * Returns '' for null, an empty string or an unparseable value, because that is
+ * what an empty input holds — a date picker cannot show "invalid".
+ */
+export function toDateTimeLocalInput(value: Date | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * The same conversion back: a datetime-local value to an ISO instant.
+ *
+ * `new Date('2026-10-20T17:00')` reads a zoneless string as local time, which
+ * is what the input meant, so toISOString() is the whole conversion. It is a
+ * function rather than an inline expression so that it sits beside its inverse
+ * and the pair can be tested as a round trip — which is the property that
+ * matters and the one neither half can establish alone.
+ */
+export function fromDateTimeLocalInput(value: string): string | null {
+  if (value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}

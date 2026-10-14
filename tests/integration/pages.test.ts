@@ -160,14 +160,33 @@ beforeAll(async () => {
       RETURNING id
     `;
     runId = run!.id;
+    /*
+     * ASSIGNED, AND ONE STEP ALREADY OVERDUE (0650). The My Tasks page and the
+     * run page both have an arm that only renders for a step that is late, and
+     * a fixture where nothing is due would run neither — the pages would load
+     * green while the branch that formats an overdue date went untested.
+     *
+     * The due date is derived per step so exactly one is in the past, rather
+     * than making the whole run late: "some of this is overdue" is the state
+     * the page is for.
+     */
     await tx`
-      INSERT INTO sop_run_step (tenant_id, run_id, position, title, body, kind, status)
+      INSERT INTO sop_run_step (
+        tenant_id, run_id, position, title, body, kind, status, assigned_to, due_at
+      )
       SELECT ${IDS.tenant1}::uuid, ${run!.id}::uuid,
              (step ->> 'position')::int, step ->> 'title', step ->> 'body',
-             'manual', 'pending'
+             'manual', 'pending', ${IDS.admin1}::uuid,
+             CASE WHEN (step ->> 'position')::int = 1
+                  THEN now() - interval '2 days'
+                  ELSE now() + interval '3 days' END
       FROM sop_version v,
            jsonb_array_elements(v.snapshot -> 'steps') AS step
       WHERE v.id = ${version!.id}::uuid
+    `;
+    await tx`
+      UPDATE sop_run SET assigned_to = ${IDS.admin1}::uuid, due_at = now() + interval '3 days'
+      WHERE id = ${run!.id}::uuid
     `;
   });
 });
@@ -254,6 +273,37 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () =>
       (await import('../../src/app/(app)/runs/[runId]/page')).default({
         params: p({ runId }),
+      }),
+  },
+  {
+    /*
+     * My Tasks, added in F2. Three rows rather than one: the state filter and
+     * the who filter each change the SQL, and a stale `state` in a URL takes a
+     * fourth path that falls back to the default rather than erroring.
+     */
+    name: 'my tasks',
+    load: async () =>
+      (await import('../../src/app/(app)/tasks/page')).default({ searchParams: p({}) }),
+  },
+  {
+    name: 'my tasks, overdue only',
+    load: async () =>
+      (await import('../../src/app/(app)/tasks/page')).default({
+        searchParams: p({ state: 'overdue' }),
+      }),
+  },
+  {
+    name: 'my tasks, everything, anyone',
+    load: async () =>
+      (await import('../../src/app/(app)/tasks/page')).default({
+        searchParams: p({ state: 'all', who: 'anyone' }),
+      }),
+  },
+  {
+    name: 'my tasks, with a stale filter in the URL',
+    load: async () =>
+      (await import('../../src/app/(app)/tasks/page')).default({
+        searchParams: p({ state: 'yesterday' }),
       }),
   },
   {
@@ -479,6 +529,18 @@ function textIn(node: unknown, found: string[] = []): string[] {
     found.push(node);
     return found;
   }
+  /*
+   * A NUMBER IS TEXT ON SCREEN. `{count} overdue` is two children — the number
+   * and the word — and dropping the number made "1 overdue" unmatchable
+   * however the page rendered it. Collected as its own entry, in traversal
+   * order, so joining with '' reproduces what the DOM would show: React puts
+   * nothing between adjacent children, which is why assertions below join
+   * with '' rather than ' '.
+   */
+  if (typeof node === 'number') {
+    found.push(String(node));
+    return found;
+  }
   if (Array.isArray(node)) {
     for (const child of node) textIn(child, found);
     return found;
@@ -540,6 +602,61 @@ describe('the procedure page', () => {
       template.unpublishedChanges,
       'the fixture publishes exactly what its step list says, so nothing is unpublished',
     ).toBe(false);
+  });
+});
+
+describe('my tasks', () => {
+  it('renders an overdue step as overdue, and an on-time one not', async () => {
+    /*
+     * A PAGES row proves the page loads. It cannot see that the branch which
+     * formats a late date ever runs — and that branch is the only reason the
+     * page is worth opening before something goes wrong.
+     *
+     * The fixture's run has step 1 due two days ago and the rest due in three,
+     * so one word has to appear exactly once.
+     */
+    const rendered = await (
+      await import('../../src/app/(app)/tasks/page')
+    ).default({ searchParams: p({}) });
+
+    const text = textIn(rendered);
+    expect(text, 'the page should list the steps assigned to this actor')
+      .toContain('Disable the account');
+
+    /*
+     * MATCHED EXACTLY, NOT BY SUBSTRING. "Overdue" appears twice on this page
+     * and only one of them is data: the filter chip is labelled "Overdue" too.
+     * A substring count passes at two whatever the rows say, which is the same
+     * label-versus-datum collision that hid a bug in group C2 — so the row's
+     * own string is matched whole.
+     */
+    expect(
+      text.filter((piece) => piece === 'Overdue — ').length,
+      'exactly one of the three fixture steps is late, so one row says so',
+    ).toBe(1);
+    expect(text.filter((piece) => piece === 'Overdue').length,
+      'the filter chip should be there once, and is what the count above excludes').toBe(1);
+
+    // And the badge that counts them, which reads from the same rows.
+    expect(text.join(''), 'the overdue badge should quote the number of late steps')
+      .toContain('1 overdue');
+  });
+
+  it('says so plainly when the filter matches nothing', async () => {
+    /*
+     * An empty list is a real state with its own message rather than a blank
+     * card. Asking for everything already finished and assigned to anyone
+     * matches nothing in the fixture — every step is pending.
+     */
+    const rendered = await (
+      await import('../../src/app/(app)/tasks/page')
+    ).default({ searchParams: p({ state: 'overdue', who: 'anyone' }) });
+
+    const text = textIn(rendered).join('');
+    expect(text, 'an overdue-only list should still show the late step').toContain('Overdue');
+    expect(text).toContain('Disable the account');
+    expect(text, 'the on-time steps should be filtered out')
+      .not.toContain('Collect the laptop');
   });
 });
 
