@@ -19,16 +19,35 @@ import { Breadcrumbs } from '../../src/components/ui/breadcrumbs';
 
 const APP = 'src/app/(app)';
 
-function pagesUnder(dir: string, nested = false): { path: string; nested: boolean }[] {
+/**
+ * Nested means "has an ancestor somebody navigated from", and there are two
+ * ways to be that.
+ *
+ * A [param] segment is one: the route is a detail view of something reached
+ * from a list. That was the only test here until a STATIC sub-route appeared —
+ * settings/asset-types, which is reached from /settings, returns to it, and has
+ * no nav item of its own. The old heuristic called it top-level and the
+ * "leaves top-level pages alone" sweep failed on it.
+ *
+ * Depth is the general form, and the [param] check is now a special case of
+ * the same idea rather than a separate rule: anything more than one segment
+ * below (app) was reached from the page above it. At the time of writing
+ * settings/asset-types is the only static route this reclassifies, and it
+ * already passes a trail, so generalising costs nothing and stops the next
+ * static sub-route failing for a reason its author cannot act on.
+ */
+function pagesUnder(
+  dir: string,
+  depth = 0,
+  underDynamic = false,
+): { path: string; nested: boolean }[] {
   const found: { path: string; nested: boolean }[] = [];
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
-      // A [param] segment means this route is a detail view of something that
-      // was reached from a list — the definition of nested, here.
-      found.push(...pagesUnder(full, nested || entry.startsWith('[')));
+      found.push(...pagesUnder(full, depth + 1, underDynamic || entry.startsWith('[')));
     } else if (entry === 'page.tsx') {
-      found.push({ path: full, nested });
+      found.push({ path: full, nested: underDynamic || depth >= 2 });
     }
   }
   return found;
@@ -40,6 +59,13 @@ describe('every nested page', () => {
   it('was found at all, so the sweep below quantifies over something', () => {
     expect(pages.length).toBeGreaterThan(5);
     expect(pages.some((p) => p.nested)).toBe(true);
+    // ...and both ways of being nested are represented, or the generalisation
+    // above could rot into the [param] check it replaced without anything
+    // noticing.
+    expect(pages.some((p) => p.nested && !p.path.includes('[')), 'no static nested page')
+      .toBe(true);
+    expect(pages.some((p) => p.nested && p.path.includes('[')), 'no dynamic nested page')
+      .toBe(true);
   });
 
   for (const page of pages.filter((p) => p.nested)) {
