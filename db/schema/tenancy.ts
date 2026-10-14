@@ -9,7 +9,7 @@
  */
 import { boolean, index, integer, jsonb, numeric, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { auditColumns, citext, softDelete, textArray, tstz } from './_types';
-import { organizationStatus, tenantStatus } from './enums';
+import { organizationRelationship, organizationStatus, tenantStatus } from './enums';
 
 export const tenant = pgTable('tenant', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -29,6 +29,11 @@ export const organization = pgTable('organization', {
   name: text('name').notNull(),
   legalName: text('legal_name'),
   status: organizationStatus('status').notNull().default('active'),
+  /**
+   * The relationship, not the lifecycle. Independent of `status`; implied by
+   * `isMspInternal` but not equivalent to it. See 0600.
+   */
+  relationship: organizationRelationship('relationship').notNull().default('client'),
   isMspInternal: boolean('is_msp_internal').notNull().default(false),
 
   industry: text('industry'),

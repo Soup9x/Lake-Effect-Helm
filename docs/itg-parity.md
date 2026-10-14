@@ -24,12 +24,12 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 | 1 | Recent-items dropdown | **Partial** | Data and API exist (`user_recent_view`, `/api/workspace/recent`); no header dropdown, no per-type icons |
 | 1 | Notifications + help icons | **Missing** | `webhook_endpoint` is outbound-only; there is no in-app notification surface |
 | 1 | User menu | **Exists** | Top-right account menu |
-| 2 | Recents + Favorites strip | **Partial** | `user_favorite`, `user_recent_view`, both dashboard widgets. Not present on `/organizations` |
-| 2 | Clients table, star, Name, Status | **Partial** | `src/app/(app)/organizations/page.tsx`; `organization.status` exists; star wired |
-| 2 | **Type** (Client/Prospect/Vendor/…) | **Missing** | No `organization.type`. `is_msp_internal` covers only "Internal" |
-| 2 | Sync Status column | **Partial** | `psa_company_id`, `rmm_organization_id`, `integration_sync_run` exist; not surfaced |
-| 2 | Result count, sorting, column chooser | **Partial** | Built in `shell/data-table.tsx`, `shell/column-menu.tsx`, `shell/filter-toolbar.tsx` — but only used by category grids, **not** the clients list |
-| 2 | Client logo + initials fallback | **Partial** | `organization.logo_url` column exists; no upload route, no avatar component |
+| 2 | Recents + Favorites strip | **Exists** | `components/client-strip.tsx` — two avatar rows above the table, clients only; the mixed-type dropdown is #1 |
+| 2 | Clients table, star, Name, Status | **Exists** | `components/clients-table.tsx`; status shows the real six-stage value, grouped by the filter |
+| 2 | **Type** (Client/Prospect/Vendor/…) | **Exists** | `organization.relationship` (0600). Named `relationship`, not `type`, because four `*_type` columns already exist; labelled "Type" in the UI |
+| 2 | Sync Status column | **Exists** | Last `integration_sync_run` per client via LATERAL; "Not linked" where no integration is mapped |
+| 2 | Result count, sorting, column chooser | **Exists** | The same three shell components, now composed by `clients-table.tsx` alongside `BulkBar` so bulk actions survived |
+| 2 | Client logo + initials fallback | **Partial** | `components/client-avatar.tsx` renders `logo_url` with an initials fallback. **Upload is still group I** |
 | 3 | Per-client sidebar, collapsible, counts | **Exists** | `shell/sidebar.tsx`, `src/lib/nav/org-categories.ts`, collapse persisted per browser |
 | 3 | Core asset entries | **Exists** | 16 categories incl. Domain Tracker, SSL Tracker, Locations, Networks, Passwords. Only "Checklists" absent — see #8 |
 | 3 | Apps & Services in sidebar | **Exists** | Tenant's own `flexible_asset_type` rows with their configured icons |
@@ -155,6 +155,36 @@ Deferred, flagged rather than silently dropped:
   which is a feature in its own right, not a header icon.
 - **Checklist email reminders (#8)** — folded into K, since they cannot work
   before an email channel exists.
+
+## Landed
+
+### Group A — clients list parity (migration 0600)
+
+Three things worth knowing beyond the table above.
+
+**`relationship` is a second axis, not a rename.** `status` already had a
+`prospect` value and `is_msp_internal` already meant "us", so the first draft
+of 0600 tied them together with
+`CHECK ((relationship = 'prospect') = (status = 'prospect'))`. That is wrong:
+relationship `prospect` with status `former` is a prospect that went cold, and
+the constraint forbids recording it. There is now a test that fails by name if
+anyone adds it back.
+
+**`is_msp_internal` survives untouched.** It carries a unique index — at most
+one per tenant — and means "this row is us". ITG's Internal is an ordinary
+label. The backfill makes the MSP's organisation `internal`, and the
+implication runs one way only.
+
+**Both fixture files needed the new column.** `fixtures.sql` and
+`fixtures-integration.sql` insert organisations *after* 0600 runs, so its
+backfill never sees them and the MSP's own organisation came out labelled
+"Client". Caught by the backfill test, not by review.
+
+**One shared component changed:** `DataTable` gained
+`clearSelectionSignal`. Selection lives inside it, so a bulk bar rendered
+outside had no way to untick anything — Clear would hide the bar and leave
+every checkbox set. That is the smallest seam that fixes it without making
+selection a controlled prop for every caller.
 
 ## Open questions
 

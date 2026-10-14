@@ -13,6 +13,16 @@ export const organizationStatus = pgEnum('organization_status', [
   'prospect', 'onboarding', 'active', 'co_managed', 'offboarding', 'former',
 ]);
 
+/**
+ * What an organisation IS to the MSP, as distinct from where it is in its
+ * lifecycle — see 0600. 'prospect' appears here and in organizationStatus on
+ * purpose: relationship 'prospect' with status 'former' is a prospect that
+ * went cold, and no single column can say that.
+ */
+export const organizationRelationship = pgEnum('organization_relationship', [
+  'client', 'prospect', 'vendor', 'competitor', 'internal', 'other',
+]);
+
 export const actorType = pgEnum('actor_type', ['user', 'service_account', 'system', 'integration']);
 
 export const membershipStatus = pgEnum('membership_status', ['invited', 'active', 'suspended', 'revoked']);

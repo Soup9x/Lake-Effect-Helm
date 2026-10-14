@@ -15,7 +15,7 @@
  * middle of its leaves is not a tree any more. Folders sort among themselves by
  * the active column and then sit above every asset row.
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ChevronsUpDown, Flag, Folder } from 'lucide-react';
 import { cn } from '@/lib/ui/cn';
 import { RowActionIcons, type RowAction } from './row-action-icons';
@@ -53,6 +53,7 @@ export function DataTable<T extends GridRow>({
   emptyMessage = 'Nothing here yet.',
   onSelectionChange,
   hiddenColumns,
+  clearSelectionSignal,
 }: {
   rows: readonly T[];
   columns: readonly Column<T>[];
@@ -61,6 +62,17 @@ export function DataTable<T extends GridRow>({
   selectable?: boolean;
   emptyMessage?: string;
   onSelectionChange?: ((ids: string[]) => void) | undefined;
+  /**
+   * Bump to clear the ticked rows.
+   *
+   * Selection lives in here, so a bulk bar rendered OUTSIDE this component has
+   * no way to untick anything — its Clear button would hide the bar and leave
+   * every checkbox set, which looks like the selection is still live because
+   * it is. A monotonic signal is the smallest seam that fixes it without
+   * making selection a controlled prop and pushing the state up into every
+   * caller that does not need it.
+   */
+  clearSelectionSignal?: number | undefined;
   /** Column keys the viewer has turned off. The first column is never in here. */
   hiddenColumns?: ReadonlySet<string> | undefined;
 }) {
@@ -77,6 +89,13 @@ export function DataTable<T extends GridRow>({
 
   const [sort, setSort] = useState<{ key: string; direction: Direction } | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+
+  // Not wrapped in a "did it change" guard: the signal only ever arrives when a
+  // caller asked for a clear, and clearing an already-empty set is free.
+  useEffect(() => {
+    if (clearSelectionSignal === undefined) return;
+    setSelected(new Set());
+  }, [clearSelectionSignal]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();

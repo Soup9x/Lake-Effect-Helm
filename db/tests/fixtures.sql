@@ -45,11 +45,16 @@ INSERT INTO tenant (id, slug, name) VALUES
   (:t1, 'northwind-msp', 'Northwind Managed Services'),
   (:t2, 'rival-msp',     'Rival IT Partners');
 
-INSERT INTO organization (id, tenant_id, slug, name, is_msp_internal) VALUES
-  (:t1_int,     :t1, 'northwind-internal', 'Northwind (Internal)', true),
-  (:t1_acme,    :t1, 'acme',               'Acme Manufacturing',   false),
-  (:t1_globex,  :t1, 'globex',             'Globex Corporation',   false),
-  (:t2_contoso, :t2, 'contoso',            'Contoso Ltd',          false);
+-- `relationship` is set explicitly rather than left to its default, because
+-- these rows are inserted AFTER 0600 has run and so its backfill never sees
+-- them. Without this the MSP's own organisation is labelled 'client', which is
+-- wrong in the interface and makes every fixture-based test assert the wrong
+-- thing about a column whose whole point is that it disagrees with the others.
+INSERT INTO organization (id, tenant_id, slug, name, is_msp_internal, relationship) VALUES
+  (:t1_int,     :t1, 'northwind-internal', 'Northwind (Internal)', true,  'internal'),
+  (:t1_acme,    :t1, 'acme',               'Acme Manufacturing',   false, 'client'),
+  (:t1_globex,  :t1, 'globex',             'Globex Corporation',   false, 'client'),
+  (:t2_contoso, :t2, 'contoso',            'Contoso Ltd',          false, 'client');
 
 INSERT INTO app_user (id, email, name) VALUES
   (:u_admin1, 'admin@northwind.test',  'Northwind Admin'),

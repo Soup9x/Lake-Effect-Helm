@@ -167,6 +167,24 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
       }),
   },
   {
+    // The type and status filters run in SQL, so they are a different query
+    // from the bare list rather than a different render of the same rows.
+    name: 'the client list, filtered by type and status',
+    load: async () =>
+      (await import('../../src/app/(app)/organizations/page')).default({
+        searchParams: p({ type: 'vendor', status: 'active', q: 'acme' }),
+      }),
+  },
+  {
+    // An unrecognised type is dropped rather than rejected — a stale link
+    // should show the list, not an error — and that branch deserves a row.
+    name: 'the client list, with a stale type in the URL',
+    load: async () =>
+      (await import('../../src/app/(app)/organizations/page')).default({
+        searchParams: p({ type: 'partner' }),
+      }),
+  },
+  {
     name: 'the asset page',
     load: async () =>
       (await import('../../src/app/(app)/assets/[nodeId]/page')).default({

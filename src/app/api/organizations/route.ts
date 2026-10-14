@@ -1,12 +1,14 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
+import { RELATIONSHIP_KEYS } from '@/lib/ui/organization-relationship';
 
 interface OrganizationRow {
   id: string;
   slug: string;
   name: string;
   status: string;
+  relationship: string;
   is_msp_internal: boolean;
   site_count: string;
   asset_count: string;
@@ -23,7 +25,8 @@ export const GET = tenantRoute(
   async ({ tx }) => {
     const rows = await tx<OrganizationRow[]>`
       SELECT
-        o.id, o.slug, o.name, o.status::text AS status, o.is_msp_internal,
+        o.id, o.slug, o.name, o.status::text AS status,
+        o.relationship::text AS relationship, o.is_msp_internal,
         (SELECT count(*)::text FROM site s
           WHERE s.organization_id = o.id AND s.deleted_at IS NULL) AS site_count,
         (SELECT count(*)::text FROM asset_node n
@@ -39,6 +42,7 @@ export const GET = tenantRoute(
         slug: row.slug,
         name: row.name,
         status: row.status,
+        relationship: row.relationship,
         isMspInternal: row.is_msp_internal,
         siteCount: Number(row.site_count),
         assetCount: Number(row.asset_count),
@@ -62,6 +66,10 @@ const createSchema = z.object({
   status: z
     .enum(['prospect', 'onboarding', 'active', 'co_managed', 'offboarding', 'former'])
     .default('active'),
+  // Not derived from `status`: see 0600. A caller that sends status 'prospect'
+  // and nothing else gets relationship 'client', which is wrong often enough
+  // that the create form sends both.
+  relationship: z.enum(RELATIONSHIP_KEYS).default('client'),
   industry: z.string().trim().max(120).optional(),
   website: z.string().trim().url('website must be a URL').max(500).optional(),
   timezone: z.string().trim().max(64).default('America/New_York'),
@@ -105,12 +113,13 @@ export const POST = tenantRoute(
     try {
       [created] = await tx<{ id: string; slug: string; name: string }[]>`
         INSERT INTO organization (
-          tenant_id, slug, name, legal_name, status, industry, website, timezone, notes,
-          created_by
+          tenant_id, slug, name, legal_name, status, relationship, industry, website,
+          timezone, notes, created_by
         )
         VALUES (
           ${identity.tenantId}::uuid, ${body.slug}, ${body.name},
           ${body.legalName ?? null}, ${body.status}::organization_status,
+          ${body.relationship}::organization_relationship,
           ${body.industry ?? null}, ${body.website ?? null}, ${body.timezone},
           ${body.notes ?? null}, ${identity.actorId}::uuid
         )
@@ -131,6 +140,7 @@ export const POST = tenantRoute(
         slug: created.slug,
         name: created.name,
         status: body.status,
+        relationship: body.relationship,
         isMspInternal: false,
         siteCount: 0,
         assetCount: 0,

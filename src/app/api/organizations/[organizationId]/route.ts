@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
+import { RELATIONSHIP_KEYS } from '@/lib/ui/organization-relationship';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,62}$/;
 
@@ -24,6 +25,8 @@ const patchSchema = z
     status: z
       .enum(['prospect', 'onboarding', 'active', 'co_managed', 'offboarding', 'former'])
       .optional(),
+    /** The relationship, moved independently of status — see 0600. */
+    relationship: z.enum(RELATIONSHIP_KEYS).optional(),
     industry: z.string().trim().max(120).nullable().optional(),
     website: z.string().trim().url('website must be a URL').max(500).nullable().optional(),
     timezone: z.string().trim().max(64).optional(),
@@ -72,14 +75,20 @@ export const PATCH = tenantRoute(
     // COALESCE so an absent field keeps its value, while an explicit null on a
     // nullable field clears it. The two are different requests and the caller
     // means different things by them.
-    let updated: { id: string; slug: string; name: string; status: string } | undefined;
+    let updated:
+      | { id: string; slug: string; name: string; status: string; relationship: string }
+      | undefined;
     try {
-      [updated] = await tx<{ id: string; slug: string; name: string; status: string }[]>`
+      [updated] = await tx<
+        { id: string; slug: string; name: string; status: string; relationship: string }[]
+      >`
         UPDATE organization SET
           name       = COALESCE(${body.name ?? null}, name),
           slug       = COALESCE(${body.slug ?? null}, slug),
           legal_name = ${body.legalName === undefined ? tx`legal_name` : body.legalName},
           status     = COALESCE(${body.status ?? null}::organization_status, status),
+          relationship = COALESCE(
+            ${body.relationship ?? null}::organization_relationship, relationship),
           industry   = ${body.industry === undefined ? tx`industry` : body.industry},
           website    = ${body.website === undefined ? tx`website` : body.website},
           timezone   = COALESCE(${body.timezone ?? null}, timezone),
@@ -87,7 +96,8 @@ export const PATCH = tenantRoute(
           updated_at = now(),
           updated_by = ${identity.actorId}::uuid
         WHERE id = ${organizationId.data}::uuid AND deleted_at IS NULL
-        RETURNING id, slug, name, status::text AS status
+        RETURNING id, slug, name, status::text AS status,
+          relationship::text AS relationship
       `;
     } catch (error) {
       const code = (error as { code?: string }).code;
@@ -105,6 +115,7 @@ export const PATCH = tenantRoute(
         slug: updated.slug,
         name: updated.name,
         status: updated.status,
+        relationship: updated.relationship,
       },
     };
   },
