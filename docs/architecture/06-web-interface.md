@@ -118,7 +118,7 @@ they can verify the file survived whatever channel they hand it over on.
 | `/dashboard` | What needs attention today, across every client. Two banners only — expired items and exports awaiting approval — because a dashboard that surfaces eight kinds of warning trains people to scroll past all of them. |
 | `/organizations` | Every client, with counts from independently RLS-scoped subqueries rather than a join that would fan out. |
 | `/organizations/:id` | One client: five widgets, then sites, contacts, expiring items, credentials with reveal controls, assets and documents. |
-| `/assets/:nodeId` | One asset, its type-specific detail, its **dependencies**, and its credentials. The dependency list is why this page exists: "what breaks if I take this offline" is answered by the graph, not by a description field somebody wrote in 2021. A flexible asset record renders here too, against the schema version it is pinned to — see *Filling in an asset type* — and a procedure gets its step editor, its published versions and the control that starts a run, see *Writing a procedure, and following one*. |
+| `/assets/:nodeId` | One asset, its type-specific detail, its **dependencies**, and its credentials. The dependency list is why this page exists: "what breaks if I take this offline" is answered by the graph, not by a description field somebody wrote in 2021. A flexible asset record renders here too, against the schema version it is pinned to — see *Filling in an asset type* — and a procedure gets its step editor, its published versions and the control that starts a run, see *Writing a procedure, and following one*. A domain or a certificate also carries the card that reports what the registry or the server last said, beside what somebody recorded — see *What the outside world says*. |
 | `/runs/:runId` | One checklist run: its steps, where it got to, who each one belongs to and when it is due. Deliberately not under `/organizations/:id` — a run belongs to the person working through it as much as to the client it is for, which is where My Tasks links. |
 | `/tasks` | My Tasks: checklist steps assigned to the reader, soonest first, defaulting to the incomplete ones. The first page in Helm that is about a PERSON rather than a client, and the only one where "mine" is a filter — resolved in SQL against `helm.current_actor_id()`, so there is no id in the URL to edit. |
 | `/expirations` | Certificates, domains, warranties, licences and contracts in one list, filtered by a severity that is computed at read time. |
@@ -126,7 +126,7 @@ they can verify the file survived whatever channel they hand it over on.
 | `/search` | A plain GET form, not live filtering — a keystroke-per-request design puts a partial hostname on the wire and in the server log on every character. |
 | `/exports` | The ledger and the approval queue. Readable by anyone who may create an export, so "who exported this client's credentials and who approved it" needs no administrator. |
 | `/audit` | The trail, and the chain-integrity panel most audit UIs omit: `chain_seq` minus `anchored_seq` is how much history is currently protected only by the database. |
-| `/settings` | Key custody, integration health, and what each background worker may decrypt. Nothing is editable — worker authorisation is fixed by trigger, because a UI that can widen the sync worker's purposes is a UI that can hand it the vault. |
+| `/settings` | Key custody, integration health, and what each background worker may decrypt. Worker **authorisation** is not editable and never will be — it is fixed by trigger, because a UI that can widen the sync worker's purposes is a UI that can hand it the vault. One thing on this page is editable, and it is the opposite kind of switch: whether Helm may reach **outward** at all — see *Turning on outbound checks*. |
 | `/settings/asset-types` | The tenant's own documentation types. The flexible-asset engine has been complete and versioned since 0080; this is the screen it never had, so a type no longer arrives only by API call or by SQL. |
 
 ### Defining an asset type
@@ -338,6 +338,69 @@ that fails when the two lists drift. `tenant_sidebar_default` is readable by
 every role in the tenant and writable only with `tenant:write`: the generic
 tenant-scoped read predicate is `is_tenant_wide()`, which would have hidden the
 default from the client-side roles whose drawer renders from it.
+
+### Turning on outbound checks
+
+The one editable thing on `/settings`, and the only switch in Helm that decides
+whether network traffic leaves the building. It is off until somebody turns it
+on, per tenant, and the modal says plainly what goes out when they do: the
+domain names being looked up, to the RDAP endpoint named in the form, and a TLS
+connection to each certificate's common name.
+
+**The endpoint is in the form, not in the code.** A default (`https://rdap.org`,
+a redirector) is offered because most installs want one, and it is a value on
+the tenant's row rather than a constant in the worker — so an MSP running their
+own RDAP mirror can point at it, and anybody can see where their clients' names
+are being sent. It must be https: refused with a message naming the field,
+never upgraded for them, because a silently rewritten URL sends the request
+somewhere nobody chose.
+
+Gated on `tenant:write`, which in the shipped catalogue is `super_admin` alone.
+The route's gate and the table's RLS policies name the same permission, so they
+cannot come to disagree — the same construction the tenant sidebar default
+uses, for a stronger reason here. Reading the setting is open to every role,
+because the card below needs it to tell "switched off" from "nobody has
+answered".
+
+The form re-seeds its draft when the dialog **opens**, not on mount: C2's lesson
+about a modal that silently keeps an old draft after somebody saves elsewhere.
+
+### What the outside world says
+
+On a domain or a certificate, a card above Dependencies reporting what the
+registry or the server last told us — beside what a person recorded, never over
+it. `domain.registry_expires_at` sits next to `domain.expires_at` and
+`ssl_certificate.observed_not_after` next to `not_after`, and when the two
+differ by more than a day the card says so in its own line, with both dates.
+
+**The disagreement is the point of the feature.** Reconciling it automatically
+would mean choosing — overwrite what somebody typed, or ignore what the registry
+says — and the useful answer is neither: "you recorded March, the registry says
+January" is a sentence a technician can act on in a minute. A day of tolerance,
+because a recorded expiry is usually a date somebody typed and the registry's is
+a timestamp; without it the card would cry wolf on every correctly documented
+domain.
+
+**It also says which date the alerts follow,** because they follow the recorded
+one. `v_expiration_dashboard` projects the hand-entered column and H left that
+alone deliberately, rather than re-pointing every install's expiry warnings the
+moment an administrator ticked a box. A reader looking at two dates needs to
+know which one the dashboard is counting, and telling them beats being quietly
+clever.
+
+**"Never checked" has two meanings and the card distinguishes them.** Never
+checked because nobody turned checking on is a setting; never checked because
+the registry will not answer is a fault. So `enabled` is passed in and the
+sentence changes — and a third status, `unsupported`, covers a ccTLD that
+publishes no expiry event at all, rendered as "Not available" with a note that
+it will not be retried differently. A card that showed all three in red would
+teach people to ignore red.
+
+The five probe columns are **absent from the generic detail list** on the same
+page. They are rendered here as prose, and leaving them in the humanised
+key/value list as well would say everything twice and badly —
+`next_check_at` worst of all, since when a worker will get round to something is
+nobody's business on an asset page.
 
 ### The client page's widgets
 

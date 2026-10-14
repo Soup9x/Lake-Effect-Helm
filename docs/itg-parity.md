@@ -68,7 +68,7 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 9 | Domain tracker fields | **Exists** | `domain`: registrar, registered_at, expires_at, nameservers, dns_provider, dnssec, transfer_locked |
 | 9 | SSL tracker fields | **Exists** | `ssl_certificate`: issuer, not_before, not_after, subject_alt_names, fingerprint, key_algorithm |
 | 9 | Both feed Upcoming Expirations | **Exists** | `expiration.kind` + `source_table`/`source_id` |
-| 9 | Auto-fill expiry (RDAP + TLS probe) | **Missing** | Not among the ten worker jobs. `expiration.refreshed_at` is the slot waiting for it |
+| 9 | Auto-fill expiry (RDAP + TLS probe) | **Exists** | H (0670), the eleventh worker job. **Off until somebody turns it on** — `external_check_setting` per tenant, lock key `0x48_45_4c_4d_0b`. The answer is written BESIDE the recorded value (`domain.registry_expires_at`, `ssl_certificate.observed_not_after`), never over it, and a disagreement is shown rather than resolved. `expiration.refreshed_at` is still unused: the dashboard deliberately still counts the recorded date — decision 23 |
 | 10 | Change password | **Exists** | `/api/auth/local/change-password` |
 | 10 | First/last name split | **Exists** | Group E: `first_name`/`last_name` on `app_user`, with `name` still the display column and a trigger composing it |
 | 10 | MFA status, enable/disable | **Partial** | `mfa_enrolled_at`, `auth_authenticator` |
@@ -917,6 +917,120 @@ both now closed:
   says nothing about deletion, so that predicate is the only thing keeping a
   deleted client off the grid. Now tested in both the rows and the total.
 
+### Group H — what the outside world says (migration 0670)
+
+The eleventh worker job: RDAP for a domain's registry expiry, a TLS handshake
+for what a server actually serves. Plus the switch that turns it on, and the
+card on the asset page that reports what came back.
+
+**OFF UNTIL SOMEBODY TURNS IT ON, and that is structural rather than a default.**
+`helm.external_check_backlog()` joins `external_check_setting`, so a tenant with
+no row contributes no work and an air-gapped install reports idle forever. There
+is no environment variable to forget and no configuration that makes traffic
+leave the building on an upgrade. The endpoint is part of the payload, not a
+hidden constant: somebody enabling this can see, and change, where their
+clients' domain names are sent. Decision 4.
+
+**THE PROBE WRITES BESIDE, NEVER OVER — AND THE DISAGREEMENT IS THE PRODUCT.**
+0110's house rule is that sync never overwrites a field a technician edited by
+hand, and its implementation is "inbound values only fill fields that are still
+NULL". Taken literally that defeats a *refresh* job: nothing would ever be
+refreshed, only first-filled. So H keeps the rule's intent and gets the feature
+by giving the outside world its own columns — `registry_expires_at` beside
+`expires_at`, `observed_not_after` beside `not_after`. Both values exist, and
+"you recorded March, the registry says January" is the most useful sentence this
+feature can produce. Overwriting would have destroyed it; blank-filling would
+have hidden it. Decision 22.
+
+**AND THE EXPIRY DASHBOARD STILL COUNTS THE RECORDED DATE,** which the card says
+out loud whenever the two disagree. Re-pointing `v_expiration_dashboard` at the
+observed column would silently change what every install's alerts mean the
+moment an administrator ticked a box. Decision 23 — flagged as the open
+question it is, not quietly settled either way.
+
+**'unsupported' IS NOT 'failed'.** A ccTLD that publishes no `expiration` event
+will never publish one; a registry that is down will be back. Showing both in
+red teaches people to ignore red. `external_check_status` has three values for
+that reason, and the card renders the third as "Not available" with a note that
+it will not be retried differently.
+
+**`last_checked_at` IS NOT ADVANCED BY A FAILURE,** deliberately. It means "when
+did we last successfully learn something", which is what "last checked: never"
+has to mean on screen. A failed probe that advanced it would make a domain
+nobody has ever successfully looked up read as recently checked. `next_check_at`
+*is* pushed out on failure, to the tenant's full interval — the difference
+between a job that retries politely and one that hammers a registry having a
+bad day.
+
+**A BUG THIS GROUP'S OWN TESTS CAUGHT, worth recording because it would have
+shipped looking like it worked.** The first version of the job read its backlog
+as `helm_worker` and then ran `UPDATE domain SET … WHERE id = $1`. That role is
+subject to RLS like any other, and with no tenant context every one of those
+writes matched **zero rows** — and an UPDATE matching zero rows is not an error.
+The job logged a tidy `failed: 1` for a probe whose result it had just thrown
+away. Nothing in SQL could have caught it; the integration test did, because it
+asserts the row afterwards rather than the job's return value. The fix is the
+shape `unifi-sync.ts` already used: the backlog returns each tenant's own
+`system_sync` service account and every write goes back inside that tenant
+through `withTenant(…, { role: 'worker' })`. The cross-tenant read stays on the
+bare worker because the backlog function is SECURITY DEFINER.
+
+**Two locks, because they answer different questions.** One advisory lock per
+job name (`0x48_45_4c_4d_0b`) keeps two schedulers from running the job at once;
+a row claim — `FOR UPDATE SKIP LOCKED` plus `next_check_at` pushed forward by a
+claim window — keeps two *workers* off the same domain, and survives a worker
+that dies mid-probe, which an advisory lock does not because it dies with its
+session. 0430's reasoning, unchanged.
+
+**NULL `next_check_at` means never checked, which means due,** so the due
+indexes are deliberately not partial: a partial index `WHERE next_check_at IS
+NOT NULL` would exclude exactly the rows that have never been looked at.
+
+**Egress, and what the test environment taught.** A test aimed at RFC 5737
+reserved address space passed for the wrong reason: this container's egress
+gateway intercepts outbound TLS and completes a handshake for *any* address,
+presenting its own certificate (issuer "Egress Gateway SDS Issuing CA", subject
+`default.domain`). So "unreachable" was being proven against a host that
+answered. The probes are now tested against local fixture servers — a real TLS
+host with a self-signed certificate, a real RDAP service, and a port that
+accepts and says nothing — which is also what made the timeout path testable at
+all. `FakeSilentPort.stop()` has to destroy held sockets: `server.close()` waits
+for them, so a 400 ms probe timeout produced a 30 s test timeout.
+
+**The RDAP client refuses to be redirected into clear text.** Redirects within
+https are followed, because forwarding is the entire purpose of a redirector
+like rdap.org; three hops maximum; and a hop whose scheme is not https throws
+rather than being followed, because the answer is something somebody acts on.
+The route refuses a non-https endpoint rather than coercing it — a URL silently
+upgraded sends the request somewhere the person did not ask for.
+
+**Tests: 21 integration, 21 unit, 2 page rows and 4 value assertions. 11
+sabotages, 11 caught.** That clean sweep is not a claim about the tests being
+good from the start — two of the tests that did the catching were written
+minutes before the pass, because the thing that found the gaps in this group was
+not sabotage but asking what had **no test at all**:
+
+- **The route had no tests.** Every other block in the file seeds
+  `external_check_setting` with the superuser, which proves the job reads the
+  row and says nothing about who may write it — and "who may make a client's
+  domain names leave the building" is the part of this feature worth gating. The
+  `tenant:write` gate, the https refusal, the interval bounds and one end-to-end
+  "the route is what makes the job start working" test now cover it.
+- **The `IS NOT NULL` on the backlog's actor lookup looked like defensive
+  noise.** `helm.worker_actor()` returns NULL for a service account somebody has
+  disabled, which is an ordinary administrative act. Without that filter the job
+  would be handed a row with no actor, and the throw would come out of the loop
+  and abandon every other tenant's checks for that tick. Now tested by
+  disabling the account and asserting the job goes idle instead.
+
+What made the rest of the sabotages land was the RLS bug above: fixing it had
+already forced every assertion in the integration file to read the row back
+rather than trust the job's return value, and a test that checks the database is
+a test a broken write cannot satisfy. `db/tests/security.sql` §48 pins the same
+lesson at the SQL level — an `UPDATE` with no tenant context matches nothing and
+does not raise — next to the four policies' actual behaviour, the https CHECK
+and the interval bounds.
+
 ## Decisions
 
 The questions this document opened with have been answered. Recorded here
@@ -1298,6 +1412,58 @@ is how the same argument gets had twice.
     deliberately, with its own look at what each function can reach, and not a
     thing to slip into a group about a grid. G reaches 79 ms by asking for one
     page of clients, which it should do regardless.
+
+22. **An observed value gets its own column, so a disagreement is visible (H).**
+    0110's rule — sync never overwrites a hand-edited field — is implemented as
+    "inbound values only fill fields that are still NULL", and a refresh job
+    taking that literally would refresh nothing: every domain's expiry is
+    already filled in by the person who documented it. Both alternatives lose
+    the information. Overwriting destroys what somebody typed, which is the one
+    thing 0110 exists to prevent; blank-filling silently keeps the stale value
+    and reports success.
+
+    So the registry and the server get columns of their own
+    (`domain.registry_expires_at`, `ssl_certificate.observed_not_after`,
+    `observed_fingerprint_sha256`) and the asset page shows the two side by
+    side, calling out a difference of more than a day in its own line. A day of
+    tolerance because the two are not the same kind of value: a recorded expiry
+    is usually a date somebody typed and the registry's is a timestamp, so
+    flagging `2027-01-01` against `2027-01-01T09:14:32Z` would cry wolf on every
+    correctly documented domain.
+
+    Nothing is reconciled automatically. "You recorded March, the registry says
+    January" is a sentence a technician can act on; a silently corrected field
+    is not.
+
+23. **Expiry alerts still follow the recorded date, and this is left open (H).**
+    `v_expiration_dashboard` (0100) projects `domain.expires_at` and
+    `ssl_certificate.not_after` into the expiry feed, and H deliberately did not
+    re-point it at the observed columns. Doing so would change what every
+    install's expiry alerts mean the moment an administrator ticked a box —
+    including for a tenant whose registry answer is wrong, or whose ccTLD
+    publishes nothing and whose rows would go quiet.
+
+    The honest consequence is that a domain whose registry says January while
+    the record says March does not raise an alert until March, and that is a
+    real limitation rather than a subtlety. It is handled by saying so: the card
+    tells the reader which of the two dates the dashboard is counting, which
+    beats being quietly clever.
+
+    **The open question, recorded rather than decided:** whether an observed
+    expiry sooner than the recorded one should drive the alert. The case for it
+    is that the registry is usually right. The case against is that it makes a
+    third party's uptime a determinant of whether a Helm install warns anybody,
+    and that the failure is silent in the direction nobody checks. A deliberate
+    answer wants its own look at `expiration.refreshed_at`, which is still the
+    unused slot it has always been.
+
+24. **A registry that cannot answer and a registry that will never answer are
+    different statuses (H).** `external_check_status` is
+    `ok | failed | unsupported`. A ccTLD that publishes no `expiration` event
+    will not publish one tomorrow either; a 5xx will clear. Rendering both in
+    red is how a status column stops being read. 'unsupported' covers both no
+    expiry event and a 404 for the name, and the card says it will not be
+    retried differently.
 
 Two further decisions taken at the same time:
 
