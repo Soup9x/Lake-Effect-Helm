@@ -4,6 +4,7 @@ import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { Sidebar } from '@/components/shell/sidebar';
 import { loadOrgNav } from '@/lib/nav/org-sidebar';
+import { getSidebarLayout } from '@/lib/nav/sidebar-queries';
 
 /**
  * Everything inside one client gets the drawer.
@@ -39,7 +40,21 @@ export default async function OrganizationLayout({
       SELECT id, name FROM organization WHERE id = ${organizationId}::uuid
     `;
     if (!org) return null;
-    return { org, nav: await loadOrgNav(tx, org.id) };
+
+    /*
+     * The drawer's arrangement, loaded HERE for the same reason the counts are:
+     * once per subtree rather than once per page. `customised` is a separate
+     * question from the layout — it decides whether the control offers "follow
+     * the tenant default again", and a layout that happens to equal the default
+     * is not the same as not having one.
+     */
+    const [nav, layout, mine] = await Promise.all([
+      loadOrgNav(tx, org.id),
+      getSidebarLayout(tx),
+      tx<{ n: number }[]>`SELECT count(*)::int AS n FROM user_sidebar`,
+    ]);
+
+    return { org, nav, layout, customised: (mine[0]?.n ?? 0) > 0 };
   });
 
   if (!data) notFound();
@@ -50,6 +65,8 @@ export default async function OrganizationLayout({
         org={data.org}
         counts={data.nav.counts}
         flexibleAssets={data.nav.flexibleAssets}
+        layout={data.layout}
+        customised={data.customised}
       />
       <main className="min-w-0 flex-1 overflow-y-auto bg-canvas">{children}</main>
     </div>

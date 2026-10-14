@@ -25,7 +25,16 @@ export interface OrgCategory {
   source: string;
   /** lucide-react icon name, resolved by the client component. */
   icon: string;
-  /** Shown under "More" rather than in the primary list. */
+  /**
+   * Not in the DEFAULT primary list, so it starts under "More".
+   *
+   * It used to be the whole answer: the drawer filtered on this flag and the
+   * split was the same for every tenant. Since 0620 the split is a per-user
+   * list (src/lib/nav/sidebar-layout.ts) and this flag decides only what
+   * somebody sees before they have arranged anything — which is why the
+   * default is still exactly today's drawer. Promoting a category here changes
+   * the default; it does not move it for anybody who has already chosen.
+   */
   secondary?: boolean;
 }
 
@@ -40,7 +49,8 @@ export const ORG_CATEGORIES: readonly OrgCategory[] = [
   { slug: 'ssl',            label: 'SSL Tracker',    kind: 'node',  source: 'ssl_certificate', icon: 'ShieldCheck' },
 
   // The rest of Helm's node types. Real, less often reached, and therefore
-  // behind "More" — which is what IT Glue's own footer menu is for.
+  // behind "More" BY DEFAULT — which is what IT Glue's own footer menu is for,
+  // and what anybody can now change for themselves.
   { slug: 'applications', label: 'Applications', kind: 'node', source: 'application',       icon: 'AppWindow',  secondary: true },
   { slug: 'directories',  label: 'Directories',  kind: 'node', source: 'directory_service', icon: 'FolderTree', secondary: true },
   { slug: 'circuits',     label: 'ISP Circuits', kind: 'node', source: 'isp_circuit',       icon: 'Cable',      secondary: true },
