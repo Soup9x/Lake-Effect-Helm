@@ -74,6 +74,42 @@ describe('deleting a client', () => {
   });
 
   it('deletes an archived client and everything under it, in one call', async () => {
+    /*
+     * The fixture's Acme has a procedure with a PUBLISHED version, and this
+     * test is what caught the consequence: `sop_version` is append-only, the
+     * cascade asset_node → sop → sop_version fires that trigger, and the whole
+     * purge came back 403 with "DELETE on sop_version is not permitted". 0640
+     * is the fix. Before F1 nothing could publish a version, so the conflict
+     * had never been reachable outside a fixture.
+     *
+     * A RUN is added here too, because it fails differently: sop_run.sop_id is
+     * ON DELETE RESTRICT, so with the trigger exempted and the runs left in
+     * place the cascade dies on the foreign key instead. Both paths have to
+     * work for a client that has actually followed a checklist, which is the
+     * only kind of client this matters for.
+     */
+    await su(async (sql) => {
+      const [version] = await sql<{ id: string }[]>`
+        SELECT id FROM sop_version WHERE sop_id = ${IDS.sopOffboard}::uuid LIMIT 1
+      `;
+      const [run] = await sql<{ id: string }[]>`
+        INSERT INTO sop_run (
+          tenant_id, organization_id, sop_id, sop_version_id, title, status,
+          started_at, started_by
+        )
+        VALUES (
+          ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, ${IDS.sopOffboard}::uuid,
+          ${version!.id}::uuid, 'Followed before the client left', 'in_progress',
+          now(), ${IDS.admin1}::uuid
+        )
+        RETURNING id
+      `;
+      await sql`
+        INSERT INTO sop_run_step (tenant_id, run_id, position, title, kind, status)
+        VALUES (${IDS.tenant1}::uuid, ${run!.id}::uuid, 1, 'a step', 'manual', 'pending')
+      `;
+    });
+
     await su((sql) => sql`
       UPDATE organization SET archived_at = now() WHERE id = ${IDS.orgAcme}::uuid
     `);
@@ -88,19 +124,29 @@ describe('deleting a client', () => {
     // before the rows went.
     expect(body.destroyed.assets).toBeGreaterThan(0);
 
+    // The dialog quotes these back before anything is destroyed, so a run the
+    // count did not mention is a run somebody lost without being told.
+    expect(body.destroyed.checklist_runs).toBe(1);
+
     expect(await countOrg(IDS.orgAcme)).toBe(0);
     const leftovers = await su(async (sql) => {
-      const [r] = await sql<{ assets: string; secrets: string; docs: string }[]>`
+      const [r] = await sql<{
+        assets: string; secrets: string; docs: string; runs: string; versions: string;
+      }[]>`
         SELECT
           (SELECT count(*) FROM asset_node      WHERE organization_id = ${IDS.orgAcme}::uuid) AS assets,
           (SELECT count(*) FROM secret          WHERE organization_id = ${IDS.orgAcme}::uuid) AS secrets,
-          (SELECT count(*) FROM search_document WHERE organization_id = ${IDS.orgAcme}::uuid) AS docs
+          (SELECT count(*) FROM search_document WHERE organization_id = ${IDS.orgAcme}::uuid) AS docs,
+          (SELECT count(*) FROM sop_run         WHERE organization_id = ${IDS.orgAcme}::uuid) AS runs,
+          (SELECT count(*) FROM sop_version     WHERE sop_id = ${IDS.sopOffboard}::uuid) AS versions
       `;
       return r!;
     });
     expect(Number(leftovers.assets)).toBe(0);
     expect(Number(leftovers.secrets)).toBe(0);
     expect(Number(leftovers.docs)).toBe(0);
+    expect(Number(leftovers.runs), 'a checklist run outlived the client').toBe(0);
+    expect(Number(leftovers.versions), 'a published version outlived the client').toBe(0);
 
     // The property the whole feature rests on.
     const audit = await su(async (sql) => {

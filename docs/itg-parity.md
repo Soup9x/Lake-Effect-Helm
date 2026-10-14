@@ -170,7 +170,7 @@ and PR.
 | **C2** | Records: the schema-driven **record** form behind the dead `+ New` button, a record `PATCH` route, and the `flexible_asset` rendering path `/assets/[nodeId]` never had | none | C lets a type be defined. Without this a record of one cannot be created, cannot be corrected, and renders none of its fields |
 | **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link — **landed** | 0620 | Follows the dashboard pattern; small and self-contained |
 | **E** | Profile/preferences: user timezone, theme, first/last name — **landed**. Side-panel toggle and MFA recovery token deferred, decision 15 | 0630 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
-| **F1** | Checklists you can actually use: template authoring, publishing a version, starting a run against a client, the run page, SOP rows in the integration fixture — **landed** | none for the feature; see the note on 0640 below | 0090 modelled all of this and nothing in the application ever created a run. Assignment is meaningless until a run exists |
+| **F1** | Checklists you can actually use: template authoring, publishing a version, starting a run against a client, the run page, SOP rows in the integration fixture — **landed** | 0640, for the purge conflict publishing exposed | 0090 modelled all of this and nothing in the application ever created a run. Assignment is meaningless until a run exists |
 | **F2** | `assigned_to` + `due_at` on run steps, a default assignee and due date on the run, My Tasks, an open-task count | 0650 | Delivers half of the Personal section by extending SOPs |
 | **G** | Global section: completion grid with % badges, per-client completion scores | 0650 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
 | **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0660 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
@@ -189,10 +189,10 @@ here so nobody reuses a number:
   L is 0690. Nothing was built for J, so there is no orphaned file and no
   number to retire.
 - **F1 needed no migration for its feature** — 0090 had the whole model
-  already, which was the finding the group turned on. It needs one for the
-  client-purge conflict it exposed (see below), and if that lands it is
-  **0640**, pushing F2 to 0650, G to 0660, H to 0670, I to 0680, K to 0690
-  and L to 0700.
+  already, which was the finding the group turned on. It needed one for the
+  client-purge conflict it exposed: **0640 is F1's**
+  (`0640_purgeable_sop_versions.sql`, decision 17), so **F2 is 0650**, G 0660,
+  H 0670, I 0680, K 0690 and L 0700. **0640 must not be reused.**
 
 The numbers above are intentions rather than reservations — the next free
 number at the time of writing is what a group actually takes.
@@ -648,7 +648,7 @@ rotation due date and an audit timestamp stay UTC-suffixed and unconverted —
 "expires 2026-03-01" meaning three different instants is how a certificate
 lapses on a Sunday, and that rule is not being relaxed.
 
-### Group F1 — checklists you can actually use (no migration)
+### Group F1 — checklists you can actually use (migration 0640, for the purge conflict it exposed)
 
 The group that found its feature already built. 0090 modelled procedures,
 immutable published versions, runs that snapshot the version they executed
@@ -705,12 +705,14 @@ one form, so two cannot open.
 
 **Three things found while building it, none of them fixed here:**
 
-1. **A published procedure can never be deleted at all.** `sop_version` is
-   append-only by `helm.deny_mutation()`, and the cascade
-   `asset_node → sop → sop_version` fires it, so even a superuser `DELETE`
-   fails. Consistent with the product's archive-not-delete stance — but it also
-   means **a client with a published procedure cannot be purged**, which is a
-   live regression as of F1 and is the open question below.
+1. **A published procedure can never be deleted at all**, which is consistent
+   with the product's archive-not-delete stance and stays true. What could not
+   stay true is its consequence: **a client with a published procedure could not
+   be purged**, because `helm.delete_organization`'s cascade
+   `asset_node → sop → sop_version` fired the append-only trigger and failed the
+   whole operation. `tests/integration/delete.test.ts` went red on this branch
+   for exactly that reason. Fixed in **migration 0640** under decision 17 —
+   which is a rail change, so it was approved rather than assumed.
 2. **`client_admin` holds `sop:execute` but is rank 30**, and `sop_run`'s RLS
    requires rank 40, so a client administrator passes the route's permission
    gate and is then refused by the database. Failing closed, so not changed
@@ -942,9 +944,9 @@ is how the same argument gets had twice.
     groups removing, and it is the same rule as decision 15: a control that
     stores an answer nobody acts on is worse than its absence.
 
-17. **OPEN — a client with a published procedure cannot be purged (F1).** Not a
-    decision yet; the one thing in this plan waiting on an answer, because it
-    widens a rail a previous migration deliberately fenced.
+17. **A client purge takes their published procedures with it (F1, 0640).**
+    Approved rather than assumed, because it widens a rail a previous migration
+    deliberately fenced.
 
     `helm.delete_organization` ends with `DELETE FROM asset_node WHERE
     organization_id = …`, which cascades to `sop` and then to `sop_version` —
@@ -990,15 +992,31 @@ is how the same argument gets had twice.
     purges everything about them", and the audit log still records what was
     destroyed.
 
-    **Option B — the rail stays absolute and the purge refuses clearly.**
-    `helm.delete_organization` checks for published procedures up front and
-    raises with a DETAIL the route turns into prose, the way `archive_first`
-    already works. Deleting a client then has a permanent hole — any client you
-    ever published a checklist for stays — but no append-only table is ever
-    exempted twice and 0520's guard keeps its meaning.
+    **Option B, not taken — the rail stays absolute and the purge refuses
+    clearly.** `helm.delete_organization` would check for published procedures
+    up front and raise with a DETAIL the route turns into prose, the way
+    `archive_first` already works. It is recorded because it is the honest
+    alternative, and rejected because it leaves an existing, documented feature
+    permanently broken for a reason nobody can act on: any client you ever
+    published a checklist for would stay forever.
 
-    **Recommendation: A.** Option B leaves an existing, documented feature
-    partly broken for a reason a user cannot act on.
+    **What 0640 does, and what it deliberately does not.** `sop_version`'s
+    trigger now calls `helm.deny_mutation_unless_purging()`;
+    `helm.delete_organization` deletes the client's runs, then their versions
+    inside a `set_config('helm.purging', 'on', true)` window that is lowered
+    immediately, then their nodes; and the count the confirmation dialog quotes
+    back gained `checklist_runs`, because a run somebody is about to lose should
+    be named before it goes. Unchanged: `audit_log` keeps the unexempted
+    `deny_mutation()`, `UPDATE` on a published version is still refused outright
+    even inside a purge, `flexible_asset_type_version` is untouched, and
+    **deleting one published procedure is still impossible** — the exemption
+    fires inside a client purge and nowhere else, so archiving remains the only
+    way to retire a procedure that has ever been published.
+
+    0520's guard is re-stated in 0640 with the allowed set `{secret_version,
+    sop_version}`, and `db/tests/security.sql` §41(f) with it, so a third table
+    joining the list still fails the build until somebody writes the migration
+    that says why.
 
 Two further decisions taken at the same time:
 
