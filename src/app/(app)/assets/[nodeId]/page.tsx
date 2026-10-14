@@ -18,7 +18,7 @@ import { recordView } from '@/lib/workspace/queries';
 import { NotesCard } from '@/components/notes-card';
 import { FlexibleRecordForm } from '@/components/flexible-record-form';
 import { pointerFor, schemaToFields, type FieldDef } from '@/lib/flexible/fields';
-import { readTemplate } from '@/lib/sops/queries';
+import { listAssignableUsers, readTemplate } from '@/lib/sops/queries';
 import { ChecklistTemplateCard } from '@/components/checklist-template-card';
 
 interface NodeRow {
@@ -206,6 +206,9 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     // Same bargain for a procedure: its steps and published versions, read
     // only when the node is one.
     const template = node.node_type === 'sop' ? await readTemplate(tx, node.id) : null;
+    // Only for the picker in the start-a-run dialog, so only when that dialog
+    // can be opened at all.
+    const assignable = template && perm?.run ? await listAssignableUsers(tx) : [];
 
     return {
       node, detail: detailRows, edges, secrets, expiries, sites, record, template,
@@ -213,13 +216,14 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       canReveal: perm?.reveal ?? false,
       canAuthorProcedures: perm?.author ?? false,
       canRunChecklists: perm?.run ?? false,
+      assignable,
     };
   });
 
   if (!data) notFound();
   const {
     node, detail, edges, secrets, expiries, sites, record, template, totp, canReveal,
-    canAuthorProcedures, canRunChecklists,
+    canAuthorProcedures, canRunChecklists, assignable,
   } = data;
   const canWrite = !isClientRole(identity.roleKey);
 
@@ -422,6 +426,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             template={template}
             canAuthor={canAuthorProcedures}
             canRun={canRunChecklists}
+            assignable={assignable}
           />
         )}
 

@@ -67,6 +67,15 @@ export function ChecklistRunsCard({ runs }: { runs: readonly RunSummary[] }) {
                 {finished
                   ? `finished ${formatDate(run.completedAt)}`
                   : `started ${formatDate(run.startedAt)}`}
+                {run.assignedTo && ` · ${run.assignedTo}`}
+                {/*
+                  The run's own due date, not a step's. A step can be due
+                  sooner than the run, and surfacing the earliest step date
+                  here would make this line disagree with the run page — so it
+                  says what the run says, and My Tasks is where per-step dates
+                  are the subject.
+                */}
+                {!finished && run.dueAt && ` · due ${formatDate(run.dueAt)}`}
               </span>
             </div>
           );

@@ -23,18 +23,28 @@
  *
  * A FINISHED RUN IS READ-ONLY. Editing a step afterwards would rewrite the
  * evidence the run exists to be, so the controls go away rather than failing.
+ * That includes reassignment: handing somebody a step on a run that is already
+ * over is not a smaller act than ticking one off.
+ *
+ * WHO AND WHEN (0650). Each step shows its assignee and due date, and "Assign"
+ * changes both in one PATCH. `overdue` is computed in SQL rather than compared
+ * to Date.now() here — a date comparison during render answers one way on the
+ * server and another in the browser, which is a hydration mismatch, and it
+ * would put the meaning of "overdue" in a third place.
  */
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, CircleSlash, Loader2, RotateCcw } from 'lucide-react';
+import { CalendarClock, Check, CircleSlash, Loader2, RotateCcw, UserRound } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { FieldHint, Label, Textarea } from './ui/field';
+import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
 import { unsettledRequiredSteps, type RunStepState } from '@/lib/sops/steps';
 import type { RunView } from '@/lib/sops/queries';
-import { formatDateTime } from '@/lib/ui/format';
+import {
+  formatDateTime, fromDateTimeLocalInput, toDateTimeLocalInput,
+} from '@/lib/ui/format';
 import { cn } from '@/lib/ui/cn';
 
 const STATUS_TONE: Record<string, 'ok' | 'neutral' | 'warning' | 'critical' | 'brand'> = {
@@ -45,7 +55,16 @@ const STATUS_TONE: Record<string, 'ok' | 'neutral' | 'warning' | 'critical' | 'b
   abandoned: 'neutral',
 };
 
-export function ChecklistRun({ run, canExecute }: { run: RunView; canExecute: boolean }) {
+export function ChecklistRun({
+  run,
+  canExecute,
+  assignable = [],
+}: {
+  run: RunView;
+  canExecute: boolean;
+  /** Active members of this tenant, for the assignee picker (0650). */
+  assignable?: readonly { id: string; name: string }[];
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +72,11 @@ export function ChecklistRun({ run, canExecute }: { run: RunView; canExecute: bo
   const [skipNote, setSkipNote] = useState('');
   const [abandoning, setAbandoning] = useState(false);
   const [abandonReason, setAbandonReason] = useState('');
+  const [assigning, setAssigning] = useState<
+    { id: string; title: string; assignedToId: string | null; dueAt: string | null } | null
+  >(null);
+  const [assignee, setAssignee] = useState('');
+  const [due, setDue] = useState('');
 
   const finished = run.status === 'completed' || run.status === 'abandoned';
   const editable = canExecute && !finished;
@@ -102,6 +126,17 @@ export function ChecklistRun({ run, canExecute }: { run: RunView; canExecute: bo
     }
   }
 
+  async function confirmAssign() {
+    if (!assigning) return;
+    const payload = {
+      assignedTo: assignee === '' ? null : assignee,
+      dueAt: fromDateTimeLocalInput(due),
+    };
+    if (await send(`/api/sop-runs/${run.id}/steps/${assigning.id}`, payload, assigning.id)) {
+      setAssigning(null);
+    }
+  }
+
   async function confirmAbandon() {
     if (await send(`/api/sop-runs/${run.id}`, {
       status: 'abandoned', reason: abandonReason.trim(),
@@ -118,6 +153,10 @@ export function ChecklistRun({ run, canExecute }: { run: RunView; canExecute: bo
           {done} of {run.steps.length} done
         </Badge>
         {run.ticketRef && <Badge tone="neutral">{run.ticketRef}</Badge>}
+        {run.assignedTo && <Badge tone="neutral">Assigned to {run.assignedTo}</Badge>}
+        {run.dueAt && (
+          <Badge tone="neutral">Run due {formatDateTime(run.dueAt)}</Badge>
+        )}
         {!finished && outstanding > 0 && (
           <Badge tone="warning">
             {outstanding} required step{outstanding === 1 ? '' : 's'} left
@@ -172,6 +211,28 @@ export function ChecklistRun({ run, canExecute }: { run: RunView; canExecute: bo
                       {step.completedBy && ` by ${step.completedBy}`}
                     </p>
                   )}
+                  {(step.assignedTo || step.dueAt) && (
+                    <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+                      {step.assignedTo && (
+                        <span className="inline-flex items-center gap-1 text-ink-muted">
+                          <UserRound className="size-3" aria-hidden />
+                          {step.assignedTo}
+                        </span>
+                      )}
+                      {step.dueAt && (
+                        <span
+                          className={cn(
+                            'inline-flex items-center gap-1',
+                            step.overdue ? 'font-medium text-danger' : 'text-ink-muted',
+                          )}
+                        >
+                          <CalendarClock className="size-3" aria-hidden />
+                          {step.overdue ? 'Overdue — due ' : 'Due '}
+                          {formatDateTime(step.dueAt)}
+                        </span>
+                      )}
+                    </p>
+                  )}
                 </div>
 
                 {editable && (
@@ -208,6 +269,26 @@ export function ChecklistRun({ run, canExecute }: { run: RunView; canExecute: bo
                       >
                         <RotateCcw className="size-3.5" aria-hidden />
                         Undo
+                      </Button>
+                    )}
+                    {busy !== step.id && step.status === 'pending' && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setAssigning({
+                            id: step.id,
+                            title: step.title,
+                            assignedToId: step.assignedToId,
+                            dueAt: step.dueAt,
+                          });
+                          setAssignee(step.assignedToId ?? '');
+                          setDue(toDateTimeLocalInput(step.dueAt));
+                          setError(null);
+                        }}
+                      >
+                        <UserRound className="size-3.5" aria-hidden />
+                        Assign
                       </Button>
                     )}
                   </div>
@@ -276,6 +357,59 @@ export function ChecklistRun({ run, canExecute }: { run: RunView; canExecute: bo
         {run.startedBy && ` by ${run.startedBy}`} · following v{run.version} of {run.sopName},
         which stays fixed however the procedure changes afterwards.
       </p>
+
+      <Modal
+        open={assigning !== null}
+        onOpenChange={(next) => { if (!next) { setAssigning(null); setError(null); } }}
+        title="Assign this step"
+        description="Who it belongs to and when it is due. Either can be cleared."
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-ink">{assigning?.title}</p>
+          <div>
+            <Label htmlFor="step-assignee">Assign to</Label>
+            <Select
+              id="step-assignee"
+              value={assignee}
+              onChange={(e) => setAssignee(e.target.value)}
+            >
+              <option value="">Nobody</option>
+              {assignable.map((person) => (
+                <option key={person.id} value={person.id}>{person.name}</option>
+              ))}
+            </Select>
+            {assignable.length === 0 && (
+              <FieldHint>
+                Nobody to assign to — this tenant has no other active members.
+              </FieldHint>
+            )}
+          </div>
+          <div>
+            <Label htmlFor="step-due">Due</Label>
+            <Input
+              id="step-due"
+              type="datetime-local"
+              value={due}
+              onChange={(e) => setDue(e.target.value)}
+            />
+            <FieldHint>In your own time zone.</FieldHint>
+          </div>
+          {error && (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          )}
+          <div className="flex gap-2">
+            <Button variant="primary" onClick={() => void confirmAssign()} disabled={busy !== null}>
+              {busy !== null && <Loader2 className="animate-spin" aria-hidden />}
+              Save
+            </Button>
+            <Button variant="ghost" onClick={() => setAssigning(null)} disabled={busy !== null}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={skipping !== null}

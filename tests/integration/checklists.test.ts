@@ -933,20 +933,62 @@ describe('what the pages read', () => {
       await sql.end({ timeout: 5 });
     }
 
-    const unordered = await withTenant(admin, (tx) => tx<{ position: number }[]>`
-      SELECT position FROM sop_run_step WHERE run_id = ${runId}::uuid
-    `);
+    /*
+     * THE PREMISE, ESTABLISHED BY FORCING A HEAP SCAN. The rows were written
+     * 3, 1, 2, so the heap holds them in that order — but the filter is on
+     * run_id, which is the leading column of sop_run_step_run_idx (run_id,
+     * position), so Postgres is free to answer from the index instead and hand
+     * back position order for nothing. Which plan it picks has already changed
+     * once during this work: it was a bitmap heap scan (physical order) when
+     * this test was written in F1, and 0650's two extra columns were enough to
+     * flip it to a plain index scan (index order) — at which point the test
+     * stopped being able to see an ORDER BY at all, and said so, because of the
+     * guard below.
+     *
+     * So the disagreement between physical order and position order is
+     * demonstrated here with the index paths switched off, and the conclusion
+     * is then tested against readRun planned normally. That is the right split:
+     * the premise is a fact about the heap, and the ORDER BY exists precisely
+     * for the plans where the index does not supply the order for free.
+     */
+    const unordered = await withTenant(admin, async (tx) => {
+      await tx`SET LOCAL enable_indexscan = off`;
+      await tx`SET LOCAL enable_bitmapscan = off`;
+      return tx<{ position: number }[]>`
+        SELECT position FROM sop_run_step WHERE run_id = ${runId}::uuid
+      `;
+    });
     expect(
       unordered.map((row) => row.position),
       'the rows come back sorted without being asked, so this test cannot see an ORDER BY — '
       + 'find another way to disturb the physical order',
     ).toEqual([3, 1, 2]);
 
-    const run = await withTenant(admin, (tx) => readRun(tx, runId));
+    /*
+     * AND THE CONCLUSION, UNDER THE PLAN WHERE THE CLAUSE MATTERS.
+     *
+     * Read normally, readRun is planned as an index scan over
+     * sop_run_step_run_idx and gets position order for free — so dropping
+     * `ORDER BY s.position` from it passes, which was measured, not assumed.
+     * The clause is still right: a plan is not a guarantee, it already changed
+     * once in this work, and a seq scan is what a large table or new statistics
+     * produce. So readRun is exercised here with the index paths switched off,
+     * which is the only way for a test to see the difference the clause makes.
+     */
+    const run = await withTenant(admin, async (tx) => {
+      await tx`SET LOCAL enable_indexscan = off`;
+      await tx`SET LOCAL enable_bitmapscan = off`;
+      return readRun(tx, runId);
+    });
     expect(run, 'the run page could not read the run').toBeTruthy();
     expect(run!.steps.map((step) => step.position),
       'the run page lists steps in whatever order the table hands them over')
       .toEqual([1, 2, 3]);
+
+    // And identically under the planner's own choice, so the assertion is not
+    // only about a plan nobody runs in production.
+    const normal = await withTenant(admin, (tx) => readRun(tx, runId));
+    expect(normal!.steps.map((step) => step.position)).toEqual([1, 2, 3]);
     expect(run!.steps.map((step) => step.title)).toEqual([
       'Disable the account', 'Forward the mailbox', 'Collect the laptop',
     ]);
