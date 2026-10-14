@@ -1,11 +1,14 @@
 import Link from 'next/link';
-import { Boxes, KeyRound, Plug, ShieldCheck, Bot, Building } from 'lucide-react';
+import { Boxes, KeyRound, PanelLeft, Plug, ShieldCheck, Bot, Building } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { RenameTenant } from '@/components/rename-tenant';
+import { SidebarCustomise } from '@/components/sidebar-customise';
+import { readTenantSidebarDefault } from '@/lib/nav/sidebar-queries';
+import { ORG_CATEGORIES } from '@/lib/nav/org-categories';
 import { RadiusSettingsCard, type RadiusSettings } from '@/components/radius-settings';
 import { OidcSettingsCard, type OidcSettings } from '@/components/oidc-settings';
 import {
@@ -303,10 +306,11 @@ export default async function SettingsPage() {
   const {
     keys, integrations, workers, tenant, radius, oidc, destinations, deliveries,
     unifi, organizations, canManageNetwork, flexibleTypeCount,
+    sidebarDefault, sidebarDefaultSet,
   } = await withTenant(actorOf(identity), async (tx) => {
     const [keyRows, integrationRows, workerRows, tenantRows, radiusRows, oidcRows,
            destinationRows, deliveryRows, unifiRows, organizationRows, networkRows,
-           flexibleTypeRows] = await Promise.all([
+           flexibleTypeRows, sidebarDefaultRow] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -320,14 +324,17 @@ export default async function SettingsPage() {
       `,
       // tenant_rls_select restricts this to the current tenant, so no
       // predicate is needed and adding one would imply the policy were
-      // optional. can_rename mirrors the route's permission so the control is
-      // only offered to somebody it would work for.
-      tx<{ name: string; slug: string; can_rename: boolean }[]>`
+      // optional. can_write_tenant mirrors the routes' permission so a control
+      // is only offered to somebody it would work for. Named for the GRANT
+      // rather than for one of its uses: the rename form and the default
+      // sidebar below are two cards reading one permission, and calling the
+      // field can_rename would make the second one look like a mistake.
+      tx<{ name: string; slug: string; can_write_tenant: boolean }[]>`
         SELECT t.name, t.slug,
                EXISTS (SELECT 1 FROM membership m
                        JOIN role_permission rp ON rp.role_key = m.role_key
                        WHERE m.user_id = ${identity.actorId}::uuid
-                         AND rp.permission_key = 'tenant:write') AS can_rename
+                         AND rp.permission_key = 'tenant:write') AS can_write_tenant
         FROM tenant t
       `,
       // Settings only, never the shared secret: helm_app cannot read that
@@ -359,6 +366,10 @@ export default async function SettingsPage() {
       // Just the count: the card is a signpost, and the page itself fetches
       // the schemas it needs to open an editor.
       tx<{ n: number }[]>`SELECT count(*)::int AS n FROM flexible_asset_type`,
+      // The default drawer layout, and whether anybody has actually set one.
+      // One read answers both: the card says either "n of sixteen shown by
+      // default" or "not set", which is the same list meaning two things.
+      readTenantSidebarDefault(tx),
     ]);
     return {
       keys: keyRows,
@@ -373,6 +384,8 @@ export default async function SettingsPage() {
       organizations: organizationRows,
       canManageNetwork: networkRows[0]?.permitted ?? false,
       flexibleTypeCount: flexibleTypeRows[0]?.n ?? 0,
+      sidebarDefault: sidebarDefaultRow.categories,
+      sidebarDefaultSet: sidebarDefaultRow.set,
     };
   });
 
@@ -399,7 +412,7 @@ export default async function SettingsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {tenant.can_rename ? (
+              {tenant.can_write_tenant ? (
                 <RenameTenant currentName={tenant.name} slug={tenant.slug} />
               ) : (
                 <div>
@@ -630,6 +643,49 @@ export default async function SettingsPage() {
                 {flexibleTypeCount} defined
               </Link>
             </Button>
+          </CardContent>
+        </Card>
+
+        {/*
+          The default drawer, for people who have not arranged their own.
+          Alongside Asset types because both answer "what does this tenant look
+          like to everybody", and unlike that one it is a single ordered list,
+          which is a dialog rather than a page.
+        */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <PanelLeft className="size-4 text-ink-faint" aria-hidden /> Default sidebar
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div className="max-w-xl space-y-1">
+              <p className="text-ink-muted">
+                Which client categories sit in the drawer, and in what order, for somebody who
+                has not arranged their own. Everything else stays reachable under
+                &ldquo;More&rdquo;.
+              </p>
+              <p className="text-ink-faint">
+                {sidebarDefaultSet
+                  ? `${sidebarDefault.length} of ${ORG_CATEGORIES.length} shown by default.`
+                  : `Not set — new users get Helm's own default of ${sidebarDefault.length}.`}
+              </p>
+            </div>
+            {/* Offered only to somebody tenant:write would let through, and the
+                route and the RLS policy both check again. */}
+            {tenant?.can_write_tenant ? (
+              <SidebarCustomise
+                scope="tenant"
+                layout={sidebarDefault}
+                trigger={
+                  <Button variant="secondary" size="sm">
+                    Edit default
+                  </Button>
+                }
+              />
+            ) : (
+              <p className="text-xs text-ink-faint">Requires tenant settings access.</p>
+            )}
           </CardContent>
         </Card>
 

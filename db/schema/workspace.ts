@@ -1,5 +1,6 @@
 /**
- * Per-user workspace state: favourites, recently viewed, dashboard layout.
+ * Per-user workspace state: favourites, recently viewed, dashboard and sidebar
+ * layouts.
  *
  * Everything here belongs to ONE PERSON inside ONE TENANT. The tables carry
  * `user_id` in their primary key and in every RLS policy, which is what
@@ -60,6 +61,46 @@ export const userDashboard = pgTable('user_dashboard', {
   primaryKey({ columns: [t.tenantId, t.userId] }),
 ]);
 
+/**
+ * `categories` is an ordered array of ORG_CATEGORIES slugs: the drawer's primary
+ * list, with everything else falling through to "More".
+ * helm.sidebar_layout_valid() in 0620 refuses an unknown slug, a duplicate and
+ * anything that is not an array, so a layout that renders nothing cannot be
+ * written. src/lib/nav/sidebar-layout.ts is the interface's side of that
+ * mirror — and it reads the registry rather than restating the list, so there
+ * are two copies and not three.
+ *
+ * A MISSING ROW and an EMPTY array mean different things: the first is somebody
+ * who has never customised, and falls through to tenantSidebarDefault; the
+ * second is somebody who wants nothing but "More".
+ */
+export const userSidebar = pgTable('user_sidebar', {
+  tenantId: uuid('tenant_id').notNull().references(() => tenant.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => appUser.id, { onDelete: 'cascade' }),
+  categories: jsonb('categories').notNull().$type<string[]>(),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.tenantId, t.userId] }),
+]);
+
+/**
+ * NOT per-user, and the odd one out in this file for that reason.
+ *
+ * It lives here because it is the other half of userSidebar's resolution chain
+ * and a reader of one needs the other, but its RLS is not the personal set: it
+ * is readable by everyone in the tenant — the drawer renders from it for
+ * client-side roles too — and writable only with tenant:write. See 0620 for
+ * why the generic tenant-scoped policy set would have been wrong here.
+ */
+export const tenantSidebarDefault = pgTable('tenant_sidebar_default', {
+  tenantId: uuid('tenant_id').primaryKey().references(() => tenant.id, { onDelete: 'cascade' }),
+  categories: jsonb('categories').notNull().$type<string[]>(),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
+});
+
 export type UserFavorite = typeof userFavorite.$inferSelect;
 export type UserRecentView = typeof userRecentView.$inferSelect;
 export type UserDashboard = typeof userDashboard.$inferSelect;
+export type UserSidebar = typeof userSidebar.$inferSelect;
+export type TenantSidebarDefault = typeof tenantSidebarDefault.$inferSelect;

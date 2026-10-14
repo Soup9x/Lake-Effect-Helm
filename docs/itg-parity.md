@@ -6,15 +6,23 @@ visual one: Helm keeps its own look, wording and assets.
 Assessed against `main` at `0eebae3`. 76 tables, 61 migrations, next free
 migration number **0600** (the `09xx` range is seed data and stays last).
 
-**Updated as groups land.** Group A and group B are in the "Landed" section
-below; their rows above read **Exists**.
+**Updated as groups land.** Landed groups are in the "Landed" section below and
+their rows above read **Exists**. One row reads **Dropped**: Personal
+Credentials, see decision 14.
 
 **The short version:** far more of this exists than the feature list assumes.
-The documentation model (#5) is built and versioned — what it lacks is an
-authoring screen. The client sidebar (#3) is built. Cross-client expirations
-(#6) are built. The genuinely absent things are four: sidebar customization,
-the Global completion grid, the Personal section, and the user-profile
-preferences. Several "widgets" are already-stored data needing only a reader.
+The documentation model (#5) is built and versioned, and since C and C2 it has
+the authoring screen and the record form it lacked. The client sidebar (#3) is
+built, and since D it is arrangeable. Cross-client expirations (#6) are built.
+What remains genuinely absent is the Global completion grid, the Personal
+section and the user-profile preferences. Several "widgets" are already-stored
+data needing only a reader.
+
+**One thing on this list is not being built at all.** Personal Credentials
+(#7) is dropped rather than deferred: it needs a privacy guarantee Helm's
+policy shape cannot express, and the answer is a Bitwarden/Vaultwarden
+integration outside this plan rather than a second security model inside it.
+Decision 14 has the reasoning; nothing is being built for it now.
 
 ---
 
@@ -36,7 +44,7 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 | 3 | Per-client sidebar, collapsible, counts | **Exists** | `shell/sidebar.tsx`, `src/lib/nav/org-categories.ts`, collapse persisted per browser |
 | 3 | Core asset entries | **Exists** | 16 categories incl. Domain Tracker, SSL Tracker, Locations, Networks, Passwords. Only "Checklists" absent — see #8 |
 | 3 | Apps & Services in sidebar | **Exists** | Tenant's own `flexible_asset_type` rows with their configured icons — which a person can now create, as of C |
-| 3 | "Customize Sidebar" link | **Missing** | See #4 |
+| 3 | "Customize Sidebar" link | **Exists** | At the foot of the drawer, below "More" — group D |
 | 3 | Quick Notes, inline | **Exists** | `organization.quick_notes`, `components/notes-card.tsx` |
 | 3 | Credential Strength + buckets | **Exists** | `components/client-widgets.tsx` — four buckets from `v_secret_metadata.strength_score`, bucketed by `lib/ui/strength.ts`. A `Strength` filter on the Credentials section reaches the rows behind each count |
 | 3 | Documentation Health ring | **Missing** | `client_health` widget is a different measure; "not viewed recently"/"stale" needs defining |
@@ -47,13 +55,13 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 | 3 | Upcoming Expirations + due tag | **Exists** | "Expiring" section, `expiration` table, `criticality` |
 | 3 | Locations | **Exists** | "Sites" section |
 | 3 | Activity Feed | **Exists** | `listClientActivity()` on the client page, `organization_id`-scoped. Distinguishes "no activity" from "no `audit:read`" |
-| 4 | Customize Your Sidebar | **Missing** | No table, no page. `user_dashboard.widgets` is the precedent to copy |
+| 4 | Customize Your Sidebar | **Exists** | Group D: `user_sidebar` + `tenant_sidebar_default` (migration 0620), one dialog for both scopes. The `secondary` flag became the default rather than the only answer |
 | 5 | Flexible/custom asset types | **Exists** | Schema was always complete and versioned. Group C added the authoring screen (`/settings/asset-types`), the field builder (`lib/flexible/fields.ts`), and the three routes it needed: `GET`/`PATCH` on one type and `POST .../versions` to publish. C2 added the record form itself, the record `PATCH` route and the `flexible_asset` rendering path the asset page never had |
 | 6 | Assets completion grid + % badges | **Missing** | Needs a per-type/per-client coverage query |
 | 6 | Per-client completion scores | **Missing** | `client_health` widget is adjacent, not the same |
 | 6 | Cross-client expirations, filterable | **Exists** | `/expirations` page + `/api/expirations`, filters by severity and org |
 | 7 | My Tasks | **Missing** | `sop_step`/`sop_run_step` have no assignee and no due date |
-| 7 | Personal Credentials (private vault) | **Missing** | `credential` is org-scoped via `asset_node`. Needs a policy decision — see below |
+| 7 | Personal Credentials (private vault) | **Dropped** | Not built natively. Personal credentials will come from a Bitwarden/Vaultwarden integration — decision 14. The vault design that was drafted for it is kept below as background for that work |
 | 8 | Reusable checklist templates → per client | **Partial** | `sop`/`sop_version`/`sop_step` (template) and `sop_run`/`sop_run_step` (instance) already model exactly this |
 | 8 | Assignable tasks + due dates | **Missing** | Columns absent on both step tables |
 | 8 | Email notification on assign/due | **Missing** | No email channel anywhere; `webhook_endpoint` is Discord/Teams/Slack |
@@ -72,16 +80,29 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 
 ---
 
-## Design notes on the four that need a decision before code
+## Design notes on the ones that needed a decision before code
 
 ### Personal Credentials is a security-model change, not a feature
+
+**BACKGROUND, NOT A PLAN. Group J is dropped — see decision 14.** Personal
+credentials will come from a Bitwarden/Vaultwarden integration rather than a
+native vault, and nothing in this section is being built. It is kept because
+the questions below are the ones that integration will have to answer too, and
+re-deriving them later from scratch would be wasted work.
 
 Every secret in Helm is reachable through `helm.reveal_secret()` under
 tenant + organization RLS, and super_admin holds `tenant:write`. A private
 vault means rows that **no other user may read, including a tenant
-administrator**, which the current policy shape cannot express.
+administrator**, which the current policy shape cannot express. That is the
+whole reason this was a security-model change rather than a feature, and it is
+also the reason handing the problem to a dedicated password manager is a
+reasonable answer: Bitwarden already has a user-owned key hierarchy, so Helm
+would not be asked to express a privacy guarantee its policy shape was never
+built for.
 
-Three questions to answer first, because each changes the schema:
+Three questions were to be answered first, because each changed the schema.
+They survive the change of approach — an integration has to answer all three,
+just at a different boundary:
 
 1. Does break-glass access apply? If an administrator can reveal a personal
    credential in an emergency, it is not private, and the UI must not claim
@@ -91,11 +112,14 @@ Three questions to answer first, because each changes the schema:
 3. Are they encrypted under the tenant DEK (so a tenant key rotation covers
    them) or a per-user key (so they survive differently)?
 
-My recommendation: tenant DEK, `owner_user_id` on the secret, an RLS policy
-that adds `owner_user_id = helm.current_user_id()` and **excludes** them from
-export bundles and cross-client search, with administrator access refused
-rather than audited. That is defensible and simple. But it is your call, and
-it should be written down before the migration.
+The native-vault answer that was recorded, and is now superseded: tenant DEK,
+`owner_user_id` on the secret, an RLS policy adding
+`owner_user_id = helm.current_user_id()`, **excluded** from export bundles and
+cross-client search, with administrator access refused rather than audited. It
+is written down here because the shape of the answer is the useful part — in an
+integration, "refused rather than audited" becomes a property of the vault
+Helm is talking to rather than of a Helm policy, and questions 2 and 3 stop
+being Helm's to decide at all.
 
 ### Credential Strength is nearly free, and the empty bucket is already right
 
@@ -144,25 +168,48 @@ and PR.
 | **B** | Client-page widgets from data already stored: Credential Strength buckets, Popular Credentials, Recently Updated, Recently Viewed (org-scoped), Activity Feed | none | No schema at all. Four widgets out of existing columns and `audit_log` |
 | **C** | Flexible asset **type authoring UI** — create/edit a type, its fields, icon, colour | none | Unblocks the documentation model. The engine exists; nobody can drive it. Needed three API routes too — see below |
 | **C2** | Records: the schema-driven **record** form behind the dead `+ New` button, a record `PATCH` route, and the `flexible_asset` rendering path `/assets/[nodeId]` never had | none | C lets a type be defined. Without this a record of one cannot be created, cannot be corrected, and renders none of its fields |
-| **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link | 0620 | Follows the dashboard pattern; small and self-contained |
+| **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link — **landed** | 0620 | Follows the dashboard pattern; small and self-contained |
 | **E** | Profile/preferences: user timezone, theme, side-panel toggle, first/last name, MFA recovery token | 0630 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
 | **F** | Checklists: `assigned_to` + `due_at` on both step tables, My Tasks under Personal | 0640 | Delivers half of the Personal section by extending SOPs |
 | **G** | Global section: completion grid with % badges, per-client completion scores | 0650 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
 | **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0660 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
 | **I** | Documentation Health ring; client logo upload | 0670 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
-| **J** | Personal Credentials vault | 0680 | Blocked on the policy questions, now answered in Decisions |
-| **K** | Email channel + notification toggles | 0690 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles |
-| **L** | Header and navigation parity: recent-items dropdown, notifications and help icons, Personal and Global as real landing pages, Important Contacts | 0700 | Last because three of its four parts are *assembly* — the dropdown, My Tasks, Personal Credentials and the completion grid all have to exist before a page can collect them |
+| ~~**J**~~ | ~~Personal Credentials vault~~ — **dropped**, see decision 14 | — | Superseded by a future Bitwarden/Vaultwarden integration, which is not in this plan |
+| **K** | Email channel + notification toggles | 0680 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles |
+| **L** | Header and navigation parity: recent-items dropdown, notifications and help icons, Personal and Global as real landing pages, Important Contacts | 0690 | Last because three of its four parts are *assembly* — the dropdown, My Tasks, profile/preferences and the completion grid all have to exist before a page can collect them |
 
-**Migration numbers shifted by one slot.** 0610 went to B2
-(`0610_audit_secret_row_visibility.sql`), which was not in the original plan, so
-D onwards moved up. The numbers above are intentions rather than reservations —
-the next free number at the time of writing is what a group actually takes.
+**On the migration numbers.** Two shifts have happened and both are recorded
+here so nobody reuses a number:
+
+- **0610 is B2's** (`0610_audit_secret_row_visibility.sql`), which was not in
+  the original plan, so D onwards moved up a slot. **0610 must not be reused.**
+- **0620 is D's** (`0620_sidebar_customization.sql`), landed.
+- **Dropping J freed 0680**, so K and L moved down into the gap: K is 0680 and
+  L is 0690. Nothing was built for J, so there is no orphaned file and no
+  number to retire.
+
+The numbers above are intentions rather than reservations — the next free
+number at the time of writing is what a group actually takes.
 
 Deferred, flagged rather than silently dropped:
 
 - **Checklist email reminders (#8)** — folded into K, since they cannot work
   before an email channel exists.
+
+### Future, and deliberately not in this plan
+
+Things that are wanted and are NOT being built as part of the parity pass. Kept
+here so "not in the plan" is a statement rather than a silence, and so nobody
+re-opens the question by finding a gap in the parity table.
+
+- **Bitwarden/Vaultwarden integration.** The replacement for group J's native
+  Personal Credentials vault (decision 14). Personal credentials live in a
+  password manager that already has a user-owned key hierarchy, and Helm links
+  to or reads from it rather than storing private secrets under a policy shape
+  that was never built to hide a row from a tenant administrator. Nothing is
+  being built for this now — no schema, no route, no placeholder. The design
+  questions it will have to answer are kept under *Personal Credentials is a
+  security-model change* above.
 
 ### Group L in detail
 
@@ -184,11 +231,18 @@ that cannot be distinguished from an empty inbox is worse than no bell.
 
 **Personal and Global as real pages.** Today `Personal` → `/account` and
 `Global` → `/search` are aliases, which is why they look like parity on the
-summary table and are not. Personal collects My Tasks (F) and Personal
-Credentials (J); Global collects the completion grid (G) alongside the existing
-cross-client expirations and an assets view. Both are therefore blocked on F,
-G and J — building them earlier would mean shipping two pages with one card
-each and revisiting them three times.
+summary table and are not. Personal collects My Tasks (F) and profile /
+preferences (E); Global collects the completion grid (G) alongside the existing
+cross-client expirations and an assets view. Both are therefore blocked on E, F
+and G — building them earlier would mean shipping two pages with one card each
+and revisiting them twice.
+
+**NO PERSONAL CREDENTIALS SECTION ON PERSONAL**, and no placeholder or empty
+state for one either. J is dropped (decision 14) and a card reading "personal
+credentials are coming" is a promise the plan has stopped making — worse than
+an absence, because somebody would wait for it. When the Bitwarden/Vaultwarden
+integration happens it can add its own section; until then Personal is My Tasks
+and preferences, and that is the whole page.
 
 **Important Contacts** is the only part needing schema: a flag on `contact`,
 plus the client-page widget that lists them. `organization.primary_contact_id`
@@ -470,19 +524,82 @@ template their role may not read. RLS permits the row (`flexible_asset_secret`
 is scoped to the record, not to the template), so nothing would have refused it.
 The join makes one policy decide both halves of the page.
 
+### Group D — a sidebar somebody can arrange (migration 0620)
+
+The drawer's sixteen categories were split into a primary eight and a "More"
+disclosure by a hardcoded `secondary` flag. A reasonable guess at what a
+technician reaches often — and the same guess for an MSP whose work is networks
+as for one whose work is licence renewals. There was no table, no page, and the
+"Customize Sidebar" link the parity list asks for had nowhere to go.
+
+**The split is now a list somebody owns.** The categories they name are the
+primary section, in their order; everything else falls through to "More", which
+holds *every* remaining category, so nothing a person removes becomes
+unreachable. Removing something hides it from the first glance; it does not take
+it away.
+
+**`secondary` kept its job and lost its monopoly.** `DEFAULT_SIDEBAR` is derived
+from the flag, so somebody who has never touched the control sees precisely the
+drawer they saw before this change. Promoting a category in the registry now
+changes the default and does not move it for anybody who has already chosen.
+
+**Copied from `user_dashboard`, deliberately, down to the shape of the
+validator.** 0370 chose jsonb over a `(category, position)` table because a
+reorder would otherwise be a delete-and-reinsert of a list the database never
+reasons about, and 0530 is the migration that widens such a list when the
+interface grows. Both apply here unchanged, so a reader who knows one now knows
+both. `reorder()` is imported from the dashboard's module rather than copied —
+its own comment names the off-by-one a second copy grows.
+
+**Three levels, and a missing row is not an empty one.** A user's own row wins,
+then the tenant default, then the code. Somebody who emptied their drawer has
+expressed a preference, so `[]` does *not* fall through — if it did they would
+watch the control appear to do nothing, repeatedly. `DELETE` on the user route
+removes the row rather than storing a copy of the default, which is what keeps a
+later change by an administrator reaching them.
+
+**Not in `tenant.settings`.** `PATCH /api/tenant`'s header says why `settings` is
+not settable through a generic endpoint: it is a jsonb bag several features read,
+and a caller patching the whole object overwrites an invariant it never knew
+about. A feature with a rule of its own gets a table with that rule on it.
+
+**No new permission.** The tenant default is gated on `tenant:write`, which only
+`super_admin` holds, named in the route *and* in the RLS policy so the two cannot
+drift. The settings page reads the same grant it already read for the rename form
+— which is why that field is now `can_write_tenant` rather than `can_rename`: two
+cards reading one permission.
+
+**One deliberate asymmetry in the RLS.** `tenant_sidebar_default` is readable by
+anyone in the tenant and writable only with `tenant:write`, so it does *not* use
+`helm.apply_tenant_rls(..., false)`. That predicate is `is_tenant_wide()`, which
+would hide the row from exactly the client-side roles whose drawer is supposed to
+render from it: they would silently get the code default, and an administrator
+would have set a default that quietly did not apply to half their users. Nothing
+in the row is sensitive to read — it is a list of slugs already in the shipped
+source.
+
+**Flexible asset types are not customisable here,** and that is a decision rather
+than an omission: they are tenant data, so they cannot appear in an IMMUTABLE
+validator's literal list, and the drawer already lists the ones with at least one
+record. "Do I want this in my sidebar" is already answered by whether anything is
+documented under it.
+
 ## Decisions
 
-The four questions this document opened with have been answered. Recorded here
+The questions this document opened with have been answered. Recorded here
 because the groups they govern are not built yet, and a decision that lives
-only in a conversation gets re-litigated.
+only in a conversation gets re-litigated. Entry 1 is struck through rather than
+deleted: the group it governed is dropped, and a decision that simply vanishes
+is how the same argument gets had twice.
 
-1. **Personal Credentials (J).** Tenant DEK; `owner_user_id` on `secret`; RLS
-   adds `owner_user_id = helm.current_user_id()`. **No break-glass** — admins
-   are *refused*, not audited, so the UI can honestly call it private.
-   Excluded from offboarding export bundles, client exports and cross-client
-   search. A deactivated user's personal secrets stay locked rather than
-   deleted; a `super_admin` can purge them and can never read them. To be
-   written up in `docs/security-model.md` as part of J.
+1. ~~**Personal Credentials (J).**~~ **Superseded by decision 14 — J is
+   dropped.** The design this entry recorded (tenant DEK, `owner_user_id` on
+   `secret`, RLS adding `owner_user_id = helm.current_user_id()`, no
+   break-glass, excluded from export bundles and cross-client search) is not
+   being built. It is kept as background under *Personal Credentials is a
+   security-model change* above, because an integration has to answer the same
+   questions at a different boundary. Nothing in the active plan depends on it,
+   and `docs/security-model.md` is not written as part of this pass.
 2. **Completion grid (G).** Excludes archived clients, inactive clients and
    `is_msp_internal` by default, with a filter toggle to include them.
 3. **"Not viewed recently" (I).** Tenant-wide, from `audit_log` — documentation
@@ -584,6 +701,50 @@ only in a conversation gets re-litigated.
     row is listed to: the arm joins through `flexible_asset_type`, whose 0200
     policy admits only tenant-wide actors, so a client-side role sees nothing
     from it — see the note in the C2 section for what that join prevents.
+
+12. **A missing sidebar row and an empty one are different answers (D).** The
+    fallback chain is decided by whether a ROW exists, never by whether the
+    stored array is empty. An empty layout is somebody who wants the drawer to
+    be nothing but "More", and treating it as "unset" would make the control
+    appear broken to the one person who used it hardest. The same reasoning
+    makes `DELETE` remove the row rather than write the default into it: a
+    stored copy would silently stop tracking an administrator's later change,
+    and nobody would be able to tell.
+
+13. **The tenant default is read-open and write-gated (D).** Readable by every
+    role in the tenant, because the drawer renders from it for client-side
+    users too; writable only with `tenant:write`, named in the route and in the
+    policy. This is why `tenant_sidebar_default` does not use the generic
+    tenant-scoped policy set, whose read predicate would have hidden the row
+    from the very roles it exists to serve. No new permission key; no change to
+    any existing policy.
+
+14. **Group J is dropped; personal credentials come from a Bitwarden /
+    Vaultwarden integration (your call, recorded here).** Not built natively,
+    now or as part of this parity pass. The reason the native vault was awkward
+    is the reason the integration is a better fit: a private credential means a
+    row **no other user may read, including a tenant administrator**, and
+    Helm's policy shape — tenant + organisation RLS, with `super_admin` holding
+    `tenant:write` — cannot express that without a second, parallel security
+    model. Bitwarden and Vaultwarden already have a user-owned key hierarchy,
+    so the guarantee lives where it is already enforced rather than being
+    re-implemented beside a hierarchy built for shared MSP documentation.
+
+    **What this means concretely:** no `owner_user_id`, no per-user RLS branch,
+    no personal-vault exclusions in the export path, no
+    `docs/security-model.md` for it, and no migration — 0680 was freed and K
+    and L moved into the gap. Group L's Personal page collects My Tasks and
+    profile/preferences only, with **no placeholder and no empty state** for
+    personal credentials: a card promising a feature the plan no longer
+    contains is worse than its absence, because somebody would wait for it.
+    The integration itself is listed under *Future, and deliberately not in
+    this plan* — nothing is being built for it now.
+
+    The drafted vault design is kept as background rather than deleted, under
+    *Personal Credentials is a security-model change*. The three questions it
+    opens (break-glass, offboarding bundles, which key) do not go away with the
+    change of approach; they move to a different boundary, and two of them stop
+    being Helm's to answer.
 
 Two further decisions taken at the same time:
 

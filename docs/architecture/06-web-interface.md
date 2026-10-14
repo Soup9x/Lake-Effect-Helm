@@ -194,6 +194,33 @@ organisation-scoped (0200), so a client-side role is shown nothing from it. The
 secret's label is `"<template> — <field>"`, so without that join the page would
 name a template the reader's role may not read.
 
+### Arranging the drawer
+
+The organization drawer's primary list is a per-user layout, not a hardcoded
+split. `src/lib/nav/sidebar-layout.ts` owns the model: the categories somebody
+names are the primary section in their order, and `splitSidebar()` sends
+everything else to "More" — *everything*, so a category removed from the drawer
+is hidden from the first glance rather than taken away.
+
+`secondary` in the category registry still decides the DEFAULT, which is why a
+person who has never opened the control sees exactly the drawer they saw before.
+Three levels resolve a layout: the person's own row in `user_sidebar`, then
+`tenant_sidebar_default`, then the code. A MISSING row falls through; an EMPTY
+one does not, because somebody who wants nothing but "More" has said so.
+
+The control is one component in two scopes — "Customise sidebar" at the foot of
+the drawer writes `user_sidebar`, and the Default sidebar card in Settings writes
+`tenant_sidebar_default` for anybody holding `tenant:write`. It is a Modal rather
+than the dashboard's popover for a plain reason: it opens from a 15rem drawer
+that narrows to 3.5rem, where a 20rem panel has nowhere to go.
+
+Both tables are validated by `helm.sidebar_layout_valid()`, which mirrors the
+registry — see db/sql/0620, and `tests/integration/sidebar.test.ts` for the test
+that fails when the two lists drift. `tenant_sidebar_default` is readable by
+every role in the tenant and writable only with `tenant:write`: the generic
+tenant-scoped read predicate is `is_tenant_wide()`, which would have hidden the
+default from the client-side roles whose drawer renders from it.
+
 ### The client page's widgets
 
 Five cards sit above the sections on `/organizations/:id`: credential strength

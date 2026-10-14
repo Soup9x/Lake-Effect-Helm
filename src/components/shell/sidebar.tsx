@@ -12,18 +12,27 @@
  * every count — it loses the labels, not the navigation. A drawer that
  * disappeared would make the collapse toggle a thing you press once and undo,
  * and the counts are half the reason to look at it.
+ *
+ * THE PRIMARY LIST IS NOW DATA. It used to be ORG_CATEGORIES filtered by a
+ * hardcoded `secondary` flag; it is now whatever `layout` says, with everything
+ * else falling through to "More". The flag still decides the DEFAULT (see
+ * DEFAULT_SIDEBAR), so a person who has never touched the control sees exactly
+ * the drawer they saw before — but it has stopped being the only possible
+ * answer for every MSP.
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   AppWindow, BadgeCheck, Binary, BookOpen, Boxes, Cable, ChevronLeft, ChevronRight,
   FileSignature, FileText, FolderTree, Globe, KeyRound, LayoutGrid, MapPin, MoreHorizontal,
-  Network, Server, ShieldCheck, Truck, Users,
+  Network, Server, Settings2, ShieldCheck, Truck, Users,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useShell } from './shell-context';
-import { ORG_CATEGORIES, type CategoryCounts } from '@/lib/nav/org-categories';
+import { type CategoryCounts } from '@/lib/nav/org-categories';
+import { splitSidebar } from '@/lib/nav/sidebar-layout';
 import type { FlexibleAssetNav } from '@/lib/nav/org-sidebar';
+import { SidebarCustomise } from '../sidebar-customise';
 import { cn } from '@/lib/ui/cn';
 
 /**
@@ -108,18 +117,23 @@ export function Sidebar({
   org,
   counts,
   flexibleAssets,
+  layout,
+  customised,
 }: {
   org: { id: string; name: string };
   counts: CategoryCounts;
   flexibleAssets: readonly FlexibleAssetNav[];
+  /** The categories in the primary list, in order. See lib/nav/sidebar-layout. */
+  layout: string[];
+  /** Whether this person has their own saved layout, so "follow the default" is offered. */
+  customised: boolean;
 }) {
   const pathname = usePathname() ?? '';
   const { sidebarCollapsed, toggleSidebar } = useShell();
   const [showMore, setShowMore] = useState(false);
 
   const base = `/organizations/${org.id}`;
-  const primary = ORG_CATEGORIES.filter((c) => !c.secondary);
-  const secondary = ORG_CATEGORIES.filter((c) => c.secondary);
+  const { primary, more: secondary } = splitSidebar(layout);
   const collapsed = sidebarCollapsed;
 
   return (
@@ -164,6 +178,13 @@ export function Sidebar({
 
       <nav className="flex-1 px-2 pb-3">
         <SectionLabel collapsed={collapsed}>Core assets</SectionLabel>
+        {primary.length === 0 && !collapsed && (
+          // Somebody removed everything. Saying so beats an empty gap above a
+          // "More" button, which reads as a drawer that failed to load.
+          <p className="px-2.5 pb-1 text-xs text-nav-ink/70">
+            Everything is under “More”.
+          </p>
+        )}
         <div className="space-y-0.5">
           {primary.map((category) => (
             <Row
@@ -198,9 +219,12 @@ export function Sidebar({
         )}
 
         {/*
-          "More" holds the node types a technician reaches less often. It is a
-          disclosure rather than a second page because the alternative is a
-          sixteen-item list where the eight that matter stop being scannable.
+          "More" holds whatever is not in the primary list. It is a disclosure
+          rather than a second page because the alternative is a sixteen-item
+          list where the ones that matter stop being scannable — and it holds
+          EVERY remaining category, so nothing a person removes becomes
+          unreachable. Removing a category from the drawer hides it from the
+          first glance; it does not take it away.
         */}
         <div className="pt-3">
           <button
@@ -231,6 +255,33 @@ export function Sidebar({
               ))}
             </div>
           )}
+        </div>
+
+        {/*
+          The control that makes the list above a choice. At the FOOT of the
+          drawer, below "More", because it is not a destination: it is the thing
+          you reach for once, having noticed that the order is wrong for the way
+          you work.
+        */}
+        <div className="pt-3">
+          <SidebarCustomise
+            scope="user"
+            layout={layout}
+            customised={customised}
+            trigger={
+              <button
+                type="button"
+                title={collapsed ? 'Customise the sidebar' : undefined}
+                className={cn(
+                  'flex w-full items-center gap-2.5 rounded-md py-1.5 text-sm text-nav-ink transition-colors hover:bg-white/5 hover:text-nav-ink-active',
+                  collapsed ? 'justify-center px-0' : 'px-2.5',
+                )}
+              >
+                <Settings2 className="size-4 shrink-0" aria-hidden />
+                {!collapsed && <span>Customise sidebar</span>}
+              </button>
+            }
+          />
         </div>
       </nav>
     </aside>
