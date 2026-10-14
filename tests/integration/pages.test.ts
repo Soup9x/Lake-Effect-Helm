@@ -238,6 +238,16 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () => (await import('../../src/app/(app)/settings/page')).default(),
   },
   {
+    // The type authoring screen. Worth running here specifically because it
+    // decodes every stored json_schema into the editor's field model on the
+    // server and hands the result to a client component — so a schema shape
+    // the decoder mishandles, or a prop React refuses to serialise, shows up
+    // as a failure rather than as an empty form somebody notices later.
+    name: 'settings, asset types',
+    load: async () =>
+      (await import('../../src/app/(app)/settings/asset-types/page')).default(),
+  },
+  {
     name: 'the account page',
     load: async () => (await import('../../src/app/(app)/account/page')).default(),
   },

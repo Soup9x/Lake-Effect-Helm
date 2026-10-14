@@ -124,6 +124,32 @@ they can verify the file survived whatever channel they hand it over on.
 | `/exports` | The ledger and the approval queue. Readable by anyone who may create an export, so "who exported this client's credentials and who approved it" needs no administrator. |
 | `/audit` | The trail, and the chain-integrity panel most audit UIs omit: `chain_seq` minus `anchored_seq` is how much history is currently protected only by the database. |
 | `/settings` | Key custody, integration health, and what each background worker may decrypt. Nothing is editable — worker authorisation is fixed by trigger, because a UI that can widen the sync worker's purposes is a UI that can hand it the vault. |
+| `/settings/asset-types` | The tenant's own documentation types. The flexible-asset engine has been complete and versioned since 0080; this is the screen it never had, so a type no longer arrives only by API call or by SQL. |
+
+### Defining an asset type
+
+`/settings/asset-types` edits a **field list**, not JSON Schema. The conversion
+in both directions lives in `src/lib/flexible/fields.ts` and is unit-tested
+against the real `schema-guard.ts`, so the screen holds no opinion about JSON
+Schema at all — and in particular cannot emit a `pattern`, which is the one
+thing a hand-authored schema can contain that takes the event loop down for
+every tenant. Ajv has `addFormats()` registered, so date, uri and email are
+real validation in a library instead.
+
+Both conversion directions are required, not symmetrical for neatness. A
+published version is immutable by trigger, so editing a type means publishing
+version N+1 — which means loading the stored schema back into a field list
+first. A lossy load would make "change one field" silently rewrite the other
+eleven.
+
+**Publishing is not saving.** The dialog names the version it will create and
+how many records exist, because with no records a new version is a correction
+and with four hundred it is four hundred rows somebody has to look at.
+`flexible_asset_record.needs_migration` is written from a schema comparison
+(`lib/flexible/compatibility.ts`): if the new schema cannot reject a document
+the old one accepted, nothing is flagged. A record's `type_version_id` is not
+moved, because it records which schema the data was written against — and
+0240's indexing trigger reads that version's `searchable_fields`.
 
 ### The client page's widgets
 

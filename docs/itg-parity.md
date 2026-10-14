@@ -35,7 +35,7 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 | 2 | Client logo + initials fallback | **Partial** | `components/client-avatar.tsx` renders `logo_url` with an initials fallback. **Upload is still group I** |
 | 3 | Per-client sidebar, collapsible, counts | **Exists** | `shell/sidebar.tsx`, `src/lib/nav/org-categories.ts`, collapse persisted per browser |
 | 3 | Core asset entries | **Exists** | 16 categories incl. Domain Tracker, SSL Tracker, Locations, Networks, Passwords. Only "Checklists" absent — see #8 |
-| 3 | Apps & Services in sidebar | **Exists** | Tenant's own `flexible_asset_type` rows with their configured icons |
+| 3 | Apps & Services in sidebar | **Exists** | Tenant's own `flexible_asset_type` rows with their configured icons — which a person can now create, as of C |
 | 3 | "Customize Sidebar" link | **Missing** | See #4 |
 | 3 | Quick Notes, inline | **Exists** | `organization.quick_notes`, `components/notes-card.tsx` |
 | 3 | Credential Strength + buckets | **Exists** | `components/client-widgets.tsx` — four buckets from `v_secret_metadata.strength_score`, bucketed by `lib/ui/strength.ts`. A `Strength` filter on the Credentials section reaches the rows behind each count |
@@ -48,7 +48,7 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 | 3 | Locations | **Exists** | "Sites" section |
 | 3 | Activity Feed | **Exists** | `listClientActivity()` on the client page, `organization_id`-scoped. Distinguishes "no activity" from "no `audit:read`" |
 | 4 | Customize Your Sidebar | **Missing** | No table, no page. `user_dashboard.widgets` is the precedent to copy |
-| 5 | Flexible/custom asset types | **Partial** | **Schema is complete and versioned**: `flexible_asset_type` (icon, colour, client_visible), `flexible_asset_type_version` (json_schema, ui_schema, secret_fields, searchable_fields), `flexible_asset_record`, `flexible_asset_secret`, API `/api/flexible-assets/{types,records}`, render page. **Missing: any UI to define or edit a type.** Today a type arrives by API call or SQL |
+| 5 | Flexible/custom asset types | **Exists** | Schema was always complete and versioned. Group C added the authoring screen (`/settings/asset-types`), the field builder (`lib/flexible/fields.ts`), and the three routes it needed: `GET`/`PATCH` on one type and `POST .../versions` to publish. A record-creation form is C2 |
 | 6 | Assets completion grid + % badges | **Missing** | Needs a per-type/per-client coverage query |
 | 6 | Per-client completion scores | **Missing** | `client_health` widget is adjacent, not the same |
 | 6 | Cross-client expirations, filterable | **Exists** | `/expirations` page + `/api/expirations`, filters by severity and org |
@@ -328,6 +328,57 @@ is ever widened, so whoever widens it has to revisit the card too.
 **Settled:** `secret.revealed`, `secret.reveal_denied` and `secret.copied`
 stay hidden from an org-scoped reader. See decision 7.
 
+### Group C — the type authoring UI (no migration)
+
+The documentation model has been complete since 0080: a type, immutable
+published schema versions, records validated against them, `x-helm-secret`
+fields split out and encrypted. What it never had was a screen, so in practice
+only the person who wrote the API ever created a type. C adds the screen and
+the three routes it needed — `GET`/`PATCH` on one type, and `POST
+.../versions` to publish, without which "edit a type's fields" was not awkward
+but unexpressible.
+
+**The form edits fields, not a schema.** `src/lib/flexible/fields.ts` owns the
+conversion both ways and is unit-tested against the real schema guard. The
+round trip is load-bearing rather than tidy: published versions are immutable,
+so editing a type means publishing a new version, which means loading the
+stored schema back into a field list first. A one-way conversion would make
+"edit" mean "start again".
+
+**The builder cannot emit a `pattern`.** `schema-guard.ts` exists largely
+because a hand-written regular expression compiles to a RegExp with no timeout,
+and a backtracking one hangs the event loop for every tenant. Ajv has
+`addFormats()` registered, so date, uri and email are real validation in a
+library rather than a string somebody typed on a Friday. The guard stays the
+backstop for API clients; the UI simply does not hand over the foot-gun.
+
+**Publishing is not saving, and the dialog says so.** It names the version it
+will create, how many records exist, and — when the new shape is incompatible —
+that they will be flagged.
+
+**`needs_migration` is now written, and cleared.** The column, its partial
+index and the "Needs migration" flag on the type page have existed since 0080
+with nothing ever setting them. See decision 8 for why it is written from a
+schema comparison rather than per-record validation.
+
+**A guard that was not working, found and fixed.** `searchable_fields` and
+`secret_fields` hold JSON **pointers** — 0240's indexing trigger does
+`substring(v_path from 2)` before `data ->> v_key`. Nothing documented it and
+nothing checked it, and the consequence was not only that a bare name indexes
+nothing: `inspection.secretFields` are pointers, so the route's
+`secretFields.includes(f)` never matched a bare name, and
+`flexible_version_secrets_not_searchable` compares those same two arrays, so
+the CHECK did not fire either. **A secret field could be stored as
+searchable.** Nothing leaked — the same off-by-one mangles the key into a NULL
+lookup, and a secret's value never reaches `data` at all — but the guard was
+decorative. Both routes now refuse anything that is not a pointer resolving to
+a property the schema declares, which is what makes the checks beneath it mean
+something. Verified against the running database.
+
+**Still missing, deliberately, as C2:** the `+ New` button on a flexible asset
+type's page is dead and there is no record form anywhere, so a type can now be
+defined but a record of it still cannot be created through the UI.
+
 ## Decisions
 
 The four questions this document opened with have been answered. Recorded here
@@ -378,6 +429,23 @@ only in a conversation gets re-litigated.
    predicate fix. `tests/integration/audit-visibility.test.ts` fails by name if
    the CASE in 0610 is widened, which is the tripwire that sends whoever widens
    it back to this entry.
+
+8. **`needs_migration` is written from a schema comparison, not per-record
+   validation (C).** The column means "no longer conforming", and the literal
+   reading is per-record — but stored `data` is the post-split document with
+   every secret removed, so `validateRecord()` fails `required` on every secret
+   field for every record, always. Doing it properly means reinstating a
+   placeholder per secret, which is a second query per record and a second
+   place that has to agree with the splitter. So the question is asked of the
+   schemas: can the new one reject a document the old one accepted? If not,
+   nothing is flagged; if so, every record on an older version is. That
+   over-reports when a particular record survives an incompatible change, which
+   is the direction a "somebody should look at this" flag should err in, and it
+   keeps the commonest edit — a new optional field — from flagging anything.
+   Soundness is tested differentially against Ajv rather than against a list of
+   pairs believed compatible. One corollary is pinned by a test: reverting to an
+   earlier schema is NOT automatically compatible, because removing a property
+   rejects any record that carries it.
 
 Two further decisions taken at the same time:
 

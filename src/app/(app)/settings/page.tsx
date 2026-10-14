@@ -1,8 +1,10 @@
-import { KeyRound, Plug, ShieldCheck, Bot, Building } from 'lucide-react';
+import Link from 'next/link';
+import { Boxes, KeyRound, Plug, ShieldCheck, Bot, Building } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { RenameTenant } from '@/components/rename-tenant';
 import { RadiusSettingsCard, type RadiusSettings } from '@/components/radius-settings';
 import { OidcSettingsCard, type OidcSettings } from '@/components/oidc-settings';
@@ -300,10 +302,11 @@ export default async function SettingsPage() {
 
   const {
     keys, integrations, workers, tenant, radius, oidc, destinations, deliveries,
-    unifi, organizations, canManageNetwork,
+    unifi, organizations, canManageNetwork, flexibleTypeCount,
   } = await withTenant(actorOf(identity), async (tx) => {
     const [keyRows, integrationRows, workerRows, tenantRows, radiusRows, oidcRows,
-           destinationRows, deliveryRows, unifiRows, organizationRows, networkRows] = await Promise.all([
+           destinationRows, deliveryRows, unifiRows, organizationRows, networkRows,
+           flexibleTypeRows] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -353,6 +356,9 @@ export default async function SettingsPage() {
           WHERE m.user_id = ${identity.actorId}::uuid
             AND rp.permission_key = 'integration:network:manage') AS permitted
       `,
+      // Just the count: the card is a signpost, and the page itself fetches
+      // the schemas it needs to open an editor.
+      tx<{ n: number }[]>`SELECT count(*)::int AS n FROM flexible_asset_type`,
     ]);
     return {
       keys: keyRows,
@@ -366,6 +372,7 @@ export default async function SettingsPage() {
       unifi: unifiRows,
       organizations: organizationRows,
       canManageNetwork: networkRows[0]?.permitted ?? false,
+      flexibleTypeCount: flexibleTypeRows[0]?.n ?? 0,
     };
   });
 
@@ -597,6 +604,32 @@ export default async function SettingsPage() {
                 ))}
               </TableBody>
             </Table>
+          </CardContent>
+        </Card>
+
+        {/*
+          Asset types get a card and their own page rather than living here.
+          Defining one is a form with a variable number of rows, which is a
+          page; the card is the signpost, because nobody looking for "where do
+          I add a custom field" would think to look under Settings without one.
+        */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Boxes className="size-4 text-ink-faint" aria-hidden /> Asset types
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <p className="max-w-xl text-ink-muted">
+              The documentation types this tenant defines for itself, beyond
+              Helm&rsquo;s built-in ones. Each publishes an immutable schema
+              version that records are validated against.
+            </p>
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/settings/asset-types">
+                {flexibleTypeCount} defined
+              </Link>
+            </Button>
           </CardContent>
         </Card>
 
