@@ -66,6 +66,23 @@ const AMBIENT = new Set([
   'PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGSOCK', 'PGSUPERUSER',
 ]);
 
+/**
+ * Set BY A TEST, and deliberately not a thing an operator may set.
+ *
+ * `.env.example` says in as many words to point NODE_EXTRA_CA_CERTS at a
+ * private CA bundle and never to disable TLS verification, so documenting
+ * NODE_TLS_REJECT_UNAUTHORIZED there as configuration would contradict the
+ * file and hand somebody a footgun with an apparent blessing. It is set by two
+ * probe tests whose fixture servers present self-signed certificates, where the
+ * alternative is an "insecure" switch on the product code — a hole in the
+ * product to make a test easy.
+ *
+ * The exemption is narrow and self-policing: the assertion below fails if the
+ * name ever appears outside tests/, so this cannot quietly become the way
+ * product code opts out of certificate verification.
+ */
+const TEST_ONLY = new Set(['NODE_TLS_REJECT_UNAUTHORIZED']);
+
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     if (entry === 'node_modules' || entry === '.next' || entry === 'dist') continue;
@@ -105,8 +122,29 @@ describe('.env.example', () => {
   const docs = documented();
 
   it('documents every variable the code reads', () => {
-    const missing = [...used].filter((n) => !docs.has(n) && !AMBIENT.has(n)).sort();
+    const missing = [...used]
+      .filter((n) => !docs.has(n) && !AMBIENT.has(n) && !TEST_ONLY.has(n))
+      .sort();
     expect(missing).toEqual([]);
+  });
+
+  it('keeps the test-only exemptions to the tests', () => {
+    /*
+     * The tripwire on TEST_ONLY. An exemption that product code can reach is
+     * not an exemption, it is a loophole — and this particular one would let
+     * `process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'` into a worker without
+     * tripping anything else in the suite.
+     */
+    const escaped: string[] = [];
+    for (const dir of ['src', 'db', 'scripts']) {
+      for (const file of walk(join(ROOT, dir))) {
+        const source = readFileSync(file, 'utf8');
+        for (const match of source.matchAll(/process\.env\.([A-Z_][A-Z0-9_]*)/g)) {
+          if (TEST_ONLY.has(match[1]!)) escaped.push(`${match[1]} in ${file.slice(ROOT.length + 1)}`);
+        }
+      }
+    }
+    expect(escaped, 'a test-only variable is being read by product code').toEqual([]);
   });
 
   it('documents nothing the code does not read', () => {

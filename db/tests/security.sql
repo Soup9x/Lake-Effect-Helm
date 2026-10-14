@@ -25,6 +25,7 @@
 \set n_cred    '''1d000000-0000-0000-0000-000000000004'''
 \set n_dc      '''1d000000-0000-0000-0000-000000000003'''
 \set n_ssl     '''1d000000-0000-0000-0000-000000000005'''
+\set n_dom     '''1d000000-0000-0000-0000-000000000006'''
 \set n_wifi    '''1d000000-0000-0000-0000-000000000008'''
 \set k1        '''1c000000-0000-0000-0000-000000000001'''
 \set sa1       '''1f000000-0000-0000-0000-000000000001'''
@@ -3452,6 +3453,133 @@ BEGIN;
 SELECT helm_test.ctx(:t2, :u_admin2);
 SELECT helm_test.check('the rival tenant sees no assigned steps at all',
   NOT EXISTS (SELECT 1 FROM sop_run_step WHERE assigned_to IS NOT NULL));
+ROLLBACK;
+
+\echo '== 48. Outbound checking is off, gated, and cannot write across a tenant =='
+-- 0670 added the only feature in Helm that makes a client's domain names leave
+-- the building, so the question "who may turn this on" is the whole section.
+-- The migration's guards assert the SHAPE — four policies, RLS forced, the
+-- grants asymmetric. These assert what that shape does.
+
+-- (a) READ-OPEN, WRITE-GATED, which is the split 0620 chose for the tenant
+--     sidebar default and matters more here. A gated read would leave a client
+--     user unable to tell "switched off" from "the registry will not answer",
+--     which is the distinction the domain page is built around; an ungated
+--     write would let anybody start outbound traffic.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO external_check_setting (tenant_id, domains_enabled, interval_hours)
+VALUES (:t1, true, 24);
+SELECT helm_test.check('an administrator holding tenant:write can turn it on',
+  (SELECT domains_enabled FROM external_check_setting WHERE tenant_id = :t1));
+
+SELECT helm_test.ctx(:t1, :u_ro);
+SELECT helm_test.check('a client read-only user can SEE whether it is on',
+  EXISTS (SELECT 1 FROM external_check_setting WHERE tenant_id = :t1));
+SELECT helm_test.check_raises('...and cannot change it',
+  $$UPDATE external_check_setting SET domains_enabled = false WHERE tenant_id = '11111111-1111-1111-1111-111111111111'$$);
+
+SELECT helm_test.ctx(:t1, :u_tech1);
+SELECT helm_test.check('a technician can see it too',
+  EXISTS (SELECT 1 FROM external_check_setting WHERE tenant_id = :t1));
+SELECT helm_test.check_raises('...and a technician cannot turn it off either',
+  $$UPDATE external_check_setting SET domains_enabled = false WHERE tenant_id = '11111111-1111-1111-1111-111111111111'$$);
+ROLLBACK;
+
+-- (b) THE ENDPOINT MUST BE https, IN THE DATABASE. The route refuses an http
+--     URL too, and that is the error message a person sees — but a route is
+--     one caller. The CHECK is what makes it true of the column.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('an http RDAP endpoint is refused by the column itself',
+  $$INSERT INTO external_check_setting (tenant_id, rdap_base_url)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'http://rdap.example.test')$$);
+SELECT helm_test.check_raises('...as is something that is not a URL at all',
+  $$INSERT INTO external_check_setting (tenant_id, rdap_base_url)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'rdap.example.test')$$);
+ROLLBACK;
+
+-- (c) AND THE INTERVAL HAS BOUNDS AT BOTH ENDS. Zero would be a probe per
+--     tick against somebody else's registry, which is how an MSP's IP gets
+--     rate-limited for every client at once.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('an interval of zero hours is refused',
+  $$INSERT INTO external_check_setting (tenant_id, interval_hours)
+    VALUES ('11111111-1111-1111-1111-111111111111', 0)$$);
+SELECT helm_test.check_raises('...and so is one of a century',
+  $$INSERT INTO external_check_setting (tenant_id, interval_hours)
+    VALUES ('11111111-1111-1111-1111-111111111111', 876000)$$);
+INSERT INTO external_check_setting (tenant_id, interval_hours) VALUES (:t1, 1);
+SELECT helm_test.check('hourly is allowed, so the floor is a bound and not an off-by-one',
+  (SELECT interval_hours = 1 FROM external_check_setting WHERE tenant_id = :t1));
+ROLLBACK;
+
+-- (d) ONE ROW PER TENANT, and not the other tenant's.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO external_check_setting (tenant_id, domains_enabled) VALUES (:t1, true);
+SELECT helm_test.check_raises('a tenant cannot hold two settings that disagree',
+  $$INSERT INTO external_check_setting (tenant_id, domains_enabled)
+    VALUES ('11111111-1111-1111-1111-111111111111', false)$$);
+SELECT helm_test.check_raises('...nor write one for somebody else',
+  $$INSERT INTO external_check_setting (tenant_id, domains_enabled)
+    VALUES ('22222222-2222-2222-2222-222222222222', true)$$);
+
+SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('the rival tenant sees no setting of ours',
+  NOT EXISTS (SELECT 1 FROM external_check_setting));
+ROLLBACK;
+
+-- (e) THE TRAP THE WORKER FELL INTO, asserted where the next person writing a
+--     job will read it.
+--
+--     The first version of externalChecksJob() enumerated due rows through the
+--     SECURITY DEFINER backlog — which crosses tenants by design — and then
+--     wrote them back with `UPDATE domain SET ... WHERE id = $1` and no tenant
+--     context. helm_worker is subject to RLS exactly as helm_app is (it is a
+--     MEMBER of helm_app and inherits its policies), so every one of those
+--     writes matched nothing. Not an error. Not a refusal. Zero rows and a
+--     clean return, which the job logged as a recorded failure.
+--
+--     This runs as helm_app because the suite does, and that is the point: the
+--     policy being demonstrated is the same one, and the lesson is about the
+--     absence of a context rather than about which role is missing it.
+--     The context is transaction-local (0030 sets it with set_config(..., true)),
+--     so a transaction that simply never establishes one is in exactly the
+--     state the job was in. Nothing has to be unset.
+BEGIN;
+SELECT helm_test.check('a transaction that set no context genuinely has none',
+  coalesce(current_setting('helm.tenant_id', true), '') = '');
+-- A DO block because the row count is the assertion, and reaching the
+-- assertion at all is half of it: if the UPDATE raised, this block would
+-- abort here instead of reporting zero. It does not raise. That is the trap.
+DO $no_context$
+DECLARE
+  v_rows integer;
+BEGIN
+  UPDATE domain SET last_check_status = 'ok'
+  WHERE id = '1d000000-0000-0000-0000-000000000006';
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  PERFORM helm_test.check(
+    'with no tenant context, an UPDATE to a probe column matches NOTHING and does not raise',
+    v_rows = 0);
+END
+$no_context$;
+ROLLBACK;
+
+-- (f) INSIDE A CONTEXT, the same write lands — so (e) is about the context and
+--     not about a column nobody can write.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE domain SET last_check_status = 'ok', registry_expires_at = now() + interval '40 days'
+WHERE id = :n_dom;
+SELECT helm_test.check('inside a tenant context the probe columns are writable',
+  (SELECT last_check_status = 'ok' AND registry_expires_at IS NOT NULL
+     FROM domain WHERE id = :n_dom));
+-- And beside, not over: the recorded expiry is untouched by the write above.
+SELECT helm_test.check('...with the hand-recorded expiry left exactly as it was',
+  (SELECT expires_at = current_date + 20 FROM domain WHERE id = :n_dom));
 ROLLBACK;
 
 \echo '== All security assertions passed =='

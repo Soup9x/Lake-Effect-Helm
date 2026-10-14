@@ -193,6 +193,62 @@ asks why a server is not documented.
 
 ---
 
+## 5a. External checks: what the registry and the server say
+
+The eleventh job (`external.checks`, lock key `0x48_45_4c_4d_0b`) asks RDAP for
+a domain's registry expiry and completes a TLS handshake to read what a host
+actually serves. It is the only job in the runtime that is **off by default and
+stays off until somebody turns it on**, and that is structural rather than a
+configuration default: `helm.external_check_backlog()` joins
+`external_check_setting`, so a tenant with no row contributes no work. An
+air-gapped install reports idle forever with nothing to configure, and no
+upgrade starts outbound traffic on anybody's behalf. The RDAP endpoint is a
+column on that row rather than a constant in the code, so an administrator can
+see — and change — where their clients' domain names are sent. It must be
+https, refused rather than coerced, in the route and in a CHECK.
+
+**The answer is written beside the recorded value, never over it.** §5's
+`respect_manual_edits` rule is implemented as "an inbound value only fills a
+field that is still NULL", and a *refresh* job taking that literally would
+refresh nothing, because the expiry is already filled in by whoever documented
+the domain. So the outside world gets columns of its own —
+`domain.registry_expires_at`, `ssl_certificate.observed_not_after` and
+`observed_fingerprint_sha256` — and the asset page shows the pair side by side,
+calling out a disagreement of more than a day in its own line. Nothing is
+reconciled: "you recorded March, the registry says January" is a sentence a
+technician can act on, and both overwriting and blank-filling would have
+destroyed it. The expiry dashboard deliberately still counts the recorded date,
+which that card states out loud, so a reader knows which of the two their alerts
+follow.
+
+**Three statuses, because two would train people to ignore one.** A ccTLD that
+publishes no `expiration` event will never publish one; a 5xx will clear.
+`external_check_status` is `ok | failed | unsupported` for that reason.
+`last_checked_at` is advanced only by a success — it means "when did we last
+successfully learn something", which is what "last checked: never" has to mean
+on screen — while `next_check_at` is pushed out by a failure as well, to the
+tenant's full interval, so a registry having a bad day is not hammered.
+
+**Scheduling follows §8 of the network-integration document exactly:** the
+advisory lock keeps two schedulers apart, and a row claim (`FOR UPDATE SKIP
+LOCKED` plus `next_check_at` pushed forward by a claim window) keeps two workers
+off the same domain and survives a worker that dies mid-probe, which an advisory
+lock cannot because it dies with its session. A NULL `next_check_at` means never
+checked, which means due, so the due indexes are **not** partial.
+
+**And the writes go back inside a tenant.** `helm_worker` is subject to RLS like
+every other role (§1), so a bare `UPDATE domain … WHERE id = $1` from the
+enumerated backlog matches **zero rows** and reports success. The first version
+of this job did exactly that: it logged a tidy count of recorded failures while
+recording nothing, because an UPDATE that matches no rows is not an error. The
+backlog therefore returns each tenant's own `system_sync` actor alongside the
+due row, every write happens in `withTenant(…, { role: 'worker' })`, and a
+tenant whose service account has been disabled is skipped rather than throwing
+and abandoning everybody else's checks for that tick. The enumerator stays on
+the bare worker because it is SECURITY DEFINER; nothing else does.
+
+---
+
 ## 6. Audit chain anchoring
 
 The per-tenant hash chain proves nobody edited a historical row without also
@@ -409,7 +465,9 @@ now asserts it column by column across all five runtime roles.
 | `tests/integration/workers.test.ts` | 28 — identities, purpose restriction, alert semantics, sync backoff, anchoring refusals |
 | `tests/integration/exports.test.ts` | single-approver exports, scope binding, omissions, the requester-rank floor, revocation, expiry, storage mode |
 | `tests/unit/exports.test.ts` | 21 — PDF structure and xref resolution, bundle round-trip, passphrase distribution |
-| `db/tests/security.sql` | §15 (export behaviour) and §35 (what `0400` removed, and what it kept) |
+| `tests/integration/external-checks.test.ts` | 21 — off-by-default, write-beside, failure recording, the claim, the route's gate and bounds |
+| `tests/unit/rdap.test.ts`, `tests/unit/certificate-probe.test.ts` | 21 — parsing, redirect refusal, timeouts, fingerprint form |
+| `db/tests/security.sql` | §15 (export behaviour), §35 (what `0400` removed, and what it kept) and §48 (external checks) |
 
 The PDF output was additionally parsed with an independent reader (`pypdf`) to
 confirm page count, extracted text, repeated table headers and the UTF-16 title.

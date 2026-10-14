@@ -49,13 +49,14 @@
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { withTenant } from '../../src/lib/db/client';
 import { useSessionResolver } from '../../src/lib/auth/session';
 import {
-  IDS, actor, connectPools, disconnectPools, resetDatabase,
+  IDS, actor, connectPools, disconnectPools, resetDatabase, superuserSql,
 } from './harness';
 import { clientComponentNames, describeViolations, findBoundaryViolations } from '../support/rsc-boundary';
+import { datesDisagree, type ExternalCheckState } from '../../src/components/external-check-note';
 
 /**
  * next/headers reaches into a request scope that does not exist here.
@@ -261,6 +262,28 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () =>
       (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
         params: p({ nodeId: IDS.sopOffboard }),
+      }),
+  },
+  {
+    /*
+     * And for a DOMAIN, which is a third arm again: H added two hand-written
+     * SELECTs to this page — one against `domain`, one against
+     * `ssl_certificate` — reading six columns each by name. They are exactly
+     * the kind of string this file exists to execute, and neither the firewall
+     * row nor the procedure row reaches either of them, because `checkable`
+     * is false for both.
+     */
+    name: 'the asset page, for a domain',
+    load: async () =>
+      (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
+        params: p({ nodeId: IDS.domain }),
+      }),
+  },
+  {
+    name: 'the asset page, for a certificate',
+    load: async () =>
+      (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
+        params: p({ nodeId: IDS.certificate }),
       }),
   },
   {
@@ -754,5 +777,136 @@ describe('the query that broke production', () => {
     `);
 
     expect(row!.exists).toBe(false);
+  });
+});
+
+describe('what the registry said, on the asset page', () => {
+  /**
+   * The probe columns, written straight in and cleaned up afterwards.
+   *
+   * No worker here on purpose. The job is tested in its own file against real
+   * fixture servers; what is untested until this block exists is the step
+   * AFTER a successful probe — whether a row in that state reaches the screen
+   * at all, and reaches it once rather than twice.
+   */
+  async function seedDomainProbe(observed: string, status = 'ok') {
+    const sql = superuserSql();
+    try {
+      await sql`
+        INSERT INTO external_check_setting (tenant_id, domains_enabled, certificates_enabled)
+        VALUES (${IDS.tenant1}::uuid, true, true)
+        ON CONFLICT (tenant_id) DO UPDATE SET domains_enabled = true, certificates_enabled = true
+      `;
+      await sql`
+        UPDATE domain SET registry_expires_at = ${observed}::timestamptz,
+          last_checked_at = now(), last_check_status = ${status}::external_check_status
+        WHERE id = ${IDS.domain}::uuid
+      `;
+      await sql`
+        UPDATE ssl_certificate SET observed_not_after = ${observed}::timestamptz,
+          observed_fingerprint_sha256 = repeat('ab', 32),
+          last_checked_at = now(), last_check_status = 'ok'
+        WHERE id = ${IDS.certificate}::uuid
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  }
+
+  async function clearProbe() {
+    const sql = superuserSql();
+    try {
+      await sql`DELETE FROM external_check_setting WHERE tenant_id = ${IDS.tenant1}::uuid`;
+      await sql`
+        UPDATE domain SET registry_expires_at = NULL, last_checked_at = NULL,
+          next_check_at = NULL, last_check_status = NULL, last_check_error = NULL
+      `;
+      await sql`
+        UPDATE ssl_certificate SET observed_not_after = NULL,
+          observed_fingerprint_sha256 = NULL, last_checked_at = NULL, next_check_at = NULL,
+          last_check_status = NULL, last_check_error = NULL
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  }
+
+  const page = async (nodeId: string) =>
+    (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
+      params: p({ nodeId }),
+    });
+
+  afterEach(clearProbe);
+
+  it('hands the card both dates, and the card calls them a disagreement', async () => {
+    // The fixture records current_date + 200; the registry is made to say 30
+    // days, which is the case the whole feature exists for.
+    const observed = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    await seedDomainProbe(observed);
+
+    const rendered = await page(IDS.domain);
+    const note = propsOf(rendered, 'ExternalCheckNote');
+    expect(note, 'a domain with a probe result should render an ExternalCheckNote').toBeTruthy();
+
+    const state = note!.state as ExternalCheckState;
+    expect(state.enabled, 'domains_enabled is true in the seeded setting row').toBe(true);
+    expect(state.status).toBe('ok');
+    expect(state.source, 'a domain is checked against the registry').toBe('the registry');
+    expect(new Date(state.observed!).toISOString()).toBe(observed);
+    expect(state.recorded, 'the recorded date has to come along or there is nothing to compare')
+      .not.toBeNull();
+    expect(
+      datesDisagree(state.recorded, state.observed),
+      '200 days against 30 is a disagreement by any tolerance',
+    ).toBe(true);
+  });
+
+  it('says it is off when nobody enabled it, rather than saying never checked', async () => {
+    // No setting row at all — the air-gapped default. The card still renders,
+    // because "off" is a different sentence from "not looked up yet" and a
+    // reader needs to know which they are looking at.
+    const rendered = await page(IDS.domain);
+    const state = propsOf(rendered, 'ExternalCheckNote')!.state as ExternalCheckState;
+
+    expect(state.enabled).toBe(false);
+    expect(state.status, 'nothing has probed it').toBeNull();
+    expect(state.observed).toBeNull();
+  });
+
+  it('does not also list the probe columns as detail rows', async () => {
+    await seedDomainProbe(new Date(Date.now() + 30 * 86_400_000).toISOString());
+
+    const text = textIn(await page(IDS.domain)).join(' ');
+
+    // Vacuous unless the detail list is populated at all, so the recorded
+    // column is asserted present in the same breath as the observed one is
+    // asserted absent. Without this line, deleting detailFor() entirely would
+    // pass.
+    expect(text, 'the domain detail list should still show the recorded expiry')
+      .toContain('Expires at');
+    expect(
+      text,
+      'registry_expires_at reached the generic detail list — is it still in HIDDEN?',
+    ).not.toContain('Registry expires at');
+    expect(text).not.toContain('Last check status');
+  });
+
+  it('calls a certificate check the server, and keeps its fingerprint out of the list', async () => {
+    await seedDomainProbe(new Date(Date.now() + 30 * 86_400_000).toISOString());
+
+    const rendered = await page(IDS.certificate);
+    const state = propsOf(rendered, 'ExternalCheckNote')!.state as ExternalCheckState;
+
+    // Not the registry: a certificate's expiry comes from the host that serves
+    // it, and the card says so in a sentence.
+    expect(state.source).toBe('the server');
+    expect(state.recordedLabel).toBe('Not after');
+    expect(state.status).toBe('ok');
+
+    const text = textIn(rendered).join(' ');
+    expect(text, 'the fingerprint is 64 hex characters nobody reads in a detail list')
+      .not.toContain('Observed fingerprint');
+    expect(text, 'and the hex itself should not be there under another label')
+      .not.toContain('ababab');
   });
 });

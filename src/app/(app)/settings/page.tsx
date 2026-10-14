@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Boxes, KeyRound, PanelLeft, Plug, ShieldCheck, Bot, Building } from 'lucide-react';
+import { Boxes, Globe, KeyRound, PanelLeft, Plug, ShieldCheck, Bot, Building } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { RenameTenant } from '@/components/rename-tenant';
 import { SidebarCustomise } from '@/components/sidebar-customise';
+import { ExternalChecksForm } from '@/components/external-checks-form';
+import { readExternalCheckSetting } from '@/lib/external/settings';
 import { readTenantSidebarDefault } from '@/lib/nav/sidebar-queries';
 import { ORG_CATEGORIES } from '@/lib/nav/org-categories';
 import { RadiusSettingsCard, type RadiusSettings } from '@/components/radius-settings';
@@ -306,11 +308,11 @@ export default async function SettingsPage() {
   const {
     keys, integrations, workers, tenant, radius, oidc, destinations, deliveries,
     unifi, organizations, canManageNetwork, flexibleTypeCount,
-    sidebarDefault, sidebarDefaultSet,
+    sidebarDefault, sidebarDefaultSet, externalChecks,
   } = await withTenant(actorOf(identity), async (tx) => {
     const [keyRows, integrationRows, workerRows, tenantRows, radiusRows, oidcRows,
            destinationRows, deliveryRows, unifiRows, organizationRows, networkRows,
-           flexibleTypeRows, sidebarDefaultRow] = await Promise.all([
+           flexibleTypeRows, sidebarDefaultRow, externalCheckRow] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -370,6 +372,9 @@ export default async function SettingsPage() {
       // One read answers both: the card says either "n of sixteen shown by
       // default" or "not set", which is the same list meaning two things.
       readTenantSidebarDefault(tx),
+      // Whether Helm may reach outside, and how. Read unconditionally: "off"
+      // is what the card needs to say, and an absent row means off.
+      readExternalCheckSetting(tx),
     ]);
     return {
       keys: keyRows,
@@ -386,6 +391,7 @@ export default async function SettingsPage() {
       flexibleTypeCount: flexibleTypeRows[0]?.n ?? 0,
       sidebarDefault: sidebarDefaultRow.categories,
       sidebarDefaultSet: sidebarDefaultRow.set,
+      externalChecks: externalCheckRow,
     };
   });
 
@@ -680,6 +686,49 @@ export default async function SettingsPage() {
                 trigger={
                   <Button variant="secondary" size="sm">
                     Edit default
+                  </Button>
+                }
+              />
+            ) : (
+              <p className="text-xs text-ink-faint">Requires tenant settings access.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Globe className="size-4 text-ink-faint" aria-hidden /> Domain and certificate checking
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div className="max-w-xl space-y-1">
+              <p className="text-ink-muted">
+                Refresh what the registry says about a domain&rsquo;s expiry, and what a server is
+                actually serving for a certificate. Recorded beside what somebody entered rather
+                than over it, so a disagreement is visible on the asset.
+              </p>
+              <p className="text-ink-faint">
+                {/*
+                  "Off" is stated as a complete answer, not as something missing.
+                  Decision 4: an air-gapped install must keep working with zero
+                  configuration, so there is nothing here nudging anybody to
+                  enable outbound traffic.
+                */}
+                {externalChecks.domainsEnabled || externalChecks.certificatesEnabled
+                  ? `${[
+                      externalChecks.domainsEnabled ? 'domains' : null,
+                      externalChecks.certificatesEnabled ? 'certificates' : null,
+                    ].filter(Boolean).join(' and ')} every ${externalChecks.intervalHours}h`
+                  : 'Off. Nothing leaves this network, and manual entry is the only source.'}
+              </p>
+            </div>
+            {tenant?.can_write_tenant ? (
+              <ExternalChecksForm
+                setting={externalChecks}
+                trigger={
+                  <Button variant="secondary" size="sm">
+                    {externalChecks.configured ? 'Edit' : 'Set up'}
                   </Button>
                 }
               />
