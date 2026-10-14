@@ -10,7 +10,7 @@
 import { boolean, char, date, index, integer, jsonb, numeric, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { cidr, citext, citextArray, inet, inetArray, macaddr, textArray, tstz } from './_types';
 import {
-  certificateIssuance, deviceType, directoryKind, ipAssignment,
+  certificateIssuance, deviceType, directoryKind, externalCheckStatus, ipAssignment,
   linkOrigin, linkRelation, networkKind, nodeStatus, nodeType,
 } from './enums';
 import { appUser } from './identity';
@@ -156,7 +156,24 @@ export const domain = pgTable('domain', {
   whoisPrivacy: boolean('whois_privacy'),
   dnssecEnabled: boolean('dnssec_enabled').notNull().default(false),
   registrarCredentialId: uuid('registrar_credential_id'),
-}, (t) => [uniqueIndex('domain_name_uk').on(t.tenantId, t.domainName)]);
+  /*
+   * What the REGISTRY says, beside what a person recorded in expiresAt (0670).
+   *
+   * Two columns on purpose. 0110's rule is that inbound data never overwrites a
+   * hand-edited field, and a refresh job that only filled blanks would refresh
+   * nothing after its first run — so the probe writes here and a disagreement
+   * between the two becomes visible instead of being resolved silently.
+   */
+  registryExpiresAt: tstz('registry_expires_at'),
+  lastCheckedAt: tstz('last_checked_at'),
+  nextCheckAt: tstz('next_check_at'),
+  lastCheckStatus: externalCheckStatus('last_check_status'),
+  lastCheckError: text('last_check_error'),
+}, (t) => [
+  uniqueIndex('domain_name_uk').on(t.tenantId, t.domainName),
+  // Not partial: a NULL nextCheckAt means never checked, which means due.
+  index('domain_check_due_idx').on(t.tenantId, t.nextCheckAt),
+]);
 
 export const sslCertificate = pgTable('ssl_certificate', {
   id: uuid('id').primaryKey(),
@@ -177,7 +194,37 @@ export const sslCertificate = pgTable('ssl_certificate', {
   domainId: uuid('domain_id'),
   installedOnNodeId: uuid('installed_on_node_id'),
   privateKeySecretId: uuid('private_key_secret_id'),
-}, (t) => [index('ssl_expiry_idx').on(t.tenantId, t.notAfter)]);
+  /** What the server actually served, beside what was recorded (0670). */
+  observedNotAfter: tstz('observed_not_after'),
+  /** A change between checks means the certificate was replaced. */
+  observedFingerprintSha256: text('observed_fingerprint_sha256'),
+  lastCheckedAt: tstz('last_checked_at'),
+  nextCheckAt: tstz('next_check_at'),
+  lastCheckStatus: externalCheckStatus('last_check_status'),
+  lastCheckError: text('last_check_error'),
+}, (t) => [
+  index('ssl_expiry_idx').on(t.tenantId, t.notAfter),
+  index('ssl_certificate_check_due_idx').on(t.tenantId, t.nextCheckAt),
+]);
+
+/**
+ * Per-tenant opt-in for outbound probes (0670).
+ *
+ * Off by default and in a table of its own rather than in tenant.settings,
+ * following 0620: "a feature with a rule of its own gets a table with that rule
+ * on it". The rules here are an interval with bounds and an endpoint that must
+ * be https — and the endpoint is a visible setting rather than a constant,
+ * because enabling this sends client domain names to whoever answers it.
+ */
+export const externalCheckSetting = pgTable('external_check_setting', {
+  tenantId: uuid('tenant_id').primaryKey(),
+  domainsEnabled: boolean('domains_enabled').notNull().default(false),
+  certificatesEnabled: boolean('certificates_enabled').notNull().default(false),
+  intervalHours: integer('interval_hours').notNull().default(24),
+  rdapBaseUrl: text('rdap_base_url').notNull().default('https://rdap.org'),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by'),
+});
 
 export const directoryService = pgTable('directory_service', {
   id: uuid('id').primaryKey(),

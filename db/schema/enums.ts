@@ -143,6 +143,14 @@ export const authMethod = pgEnum('auth_method', ['sso', 'password', 'radius', 'o
 
 // UniFi Network inventory (0430). A controller-managed device or a client seen
 // on the network; and the lifecycle a technician sets on it by hand.
+/**
+ * The outcome of an outbound RDAP or TLS probe (0670).
+ *
+ * 'unsupported' is its own answer and not a failure: a TLD that publishes no
+ * expiry event never will, and showing that in red beside a real outage trains
+ * people to ignore both.
+ */
+export const externalCheckStatus = pgEnum('external_check_status', ['ok', 'failed', 'unsupported']);
 export const networkAssetType = pgEnum('network_asset_type', ['unifi_device', 'client_device']);
 export const networkAssetStatus = pgEnum('network_asset_status', ['active', 'maintenance', 'decommissioned']);
 

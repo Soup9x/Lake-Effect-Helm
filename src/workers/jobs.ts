@@ -16,7 +16,7 @@
  *
  *   01  alerts.evaluate        05  exports.render       09  notifications.deliver
  *   02  alerts.deliver         06  exports.expire       0a  unifi.sync
- *   03  integration.sync       07  auth.prune
+ *   03  integration.sync       07  auth.prune           0b  external.checks
  *   04  audit.anchor           08  notifications.fanout
  */
 import { deliverExpiryAlertsJob, evaluateExpiryAlertsJob } from './alerts';
@@ -26,6 +26,7 @@ import { renderExportsJob, expireExportsJob } from './exports';
 import { pruneAuthAttemptsJob } from './auth-hygiene';
 import { fanOutNotificationsJob, deliverNotificationsJob } from './notifications';
 import { unifiSyncJob } from './unifi-sync';
+import { externalChecksJob } from './external-checks';
 import type { Job } from './runtime';
 
 export function allJobs(): Job[] {
@@ -46,5 +47,12 @@ export function allJobs(): Job[] {
     // each mapping's own interval — this job's tick is the granularity of
     // "due", not a polling rate.
     unifiSyncJob(),
+    // Domain and certificate probes (H). Registered unconditionally and inert
+    // unless a tenant opted in: the backlog joins external_check_setting, so an
+    // air-gapped install runs this job and it reports idle, every tick,
+    // forever. That is cheaper than a registration branch somebody has to
+    // remember, and it means the job's own log line says "nothing to do"
+    // rather than the job being invisible.
+    externalChecksJob(),
   ];
 }
