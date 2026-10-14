@@ -307,6 +307,30 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
       }),
   },
   {
+    /*
+     * The coverage grid, added in G. Three rows: the first page, a page past
+     * the end (an empty page is not a broken page), and a nonsense ?page,
+     * which falls back to the first rather than erroring.
+     */
+    name: 'coverage',
+    load: async () =>
+      (await import('../../src/app/(app)/coverage/page')).default({ searchParams: p({}) }),
+  },
+  {
+    name: 'coverage, past the last page',
+    load: async () =>
+      (await import('../../src/app/(app)/coverage/page')).default({
+        searchParams: p({ page: '99' }),
+      }),
+  },
+  {
+    name: 'coverage, with a nonsense page in the URL',
+    load: async () =>
+      (await import('../../src/app/(app)/coverage/page')).default({
+        searchParams: p({ page: 'last' }),
+      }),
+  },
+  {
     name: 'the dashboard',
     load: async () => (await import('../../src/app/(app)/dashboard/page')).default(),
   },
@@ -657,6 +681,44 @@ describe('my tasks', () => {
     expect(text).toContain('Disable the account');
     expect(text, 'the on-time steps should be filtered out')
       .not.toContain('Collect the laptop');
+  });
+});
+
+describe('the coverage grid', () => {
+  it('renders a count for a documented kind and a dash for a gap', async () => {
+    /*
+     * The page's whole value is the empty cells, and a PAGES row cannot see
+     * them: it proves the queries run, not that a zero renders differently
+     * from a two. The fixture gives Acme two devices and no IP addresses, so
+     * both arms are on screen at once.
+     */
+    const rendered = await (
+      await import('../../src/app/(app)/coverage/page')
+    ).default({ searchParams: p({}) });
+
+    const text = textIn(rendered).join('');
+    expect(text, 'the clients should be listed').toContain('Acme Manufacturing');
+    expect(text, 'the column should be named as the sidebar names it')
+      .toContain('Domain Tracker');
+    expect(text, 'a gap should render as a dash, not a blank or a zero').toContain('—');
+
+    // The badge states its own denominator rather than a bare percentage,
+    // which is the honesty the whole group turns on.
+    expect(text).toMatch(/\d+\/\d+/);
+  });
+
+  it('says so plainly when there is nothing to measure', async () => {
+    // Not reachable with the fixture loaded, so asserted on the arm that IS:
+    // a page past the end keeps its columns and loses its rows.
+    const rendered = await (
+      await import('../../src/app/(app)/coverage/page')
+    ).default({ searchParams: p({ page: '99' }) });
+
+    const text = textIn(rendered).join('');
+    expect(text, 'an empty page should explain itself')
+      .toContain('There is nothing to measure against yet.');
+    expect(text, 'and must not claim the tenant has no clients')
+      .not.toContain('There are no clients to measure yet.');
   });
 });
 

@@ -57,14 +57,14 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 3 | Activity Feed | **Exists** | `listClientActivity()` on the client page, `organization_id`-scoped. Distinguishes "no activity" from "no `audit:read`" |
 | 4 | Customize Your Sidebar | **Exists** | Group D: `user_sidebar` + `tenant_sidebar_default` (migration 0620), one dialog for both scopes. The `secondary` flag became the default rather than the only answer |
 | 5 | Flexible/custom asset types | **Exists** | Schema was always complete and versioned. Group C added the authoring screen (`/settings/asset-types`), the field builder (`lib/flexible/fields.ts`), and the three routes it needed: `GET`/`PATCH` on one type and `POST .../versions` to publish. C2 added the record form itself, the record `PATCH` route and the `flexible_asset` rendering path the asset page never had |
-| 6 | Assets completion grid + % badges | **Missing** | Needs a per-type/per-client coverage query |
-| 6 | Per-client completion scores | **Missing** | `client_health` widget is adjacent, not the same |
+| 6 | Assets completion grid + % badges | **Exists** | G. `/coverage` — every client against every kind of documentation, counts per cell, gaps as a dash. No migration: measured instead, see the landed section |
+| 6 | Per-client completion scores | **Exists** | G, as **coverage** rather than completeness — "7 of 11 kinds documented", carrying its own denominator. Decision 20 says why a single "% documented" would be a number people learn to ignore |
 | 6 | Cross-client expirations, filterable | **Exists** | `/expirations` page + `/api/expirations`, filters by severity and org |
 | 7 | My Tasks | **Exists** | F2. `/tasks`, defaulting to incomplete and mine, over `sop_run_step.assigned_to`/`due_at` (0650). The open count is in the dashboard's fixed strip. L collects the page under Personal |
 | 7 | Personal Credentials (private vault) | **Dropped** | Not built natively. Personal credentials will come from a Bitwarden/Vaultwarden integration — decision 14. The vault design that was drafted for it is kept below as background for that work |
 | 8 | Reusable checklist templates → per client | **Exists** | F1. `sop`/`sop_step` authored on `/assets/{id}`, published into an immutable `sop_version`, and `sop_run`/`sop_run_step` started against a client with the step copy 0090 describes. F2 added `assigned_to` and `due_at` to runs and their steps. Reminders are K |
-| 8 | Assignable tasks + due dates | **Missing** | Columns absent on both step tables |
-| 8 | Email notification on assign/due | **Missing** | No email channel anywhere; `webhook_endpoint` is Discord/Teams/Slack |
+| 8 | Assignable tasks + due dates | **Exists** | F2 (0650). `assigned_to` + `due_at` on `sop_run` and `sop_run_step`, the assignee a composite key to `membership` so work cannot be given to somebody who cannot see it |
+| 8 | Email notification on assign/due | **Missing** | No email channel anywhere; `webhook_endpoint` is Discord/Teams/Slack — **group K**. The columns it would read now exist (F2) |
 | 9 | Domain tracker fields | **Exists** | `domain`: registrar, registered_at, expires_at, nameservers, dns_provider, dnssec, transfer_locked |
 | 9 | SSL tracker fields | **Exists** | `ssl_certificate`: issuer, not_before, not_after, subject_alt_names, fingerprint, key_algorithm |
 | 9 | Both feed Upcoming Expirations | **Exists** | `expiration.kind` + `source_table`/`source_id` |
@@ -172,12 +172,12 @@ and PR.
 | **E** | Profile/preferences: user timezone, theme, first/last name — **landed**. Side-panel toggle and MFA recovery token deferred, decision 15 | 0630 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
 | **F1** | Checklists you can actually use: template authoring, publishing a version, starting a run against a client, the run page, SOP rows in the integration fixture — **landed** | 0640, for the purge conflict publishing exposed | 0090 modelled all of this and nothing in the application ever created a run. Assignment is meaningless until a run exists |
 | **F2** | `assigned_to` + `due_at` on run steps, a default assignee and due date on the run, My Tasks, an open-task count — **landed** | 0650, plus 0660 for a defect it exposed | Delivers half of the Personal section by extending SOPs |
-| **G** | Global section: completion grid with % badges, per-client completion scores | 0670 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
-| **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0680 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
-| **I** | Documentation Health ring; client logo upload | 0690 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
+| **G** | Global section: completion grid with % badges, per-client completion scores — **landed** | none; the measurements are in the landed section | Needs C done first so custom types are real; the heaviest query work |
+| **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0670 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
+| **I** | Documentation Health ring; client logo upload | 0680 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
 | ~~**J**~~ | ~~Personal Credentials vault~~ — **dropped**, see decision 14 | — | Superseded by a future Bitwarden/Vaultwarden integration, which is not in this plan |
-| **K** | Email channel + notification toggles | 0700 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles |
-| **L** | Header and navigation parity: recent-items dropdown, notifications and help icons, Personal and Global as real landing pages, Important Contacts | 0710 | Last because three of its four parts are *assembly* — the dropdown, My Tasks, profile/preferences and the completion grid all have to exist before a page can collect them |
+| **K** | Email channel + notification toggles | 0690 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles |
+| **L** | Header and navigation parity: recent-items dropdown, notifications and help icons, Personal and Global as real landing pages, Important Contacts | 0700 | Last because three of its four parts are *assembly* — the dropdown, My Tasks, profile/preferences and the completion grid all have to exist before a page can collect them |
 
 **On the migration numbers.** Two shifts have happened and both are recorded
 here so nobody reuses a number:
@@ -195,8 +195,11 @@ here so nobody reuses a number:
   reused.**
 - **F2 took 0650** (`0650_run_step_assignment.sql`) and **0660**
   (`0660_topology_set_null_repair.sql`), the second for a pre-existing defect
-  its own work exposed — see decision 19. So **G is 0670**, H 0680, I 0690,
-  K 0700 and L 0710. Both numbers are spent.
+  its own work exposed — see decision 19. Both numbers are spent.
+- **G needed no migration at all.** The plan reserved "0670 (materialised
+  counts, if needed)" and the measurements said not needed — see the landed
+  section. So **H is 0670**, I 0680, K 0690 and L 0700, and nothing is
+  reserved for G.
 
 The numbers above are intentions rather than reservations — the next free
 number at the time of writing is what a group actually takes.
@@ -821,6 +824,99 @@ the other direction. 0660 repairs it with the column list 0570's own header
 describes ("a drawing is client data" and survives on its own), and §41(g) can
 now see the shape it was written for. Decision 19.
 
+### Group G — documentation coverage (no migration)
+
+The grid of every client against every kind of documentation, at `/coverage`,
+reached from the client list until L builds the Global page that collects it.
+
+**WHAT THE NUMBER MEANS IS THE WHOLE GROUP.** Helm can see what has been
+documented. It cannot see what EXISTS — a client with no ISP circuit is not an
+incompletely documented client, they are a client with no ISP circuit, and
+nothing in the database tells those apart. So a single "73% documented" would be
+wrong for most clients most of the time, and a score people learn to ignore is
+worse than no score. What is factual is **coverage**: this client has at least
+one record of 7 of the 11 kinds you document. That sentence is true, it carries
+its own denominator, and the grid shows the four empty cells behind it so the
+number can be acted on rather than argued with. Decision 20.
+
+**The empty cells are the feature.** Every other view in Helm shows what is
+there; this one is worth opening because it shows what is not — so a gap renders
+as a dash styled to be found, a count links through to the category it came
+from, and the row says how many kinds are missing.
+
+**No traffic lights.** A red/amber/green threshold on a coverage percentage is
+an invented constant pretending to be a judgement — there is no answer to "is
+70% bad" that holds across MSPs — and `v_client_health` already owns
+red/amber/green for something that IS defined, expiry severity.
+
+**Field-level completeness is deliberately absent,** and decision 8 is why: a
+flexible record's stored `data` has every secret field removed by the splitter,
+so a naive "fields filled / fields defined" under-reports by exactly the number
+of secret fields on every record, always. Doing it properly means excluding the
+version's `secret_fields` pointers — real work, a different measure, and
+documentation health is group I's subject.
+
+**NO MIGRATION, AND THE RESERVATION IS RELEASED.** The plan reserved "0670
+(materialised counts, if needed)". They are not needed, on measurement rather
+than optimism. Against a synthetic estate of 404 clients and 60,009 asset nodes:
+
+| query | time |
+| --- | --- |
+| the whole tenant, one grouped pass | 430 ms |
+| the same aggregate as superuser, no RLS | 40 ms |
+| the flexible arm as two UNIONed aggregates instead | 997 ms |
+| **fifty clients, the shape that shipped** | **79 ms** |
+
+So the grid asks for one page of clients rather than all of them, which is both
+fast enough and simply correct — the query matches the screen. A
+trigger-maintained counter table would have been a second source of truth to
+keep honest, for a page that is now 79 ms.
+
+**THE 10× BETWEEN THE FIRST TWO ROWS IS NOT THIS GRID'S, AND IS WORTH
+SOMEBODY'S ATTENTION.** `helm.org_in_scope(organization_id)` and
+`helm.internal_visible(is_internal_only)` are STABLE SQL functions carrying
+`SET search_path`, and **a SET clause makes a SQL function un-inlinable** — so
+each is a real function call, twice per row, 120,018 calls for one grid.
+Verified directly rather than inferred: an identical two-line function with the
+SET clause plans as `Filter: probe_with_set(organization_id)` where the same
+function without it plans as `Filter: (organization_id IS NOT NULL)`.
+
+Every RLS-filtered aggregate in the product pays this, including the dashboard's
+counter strip. It is **reported and not changed**: removing a search_path pin
+from a function that every policy calls is a security decision about hardening
+against search_path attacks, it would change the cost and safety profile of
+every policy in the schema at once, and G does not need it. It wants its own
+look, with a decision taken deliberately.
+
+**Columns come from `ORG_CATEGORIES`,** so the grid names things exactly as the
+sidebar does — "Domain Tracker", not "Ssl certificate" — and a category added
+there appears here with no second list to remember. The tenant's own flexible
+types follow, and only the ones that are active AND have a published version: a
+type nobody can create records of is a draft, not a gap, and a retired type
+should stop being measured rather than start reading zero.
+
+`documents`, `contacts` and `locations` are absent because they are not
+`asset_node` rows and this aggregate counts nodes. They are real documentation
+and a later pass could add them from their own tables; noted here rather than
+left as a silent omission.
+
+**Tests: 15 integration, 13 unit, 3 page rows and 2 value assertions. 13
+sabotages, 11 caught immediately and 2 not** — both real gaps in my tests,
+both now closed:
+
+- **Dropping the `ORDER BY` from the client page query broke nothing.** The
+  fixture inserts internal, Acme, Globex, which is already the order the test
+  asserted — so it passed on heap order alone. The companion "does not repeat or
+  skip a client across pages" test was worse than useless here: it compared
+  paginated reads against the *same function* unpaginated, so a shared ordering
+  bug cancelled out on both sides. There is now a fourth client whose name sorts
+  first and which is inserted last, so insert order and expected order disagree.
+- **Dropping `deleted_at IS NULL` broke nothing,** because the fixture has
+  nothing soft-deleted. Unlike F2's membership check, RLS is *not* doing this
+  one: `organization_rls_select` is `tenant_id = … AND org_in_scope(id)` and
+  says nothing about deletion, so that predicate is the only thing keeping a
+  deleted client off the grid. Now tested in both the rows and the total.
+
 ## Decisions
 
 The questions this document opened with have been answered. Recorded here
@@ -1155,6 +1251,53 @@ is how the same argument gets had twice.
     predicate can still tell a bare key from a correct one — because a NOT
     EXISTS passes both when the schema is clean and when the question is broken,
     and that is the whole reason this went unnoticed.
+
+20. **Coverage, not completeness — and the plan already said so (G).** The
+    summary table asked for "a per-type/per-client coverage query", and the
+    word was load-bearing. A cell is a count of records; a row's badge is "at
+    least one record of N of the M kinds you document". Neither claims a client
+    is M-minus-N records short of complete, because Helm cannot see what exists
+    in the world — only what has been written down — and a client with no ISP
+    circuit is not an incomplete record.
+
+    Three consequences, each of which could have gone the other way:
+
+    - **A column counts as covered on one record, not on a threshold.** "At
+      least one exists" is the only claim the data supports.
+    - **There are no traffic lights.** Any red/amber/green cutoff on a coverage
+      percentage is an invented constant, and `v_client_health` already owns
+      those three words for expiry severity, which is defined.
+    - **The denominator is on screen.** The badge reads "7/11 · 64%", not
+      "64%", so the number explains itself and the empty cells beside it are
+      the thing to act on.
+
+    What this gives up: a client who genuinely has no ISP circuit shows a gap
+    they cannot close. The alternative — letting a tenant mark which kinds each
+    client *should* have — is a real feature with a table and a screen behind
+    it, and it is the right way to close that, not a guess dressed as a score.
+    Recorded as the obvious follow-up rather than built.
+
+21. **The RLS helpers cost 10× on an aggregate, and that is reported rather
+    than fixed (G).** Measured while deciding whether G needed materialised
+    counts: the same grouped count over 60,009 asset nodes is 40 ms as
+    superuser and 430 ms under RLS.
+
+    The cause is not the policy's logic but its packaging.
+    `helm.org_in_scope()` and `helm.internal_visible()` are STABLE SQL
+    functions carrying `SET search_path`, and a SET clause makes a SQL function
+    un-inlinable, so each becomes a real function call per row — 120,018 calls
+    for one grid. Proven directly: an identical two-line function with the SET
+    clause plans as `Filter: probe_with_set(organization_id)`, and without it
+    as `Filter: (organization_id IS NOT NULL)`.
+
+    Every RLS-filtered aggregate pays this, the dashboard's counter strip
+    included, so the upside of removing those pins is broad. So is the
+    exposure: the `SET search_path` on a function every policy calls is
+    hardening against search_path attacks, and dropping it changes the safety
+    profile of the entire schema at once. That is a decision to take
+    deliberately, with its own look at what each function can reach, and not a
+    thing to slip into a group about a grid. G reaches 79 ms by asking for one
+    page of clients, which it should do regardless.
 
 Two further decisions taken at the same time:
 

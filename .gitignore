@@ -30,7 +30,12 @@ helm-master-key*
 # misc
 .DS_Store
 *.log
-coverage/
+# ANCHORED, and it has to be. `coverage/` matches a directory of that name at
+# ANY depth, which silently swallowed src/lib/coverage and the /coverage route
+# when group G added them — the files were on disk, the suite was green, and
+# `git status` showed nothing. The pattern only ever meant the test-coverage
+# report, which a runner writes to the repo root.
+/coverage/
 .vscode/
 .idea/
 
