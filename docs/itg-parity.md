@@ -36,7 +36,7 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 | 3 | Per-client sidebar, collapsible, counts | **Exists** | `shell/sidebar.tsx`, `src/lib/nav/org-categories.ts`, collapse persisted per browser |
 | 3 | Core asset entries | **Exists** | 16 categories incl. Domain Tracker, SSL Tracker, Locations, Networks, Passwords. Only "Checklists" absent — see #8 |
 | 3 | Apps & Services in sidebar | **Exists** | Tenant's own `flexible_asset_type` rows with their configured icons — which a person can now create, as of C |
-| 3 | "Customize Sidebar" link | **Missing** | See #4 |
+| 3 | "Customize Sidebar" link | **Exists** | At the foot of the drawer, below "More" — group D |
 | 3 | Quick Notes, inline | **Exists** | `organization.quick_notes`, `components/notes-card.tsx` |
 | 3 | Credential Strength + buckets | **Exists** | `components/client-widgets.tsx` — four buckets from `v_secret_metadata.strength_score`, bucketed by `lib/ui/strength.ts`. A `Strength` filter on the Credentials section reaches the rows behind each count |
 | 3 | Documentation Health ring | **Missing** | `client_health` widget is a different measure; "not viewed recently"/"stale" needs defining |
@@ -47,7 +47,7 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 | 3 | Upcoming Expirations + due tag | **Exists** | "Expiring" section, `expiration` table, `criticality` |
 | 3 | Locations | **Exists** | "Sites" section |
 | 3 | Activity Feed | **Exists** | `listClientActivity()` on the client page, `organization_id`-scoped. Distinguishes "no activity" from "no `audit:read`" |
-| 4 | Customize Your Sidebar | **Missing** | No table, no page. `user_dashboard.widgets` is the precedent to copy |
+| 4 | Customize Your Sidebar | **Exists** | Group D: `user_sidebar` + `tenant_sidebar_default` (migration 0620), one dialog for both scopes. The `secondary` flag became the default rather than the only answer |
 | 5 | Flexible/custom asset types | **Exists** | Schema was always complete and versioned. Group C added the authoring screen (`/settings/asset-types`), the field builder (`lib/flexible/fields.ts`), and the three routes it needed: `GET`/`PATCH` on one type and `POST .../versions` to publish. C2 added the record form itself, the record `PATCH` route and the `flexible_asset` rendering path the asset page never had |
 | 6 | Assets completion grid + % badges | **Missing** | Needs a per-type/per-client coverage query |
 | 6 | Per-client completion scores | **Missing** | `client_health` widget is adjacent, not the same |
@@ -144,7 +144,7 @@ and PR.
 | **B** | Client-page widgets from data already stored: Credential Strength buckets, Popular Credentials, Recently Updated, Recently Viewed (org-scoped), Activity Feed | none | No schema at all. Four widgets out of existing columns and `audit_log` |
 | **C** | Flexible asset **type authoring UI** — create/edit a type, its fields, icon, colour | none | Unblocks the documentation model. The engine exists; nobody can drive it. Needed three API routes too — see below |
 | **C2** | Records: the schema-driven **record** form behind the dead `+ New` button, a record `PATCH` route, and the `flexible_asset` rendering path `/assets/[nodeId]` never had | none | C lets a type be defined. Without this a record of one cannot be created, cannot be corrected, and renders none of its fields |
-| **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link | 0620 | Follows the dashboard pattern; small and self-contained |
+| **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link — **landed** | 0620 | Follows the dashboard pattern; small and self-contained |
 | **E** | Profile/preferences: user timezone, theme, side-panel toggle, first/last name, MFA recovery token | 0630 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
 | **F** | Checklists: `assigned_to` + `due_at` on both step tables, My Tasks under Personal | 0640 | Delivers half of the Personal section by extending SOPs |
 | **G** | Global section: completion grid with % badges, per-client completion scores | 0650 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
@@ -470,6 +470,66 @@ template their role may not read. RLS permits the row (`flexible_asset_secret`
 is scoped to the record, not to the template), so nothing would have refused it.
 The join makes one policy decide both halves of the page.
 
+### Group D — a sidebar somebody can arrange (migration 0620)
+
+The drawer's sixteen categories were split into a primary eight and a "More"
+disclosure by a hardcoded `secondary` flag. A reasonable guess at what a
+technician reaches often — and the same guess for an MSP whose work is networks
+as for one whose work is licence renewals. There was no table, no page, and the
+"Customize Sidebar" link the parity list asks for had nowhere to go.
+
+**The split is now a list somebody owns.** The categories they name are the
+primary section, in their order; everything else falls through to "More", which
+holds *every* remaining category, so nothing a person removes becomes
+unreachable. Removing something hides it from the first glance; it does not take
+it away.
+
+**`secondary` kept its job and lost its monopoly.** `DEFAULT_SIDEBAR` is derived
+from the flag, so somebody who has never touched the control sees precisely the
+drawer they saw before this change. Promoting a category in the registry now
+changes the default and does not move it for anybody who has already chosen.
+
+**Copied from `user_dashboard`, deliberately, down to the shape of the
+validator.** 0370 chose jsonb over a `(category, position)` table because a
+reorder would otherwise be a delete-and-reinsert of a list the database never
+reasons about, and 0530 is the migration that widens such a list when the
+interface grows. Both apply here unchanged, so a reader who knows one now knows
+both. `reorder()` is imported from the dashboard's module rather than copied —
+its own comment names the off-by-one a second copy grows.
+
+**Three levels, and a missing row is not an empty one.** A user's own row wins,
+then the tenant default, then the code. Somebody who emptied their drawer has
+expressed a preference, so `[]` does *not* fall through — if it did they would
+watch the control appear to do nothing, repeatedly. `DELETE` on the user route
+removes the row rather than storing a copy of the default, which is what keeps a
+later change by an administrator reaching them.
+
+**Not in `tenant.settings`.** `PATCH /api/tenant`'s header says why `settings` is
+not settable through a generic endpoint: it is a jsonb bag several features read,
+and a caller patching the whole object overwrites an invariant it never knew
+about. A feature with a rule of its own gets a table with that rule on it.
+
+**No new permission.** The tenant default is gated on `tenant:write`, which only
+`super_admin` holds, named in the route *and* in the RLS policy so the two cannot
+drift. The settings page reads the same grant it already read for the rename form
+— which is why that field is now `can_write_tenant` rather than `can_rename`: two
+cards reading one permission.
+
+**One deliberate asymmetry in the RLS.** `tenant_sidebar_default` is readable by
+anyone in the tenant and writable only with `tenant:write`, so it does *not* use
+`helm.apply_tenant_rls(..., false)`. That predicate is `is_tenant_wide()`, which
+would hide the row from exactly the client-side roles whose drawer is supposed to
+render from it: they would silently get the code default, and an administrator
+would have set a default that quietly did not apply to half their users. Nothing
+in the row is sensitive to read — it is a list of slugs already in the shipped
+source.
+
+**Flexible asset types are not customisable here,** and that is a decision rather
+than an omission: they are tenant data, so they cannot appear in an IMMUTABLE
+validator's literal list, and the drawer already lists the ones with at least one
+record. "Do I want this in my sidebar" is already answered by whether anything is
+documented under it.
+
 ## Decisions
 
 The four questions this document opened with have been answered. Recorded here
@@ -584,6 +644,23 @@ only in a conversation gets re-litigated.
     row is listed to: the arm joins through `flexible_asset_type`, whose 0200
     policy admits only tenant-wide actors, so a client-side role sees nothing
     from it — see the note in the C2 section for what that join prevents.
+
+12. **A missing sidebar row and an empty one are different answers (D).** The
+    fallback chain is decided by whether a ROW exists, never by whether the
+    stored array is empty. An empty layout is somebody who wants the drawer to
+    be nothing but "More", and treating it as "unset" would make the control
+    appear broken to the one person who used it hardest. The same reasoning
+    makes `DELETE` remove the row rather than write the default into it: a
+    stored copy would silently stop tracking an administrator's later change,
+    and nobody would be able to tell.
+
+13. **The tenant default is read-open and write-gated (D).** Readable by every
+    role in the tenant, because the drawer renders from it for client-side
+    users too; writable only with `tenant:write`, named in the route and in the
+    policy. This is why `tenant_sidebar_default` does not use the generic
+    tenant-scoped policy set, whose read predicate would have hidden the row
+    from the very roles it exists to serve. No new permission key; no change to
+    any existing policy.
 
 Two further decisions taken at the same time:
 
