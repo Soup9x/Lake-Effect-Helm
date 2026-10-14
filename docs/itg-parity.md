@@ -48,7 +48,7 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 | 3 | Locations | **Exists** | "Sites" section |
 | 3 | Activity Feed | **Exists** | `listClientActivity()` on the client page, `organization_id`-scoped. Distinguishes "no activity" from "no `audit:read`" |
 | 4 | Customize Your Sidebar | **Missing** | No table, no page. `user_dashboard.widgets` is the precedent to copy |
-| 5 | Flexible/custom asset types | **Exists** | Schema was always complete and versioned. Group C added the authoring screen (`/settings/asset-types`), the field builder (`lib/flexible/fields.ts`), and the three routes it needed: `GET`/`PATCH` on one type and `POST .../versions` to publish. A record-creation form is C2 |
+| 5 | Flexible/custom asset types | **Exists** | Schema was always complete and versioned. Group C added the authoring screen (`/settings/asset-types`), the field builder (`lib/flexible/fields.ts`), and the three routes it needed: `GET`/`PATCH` on one type and `POST .../versions` to publish. C2 added the record form itself, the record `PATCH` route and the `flexible_asset` rendering path the asset page never had |
 | 6 | Assets completion grid + % badges | **Missing** | Needs a per-type/per-client coverage query |
 | 6 | Per-client completion scores | **Missing** | `client_health` widget is adjacent, not the same |
 | 6 | Cross-client expirations, filterable | **Exists** | `/expirations` page + `/api/expirations`, filters by severity and org |
@@ -143,7 +143,7 @@ and PR.
 | **A** | Clients list parity: reuse `data-table`/`column-menu`/`filter-toolbar` on `/organizations`; add Recents + Favorites strip; `organization.type` enum; surface Status and Sync Status | 0600 | Pure reuse of components already written. Highest visible change per line of code |
 | **B** | Client-page widgets from data already stored: Credential Strength buckets, Popular Credentials, Recently Updated, Recently Viewed (org-scoped), Activity Feed | none | No schema at all. Four widgets out of existing columns and `audit_log` |
 | **C** | Flexible asset **type authoring UI** — create/edit a type, its fields, icon, colour | none | Unblocks the documentation model. The engine exists; nobody can drive it. Needed three API routes too — see below |
-| **C2** | The schema-driven **record** form, replacing the dead `+ New` button | none | C lets a type be defined; without this a record of one still cannot be created through the UI |
+| **C2** | Records: the schema-driven **record** form behind the dead `+ New` button, a record `PATCH` route, and the `flexible_asset` rendering path `/assets/[nodeId]` never had | none | C lets a type be defined. Without this a record of one cannot be created, cannot be corrected, and renders none of its fields |
 | **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link | 0620 | Follows the dashboard pattern; small and self-contained |
 | **E** | Profile/preferences: user timezone, theme, side-panel toggle, first/last name, MFA recovery token | 0630 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
 | **F** | Checklists: `assigned_to` + `due_at` on both step tables, My Tasks under Personal | 0640 | Delivers half of the Personal section by extending SOPs |
@@ -415,7 +415,60 @@ something. Verified against the running database.
 
 **Still missing, deliberately, as C2:** the `+ New` button on a flexible asset
 type's page is dead and there is no record form anywhere, so a type can now be
-defined but a record of it still cannot be created through the UI.
+defined but a record of it still cannot be created through the UI. Landed in
+C2, below.
+
+### Group C2 — records: create, read, edit (no migration)
+
+Scoped as "fix the dead `+ New` button". Reconnaissance found three gaps, not
+one, and the group was widened to cover all three rather than ship a button
+that creates records nobody can read:
+
+| Gap | Was | Now |
+| --- | --- | --- |
+| Create | `+ New` was a styled element with no handler; the only way to a record was an API call | `FlexibleRecordForm`, a form over `schemaToFields()` of the type's current published version |
+| Edit | No `PATCH` for a record existed anywhere, so a typo was permanent | `PATCH /api/flexible-assets/records/[recordId]` |
+| Read | `DETAIL_TABLES` on `/assets/[nodeId]` had no `flexible_asset` entry, so `detailFor()` returned `{}` and **every record in the product rendered "No type-specific detail recorded" over the whole of its contents** | a `flexible_asset` branch that decodes the record against its pinned schema, labels each field, and lists its secret fields in the Credentials card |
+
+The third was the one worth widening for. It is not a missing nicety: a record's
+entire payload was invisible, which makes "create a record" a feature that
+writes data nobody can read back.
+
+**One field model, two screens.** The form is generated from
+`src/lib/flexible/fields.ts` — the same module the type editor writes with — so
+a field added in Settings appears on the record form with no second
+implementation of anything. `toDocument()` is the only new logic: HTML inputs
+produce strings, Ajv runs with `coerceTypes: false` on purpose, so something has
+to convert, and the place that knows each field's kind is the right one. It is
+unit-tested differentially against the real schema the real builder emits.
+
+**Errors come from the server, next to the field.** The API returns
+`details.fields` as JSON Pointers, so the form renders each message against the
+control it names rather than reimplementing a second validator in the browser.
+A pointer the form does not recognise falls back to the form-level message, so
+nothing is swallowed.
+
+**A secret box is always blank, and blank means unchanged.** A record's secret
+values live in `flexible_asset_secret` and are never sent to a browser. See
+decision 10 — without the `heldSecrets` hand-off, `required` on a secret field
+makes every edit fail unless the technician retypes the password.
+
+**What C2 deliberately does not do.** It never deletes a `flexible_asset_secret`
+row. A field that stops being secret in a later version leaves its stored secret
+attached to the record, where it stays listed in the Credentials card under its
+own name rather than being quietly orphaned or removed. Deleting stored
+encrypted material is a data-retention decision, not a side effect of a template
+edit, and `flexible_secret_secret_fk` is `ON DELETE RESTRICT` precisely so that
+it cannot happen by accident.
+
+**One thing the tests caught that review would not have.** The asset page's new
+secrets arm joins through `flexible_asset_type`, which is tenant-scoped and NOT
+organisation-scoped (0200) — so a client-side role sees nothing from it. Without
+that join the arm would have listed a flexible record's secret to a client
+administrator, and the secret's label is `"<template> — <field>"`, which names a
+template their role may not read. RLS permits the row (`flexible_asset_secret`
+is scoped to the record, not to the template), so nothing would have refused it.
+The join makes one policy decide both halves of the page.
 
 ## Decisions
 
@@ -484,6 +537,53 @@ only in a conversation gets re-litigated.
    pairs believed compatible. One corollary is pinned by a test: reverting to an
    earlier schema is NOT automatically compatible, because removing a property
    rejects any record that carries it.
+
+9. **An edit validates against the type's CURRENT version, not the record's
+   pinned one (C2).** Pinning exists so a record is never retroactively
+   invalid, which is a statement about READING it. Writing is a new act and
+   belongs under the current rules — and validating against the pinned version
+   would strand a record on its original schema, because a field added since
+   could never be filled in: the schema that would accept it is not the one
+   being checked against. So a successful edit IS the migration. It moves
+   `type_version_id` forward, sets `validated_at` and clears `needs_migration`,
+   which turns that flag from a permanent mark into something a technician can
+   act on — open the record, fill in what the new schema wants, save. Nothing
+   else in Helm clears it. The corollary is that a record whose template
+   dropped a field cannot be saved until the stale key goes, which is exactly
+   what `additionalProperties: false` means; the form stops rendering the field,
+   so the save stops sending it. READING still uses the pinned version, because
+   that is the schema with a label for every key actually in `data` — rendering
+   against the current version would silently drop a field removed since, and
+   show a reader less than the record contains.
+
+10. **A stored secret counts as present for `required` (C2).** A record's secret
+    values live in `flexible_asset_secret`, never in `data`, so the form cannot
+    prefill them and a blank box has to mean "unchanged". But `required` on a
+    secret field then fails every edit that does not retype the password, and a
+    form that demands a credential to fix a typo in a hostname is a form people
+    work around. `PATCH` reads the record's existing `flexible_asset_secret`
+    rows and passes them as `heldSecrets`, which satisfies `required` without
+    putting anything in `secrets` — nothing is rotated and nothing is read.
+    **This is the per-secret query decision 8 rejected, and the distinction
+    holds:** there it was one query per record across potentially hundreds of
+    records, to compute a flag; here it is one query for the single record being
+    edited, which is already identified. A supplied value rotates through
+    `rotateInTransaction` so the old version stays readable; an omitted one is
+    untouched. Creating is NOT exempt: with no stored value to stand in for,
+    `required` means required. The reinstatement is filtered to fields the
+    version being validated against still declares secret — a record keeps its
+    stored secret when a later version turns that field back into an ordinary
+    one, and standing the placeholder in there would validate the
+    sixteen-character stand-in instead of the value the technician typed.
+
+11. **Rendering a record's secret fields is not a new disclosure (C2).** The
+    asset page lists a record's secret fields in the Credentials card, with the
+    same `RevealButton` a credential's password gets, because it is the same
+    material written through the same audited path and `secret:reveal` is the
+    same gate. No RLS and no permission changed. What DID need care is who the
+    row is listed to: the arm joins through `flexible_asset_type`, whose 0200
+    policy admits only tenant-wide actors, so a client-side role sees nothing
+    from it — see the note in the C2 section for what that join prevents.
 
 Two further decisions taken at the same time:
 

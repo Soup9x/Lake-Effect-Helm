@@ -118,7 +118,7 @@ they can verify the file survived whatever channel they hand it over on.
 | `/dashboard` | What needs attention today, across every client. Two banners only — expired items and exports awaiting approval — because a dashboard that surfaces eight kinds of warning trains people to scroll past all of them. |
 | `/organizations` | Every client, with counts from independently RLS-scoped subqueries rather than a join that would fan out. |
 | `/organizations/:id` | One client: five widgets, then sites, contacts, expiring items, credentials with reveal controls, assets and documents. |
-| `/assets/:nodeId` | One asset, its type-specific detail, its **dependencies**, and its credentials. The dependency list is why this page exists: "what breaks if I take this offline" is answered by the graph, not by a description field somebody wrote in 2021. |
+| `/assets/:nodeId` | One asset, its type-specific detail, its **dependencies**, and its credentials. The dependency list is why this page exists: "what breaks if I take this offline" is answered by the graph, not by a description field somebody wrote in 2021. A flexible asset record renders here too, against the schema version it is pinned to — see *Filling in an asset type*. |
 | `/expirations` | Certificates, domains, warranties, licences and contracts in one list, filtered by a severity that is computed at read time. |
 | `/search` | A plain GET form, not live filtering — a keystroke-per-request design puts a partial hostname on the wire and in the server log on every character. |
 | `/exports` | The ledger and the approval queue. Readable by anyone who may create an export, so "who exported this client's credentials and who approved it" needs no administrator. |
@@ -150,6 +150,49 @@ and with four hundred it is four hundred rows somebody has to look at.
 the old one accepted, nothing is flagged. A record's `type_version_id` is not
 moved, because it records which schema the data was written against — and
 0240's indexing trigger reads that version's `searchable_fields`.
+
+### Filling in an asset type
+
+`FlexibleRecordForm` is generated from `schemaToFields()` over the type's
+current published version, so the two screens share one field model and there
+is no second place a field's kind, label or help text is decided. It is the
+`+ New` button on a type's page and the "Edit fields" control on a record's own
+page; those are the same component in two modes.
+
+`toDocument()` is the only logic the form adds, and it exists because Ajv runs
+with `coerceTypes: false` while an HTML input produces nothing but strings.
+Three rules, each with a failure mode behind it: a blank optional field is
+**omitted** rather than sent as `""` (an empty string fails `format: 'email'`
+and `format: 'date'`, so sending it reports "not a valid address" for a box
+nobody was required to fill in); a blank **secret** is omitted because blank
+means *unchanged*; a boolean is **always** sent, because omitting `false` makes
+"no" and "unanswered" the same document.
+
+**Validation errors are the server's.** The record routes return
+`details.fields` as JSON Pointers, and the form renders each message against
+the control it names. There is no second validator in the browser — `required`
+is marked for the browser's own benefit and the schema remains the authority.
+
+**Reading uses the pinned version; editing uses the current one.** The pinned
+schema is the one with a label for every key actually in `data`, so rendering
+against it cannot drop a field the template removed since. A save is checked
+against the current version, so a successful edit moves `type_version_id`
+forward and clears `needs_migration` — which is what makes that flag
+actionable rather than permanent. A field the new version no longer declares
+disappears from the form, so the save stops sending it, which is what
+`additionalProperties: false` requires.
+
+**A secret field's box is always blank.** Its value lives in
+`flexible_asset_secret` and never reaches a browser. `PATCH` reads the record's
+existing secret rows and treats them as satisfying `required`, so editing a
+hostname does not demand the password beside it; a value typed into the box
+rotates the stored secret through the audited path, leaving the previous
+version readable. A record's secret fields are listed in the Credentials card
+with the same reveal control a credential's password gets — and that query
+joins through `flexible_asset_type`, which is tenant-scoped and not
+organisation-scoped (0200), so a client-side role is shown nothing from it. The
+secret's label is `"<template> — <field>"`, so without that join the page would
+name a template the reader's role may not read.
 
 ### The client page's widgets
 
