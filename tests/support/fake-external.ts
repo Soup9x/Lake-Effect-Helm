@@ -56,6 +56,45 @@ function certificate(commonName: string, days: number): Material {
   };
 }
 
+/**
+ * Listen, and REJECT if the bind fails.
+ *
+ * `new Promise((resolve) => server.listen(port, host, resolve))` is the obvious
+ * spelling and it is a trap: a failed bind emits an 'error' event with no
+ * listener, which takes the process down and leaves the promise unsettled. In
+ * vitest that surfaces as "Test timed out in 30000ms" pointing at the test
+ * rather than at the bind — which is exactly how an EACCES on port 443 cost a
+ * CI round here, telling me nothing.
+ *
+ * The remedy is in the message because the remedy is not obvious either: ports
+ * below 1024 need a privileged process or a lowered
+ * net.ipv4.ip_unprivileged_port_start, and CI sets the latter (see the database
+ * job in .github/workflows/ci.yml).
+ */
+async function listenOrExplain(server: Server | TcpServer, port: number): Promise<AddressInfo> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: NodeJS.ErrnoException) => {
+      server.removeListener('listening', onListening);
+      reject(new Error(
+        `could not bind 127.0.0.1:${port} (${error.code ?? error.message})`
+        + (error.code === 'EACCES' && port < 1024
+          ? ' — a port below 1024 needs root or a lowered'
+            + ' net.ipv4.ip_unprivileged_port_start; see the database job in'
+            + ' .github/workflows/ci.yml'
+          : ''),
+      ));
+    };
+    const onListening = () => {
+      server.removeListener('error', onError);
+      resolve();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, '127.0.0.1');
+  });
+  return server.address() as AddressInfo;
+}
+
 /** A TLS listener that serves a known certificate and nothing else. */
 export class FakeTlsHost {
   private constructor(
@@ -86,8 +125,7 @@ export class FakeTlsHost {
      * inventing a port parameter so a test could pass would be widening the
      * product to suit the test. This container runs as root, so 443 binds.
      */
-    await new Promise<void>((resolve) => server.listen(options.port ?? 0, '127.0.0.1', resolve));
-    const address = server.address() as AddressInfo;
+    const address = await listenOrExplain(server, options.port ?? 0);
     return new FakeTlsHost(server, material, '127.0.0.1', address.port);
   }
 
@@ -176,8 +214,7 @@ export class FakeRdap {
       },
     );
 
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address() as AddressInfo;
+    const address = await listenOrExplain(server, 0);
     return new FakeRdap(
       server, material, `https://127.0.0.1:${address.port}`, requests,
     );
@@ -212,8 +249,7 @@ export class FakeSilentPort {
     // Accept the socket and hold it: no TLS, no bytes, no close.
     const held: Socket[] = [];
     const server = createTcpServer((socket) => { held.push(socket); });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address() as AddressInfo;
+    const address = await listenOrExplain(server, 0);
     return new FakeSilentPort(server, held, '127.0.0.1', address.port);
   }
 

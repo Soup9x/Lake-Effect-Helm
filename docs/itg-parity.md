@@ -997,6 +997,15 @@ accepts and says nothing — which is also what made the timeout path testable a
 all. `FakeSilentPort.stop()` has to destroy held sockets: `server.close()` waits
 for them, so a 400 ms probe timeout produced a 30 s test timeout.
 
+**And one more thing the environment taught, after CI said so.** The
+certificate test serves TLS on 443 because the worker probes 443, which works
+as root and is EACCES on a GitHub runner — so the first CI round failed with a
+bare 30-second timeout pointing at the test, naming neither the port nor the
+permission. Both halves are fixed: the database job lowers
+`net.ipv4.ip_unprivileged_port_start`, and the fixture servers now reject on a
+failed bind with the errno and the remedy in the message, because all three had
+the same resolve-only `listen` that turns a bind error into a hang. Decision 25.
+
 **The RDAP client refuses to be redirected into clear text.** Redirects within
 https are followed, because forwarding is the entire purpose of a redirector
 like rdap.org; three hops maximum; and a hop whose scheme is not https throws
@@ -1464,6 +1473,35 @@ is how the same argument gets had twice.
     red is how a status column stops being read. 'unsupported' covers both no
     expiry event and a 404 for the name, and the card says it will not be
     retried differently.
+
+25. **CI lowers the unprivileged port floor rather than the probe gaining a
+    port parameter (H).** `observeCertificate()` connects to 443 and the worker
+    passes no port, because that is where TLS lives and `ssl_certificate`
+    records no port — Helm does not document where a certificate is installed as
+    a reachable address. So the integration test that proves the worker writes
+    an observed certificate has to serve one on 443, which needs privilege the
+    container I develop in has (root) and a GitHub runner does not.
+
+    Three ways out, and the first two are worse. Threading a port through the
+    worker so the test could pass is widening the product to suit the test, and
+    the comment explaining it would be a lie about why the parameter exists.
+    Dropping the assertion loses integration coverage of exactly the write path
+    that **shipped broken once in this group** — the RLS bug above — and the
+    unit suite cannot replace it, because the unit suite tests the probe and the
+    bug was in the worker.
+
+    So the database job sets `net.ipv4.ip_unprivileged_port_start=443`, scoped
+    to an ephemeral container, with the reasoning in the workflow where somebody
+    hits it. A contributor who cannot do that gets a legible failure rather than
+    a mystery: `FakeTlsHost` now rejects on a failed bind, naming the port, the
+    errno and the remedy.
+
+    That second half was its own defect and cost the CI round that found this.
+    `new Promise((resolve) => server.listen(port, host, resolve))` is the
+    obvious spelling and it is a trap — a failed bind emits an unhandled
+    'error', the promise never settles, and vitest reports "Test timed out in
+    30000ms" against a line that mentions neither a port nor a permission. The
+    same resolve-only pattern was in all three fixture servers.
 
 Two further decisions taken at the same time:
 

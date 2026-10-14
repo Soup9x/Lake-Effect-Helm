@@ -246,6 +246,22 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # The certificate probe connects to 443 and nothing else, because that is
+      # where TLS lives and `ssl_certificate` records no port — so the test that
+      # proves the refresh worker writes an observed certificate has to serve
+      # one on 443. These steps run as the runner's unprivileged user, where
+      # binding it is EACCES.
+      #
+      # Lowering the floor rather than giving the test a port parameter: adding
+      # one to observeCertificate() so a test could pass would be widening the
+      # product to suit the test, and the alternative — dropping the assertion —
+      # loses integration coverage of exactly the write path that shipped broken
+      # once in this group (see docs/itg-parity.md, group H). Scoped to an
+      # ephemeral container, and tests/support/fake-external.ts names this step
+      # in its error message if the bind is ever refused anyway.
+      - name: Allow the fixture to serve TLS on 443
+        run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443
+
       # First, because it rebuilds the database from db/sql/*.sql and that is
       # what creates the five runtime roles the other suites connect as.
       - name: SQL security suite

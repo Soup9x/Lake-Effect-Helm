@@ -306,10 +306,19 @@ describe('when the outside world will not answer', () => {
 describe('a certificate', () => {
   it('records what the server actually serves, beside what was recorded', async () => {
     /*
-     * On 443, because the probe takes no port — a certificate's reachable
-     * address is its common name, and adding a port parameter so a test could
-     * pass would be widening the product to suit the test. So the fixture's
-     * common_name is pointed at 127.0.0.1 and the server binds 443.
+     * On 443, because the WORKER takes no port — a certificate's reachable
+     * address is its common name, `ssl_certificate` records no port, and
+     * threading one through so a test could pass would be widening the product
+     * to suit the test. So the fixture's common_name is pointed at 127.0.0.1
+     * and the server binds 443.
+     *
+     * WHICH NEEDS PRIVILEGE, and that cost a CI round: these tests run as root
+     * in the container I develop in and as an unprivileged user on a GitHub
+     * runner, where the bind is EACCES. CI now lowers
+     * net.ipv4.ip_unprivileged_port_start (see the database job in
+     * .github/workflows/ci.yml) and FakeTlsHost says so by name if a bind is
+     * ever refused again — the first failure was a bare 30-second timeout
+     * pointing at this line, which named neither the port nor the cause.
      */
     const host = await FakeTlsHost.start({ commonName: 'serving.test', days: 45, port: 443 });
     servers.push(host);
