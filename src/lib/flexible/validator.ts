@@ -43,6 +43,18 @@ export interface ValidationFailure {
 
 export type ValidationResult = ValidationSuccess | ValidationFailure;
 
+export interface ValidateRecordOptions {
+  /**
+   * Pointers whose secret the record already holds, for an EDIT.
+   *
+   * Satisfies `required` without putting anything in `secrets`: the stored
+   * value is untouched and no rotation happens. Pass the record's existing
+   * flexible_asset_secret rows; pass nothing when creating, where there is no
+   * stored value to stand in for and a required secret must be supplied.
+   */
+  heldSecrets?: readonly string[];
+}
+
 /**
  * One Ajv instance, configured once.
  *
@@ -151,6 +163,7 @@ export class FlexibleAssetValidator {
     schema: unknown,
     secretFields: readonly string[],
     input: unknown,
+    options: ValidateRecordOptions = {},
   ): ValidationResult {
     if (typeof input !== 'object' || input === null || Array.isArray(input)) {
       return { ok: false, errors: [{ path: '', message: 'the record must be a JSON object' }] };
@@ -170,7 +183,28 @@ export class FlexibleAssetValidator {
     // Validate the full document — secrets reinstated as placeholder strings —
     // so that `required` on a secret field still means something. A schema that
     // marks the repository password required must reject a record without one.
+    //
+    // A secret the record ALREADY holds counts as present too, and that is what
+    // makes editing possible at all. A stored secret value is not in `data` and
+    // cannot be sent back to the browser, so the form shows a blank box and a
+    // blank box has to mean "unchanged". Without this, every edit to a record
+    // with a required password would fail unless the technician retyped the
+    // password — and a form that demands a credential to fix a typo in a
+    // hostname is a form people work around.
     const forValidation: Record<string, unknown> = { ...data };
+    const declaredSecret = new Set(compiled.secretFields);
+    for (const pointer of options.heldSecrets ?? []) {
+      // ONLY where THIS version still declares the field secret. A record keeps
+      // its stored secret when a later version turns that field back into an
+      // ordinary one — nothing deletes encrypted material on a template edit —
+      // so heldSecrets can name a field the schema now expects a plain value
+      // for. Reinstating the placeholder there would validate the stand-in
+      // instead of what the technician actually typed, and the stand-in is
+      // sixteen characters: a `maxLength: 5` field would refuse a value that
+      // fits, and a bound the real value breaks could slip through.
+      if (!declaredSecret.has(pointer)) continue;
+      forValidation[pointerToKey(pointer)] = SECRET_PLACEHOLDER;
+    }
     for (const [pointer] of secrets) {
       forValidation[pointerToKey(pointer)] = SECRET_PLACEHOLDER;
     }
@@ -247,6 +281,14 @@ export function splitSecrets(
     }
     if (value.length === 0) {
       errors.push({ path: pointer, message: 'a secret field must not be empty' });
+      continue;
+    }
+    if (value === SECRET_PLACEHOLDER) {
+      // The validation placeholder, submitted back. No form populates a secret
+      // box today — they are always blank — but one that did, and echoed what it
+      // was given, would rotate the credential to a publicly known string and
+      // audit it as a deliberate change. Refusing costs nobody a real password.
+      errors.push({ path: pointer, message: 'that is the masked placeholder, not a value' });
       continue;
     }
 
