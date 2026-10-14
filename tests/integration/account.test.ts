@@ -134,7 +134,19 @@ describe('PATCH /api/account', () => {
     asUser(IDS.tech1, 'tech1@northwind.test');
     const response = await patchAccount(patch({ name: 'Jordan Vance' }));
     expect(response.status).toBe(200);
-    expect((await body(response)).account).toEqual({ name: 'Jordan Vance' });
+    /*
+     * The whole account, not just the field that was sent. Group E widened
+     * this response on purpose: the preferences form shows what was saved,
+     * and a reply carrying only the changed key cannot confirm that the
+     * display name is now derived from the halves rather than typed.
+     */
+    expect((await body(response)).account).toEqual({
+      name: 'Jordan Vance',
+      firstName: null,
+      lastName: null,
+      timezone: null,
+      theme: 'system',
+    });
 
     const sql = superuserSql();
     try {
@@ -163,8 +175,19 @@ describe('PATCH /api/account', () => {
   });
 
   it('changes only the caller, whatever else is in the body', async () => {
-    // The function takes the actor from the session context, so there is no
-    // field a caller could add that would redirect it at somebody else.
+    /*
+     * The route scopes its UPDATE with `WHERE id = identity.actorId`, and the
+     * identity is resolved from the session — so there is no field a caller
+     * could add that would redirect it at somebody else.
+     *
+     * The mechanism changed in group E and the property did not. This used to
+     * go through helm.set_my_profile(), which took the actor from
+     * helm.current_actor_id(); it is now a plain scoped UPDATE, which is
+     * confined by that predicate AND by app_user_rls_update. See 0630's header
+     * for why the second lock is worth having, and
+     * tests/integration/preferences.test.ts for the test that proves the
+     * predicate is doing work a `user:write` holder would otherwise escape.
+     */
     const before = await nameOf(IDS.admin1);
 
     asUser(IDS.tech1, 'tech1@northwind.test');

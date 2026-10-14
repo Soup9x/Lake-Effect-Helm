@@ -18,6 +18,46 @@ export function formatDateTime(value: Date | string | null | undefined): string 
   return Number.isNaN(date.getTime()) ? '—' : `${date.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
+/**
+ * UTC, and the reader's own local time beside it.
+ *
+ * THE UTC RULE ABOVE IS NOT BEING RELAXED. "expires 2026-03-01" meaning three
+ * different instants is how a certificate lapses on a Sunday, so a SHARED fact
+ * — an expiry, a rotation due date, an audit timestamp read by whoever
+ * investigates — stays UTC-suffixed and unconverted.
+ *
+ * This is for the other case, the one that header already names when it says
+ * "where local time matters the UI says both": a timestamp about the READER
+ * themselves. "You signed in at 14:30 UTC" is worse than useless to somebody
+ * in Toronto trying to recognise their own session; it is the one place a
+ * person's own zone is the point rather than an ambiguity.
+ *
+ * `zone` null, or a zone this runtime does not know, falls back to plain UTC
+ * rather than throwing. Intl raises a RangeError on an unknown time zone, and a
+ * preference must never be why a page fails to render — the database refuses an
+ * unknown zone on write (0630), so this is the second lock.
+ */
+export function formatDateTimeLocal(
+  value: Date | string | null | undefined,
+  zone: string | null,
+): string {
+  const utc = formatDateTime(value);
+  if (!zone || utc === '—') return utc;
+
+  const date = value instanceof Date ? value : new Date(value as string);
+  try {
+    const local = new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(date);
+    // en-CA gives YYYY-MM-DD, so this reads the same way as the UTC half.
+    return `${utc} · ${local.replace(',', '')} ${zone.split('/').pop()?.replace(/_/g, ' ') ?? zone}`;
+  } catch {
+    return utc;
+  }
+}
+
 /** "in 12 days" / "6 days ago". Day granularity: these are expiry dates. */
 export function relativeDays(days: number): string {
   if (days === 0) return 'today';

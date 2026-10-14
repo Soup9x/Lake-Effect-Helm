@@ -38,9 +38,19 @@
 -- change a colleague's theme. tests/integration/preferences.test.ts pins both
 -- halves of that.
 --
--- set_my_profile() is left exactly as it is. It works, one route calls it, and
--- rewriting a working authentication-adjacent function to prove a point about
--- symmetry is not an improvement.
+-- set_my_profile() IS LEFT IN PLACE AND IS NO LONGER CALLED. PATCH
+-- /api/account now writes every profile field — display name included — in one
+-- scoped UPDATE, because splitting it would make the outcome depend on
+-- statement order: the name trigger below fires on an update of the halves, so
+-- a separate set_my_profile() call afterwards would overwrite the name the
+-- halves had just composed, and before it would be overwritten BY them. One
+-- statement makes "the halves determine the display name when a save includes
+-- them" a structural fact rather than a convention about call order.
+--
+-- The function itself stays. Dropping a granted, working,
+-- authentication-adjacent function is a separate migration with its own risk
+-- and no benefit to this one, and a deployment mid-rollout may still have the
+-- old route calling it.
 --
 -- WHAT IS NOT HERE, and why, so a reader does not look for it:
 --
@@ -154,8 +164,9 @@ CREATE TRIGGER app_user_timezone_known
 --
 --   * It does not fire on INSERT, because the Auth.js adapter owns that
 --     statement and supplies `name` from the IdP profile with no halves.
---   * It does not fire on a plain `name` UPDATE, so helm.set_my_profile()
---     still sets a display name directly and this does not fight it.
+--   * It does not fire on a plain `name` UPDATE, so setting only a display
+--     name — the case for a mononym, or for cleaning up "SMITH, J
+--     (Contractor)" out of a directory import — still works directly.
 --   * It leaves `name` alone when both halves are cleared, rather than
 --     blanking the name an IdP supplied. Clearing the halves says "I do not
 --     want to maintain these", not "I have no name".
