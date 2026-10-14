@@ -9,18 +9,31 @@
  * on this screen" decision in a single readable switch.
  *
  * A BUTTON THAT CANNOT WORK IS NOT RENDERED DISABLED, it is explained. Documents
- * are files, not rows, so Import is absent on that category rather than greyed;
- * SOPs cannot be created through the API at all, so + New is absent there. A
- * disabled control invites somebody to work out what is wrong with their
+ * are files, not rows, so Import is absent on that category rather than greyed.
+ * A disabled control invites somebody to work out what is wrong with their
  * permissions when the answer is that the thing does not exist.
+ *
+ * SOPs USED TO BE THAT CASE and are no longer. + New was absent on that
+ * category because nothing could create one — POST /api/assets excludes `sop`
+ * on purpose, since a procedure's payload is its steps. F1 added POST /api/sops
+ * and NewProcedureForm, so the button now does something.
+ *
+ * WHICH FORM IS NOT DECIDED HERE. createFormFor() in src/lib/nav/org-categories
+ * returns exactly one, and the reason is SOPs: the generic asset form's
+ * condition was "this category has a node_type", which is true of a procedure
+ * too, so two forms opened at once unless a guard said otherwise. A single
+ * answer makes that impossible instead of guarded, and it can be tested without
+ * a DOM.
  */
 import { useState } from 'react';
 import { ImportDialog } from './import-dialog';
 import { NewContactForm } from './new-contact-form';
+import { NewProcedureForm } from '../new-procedure-form';
 import { NewAssetForm } from '../new-asset-form';
 import { NewSecretForm } from '../new-secret-form';
 import { SiteForm } from '../site-form';
 import { Button } from '../ui/button';
+import { createFormFor } from '@/lib/nav/org-categories';
 
 export interface CategoryActionsProps {
   organizationId: string;
@@ -46,6 +59,7 @@ export function CategoryActions({
   sites,
   canCreate,
 }: CategoryActionsProps) {
+  const form = createFormFor(category, nodeType);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
 
@@ -80,28 +94,35 @@ export function CategoryActions({
         them mounted behind a closed dialog would mean three forms holding
         half-typed input nobody can see.
       */}
-      {creating && category === 'contacts' && (
+      {creating && form === 'contact' && (
         <NewContactForm
           organizationId={organizationId}
           open={creating}
           onOpenChange={setCreating}
         />
       )}
-      {creating && category === 'passwords' && (
+      {creating && form === 'secret' && (
         <NewSecretForm
           organizationId={organizationId}
           open={creating}
           onOpenChange={setCreating}
         />
       )}
-      {creating && category === 'locations' && (
+      {creating && form === 'site' && (
         <SiteForm
           organizationId={organizationId}
           open={creating}
           onOpenChange={setCreating}
         />
       )}
-      {creating && nodeType && (
+      {creating && form === 'procedure' && (
+        <NewProcedureForm
+          organizationId={organizationId}
+          open={creating}
+          onOpenChange={setCreating}
+        />
+      )}
+      {creating && form === 'asset' && nodeType && (
         <NewAssetForm
           organizationId={organizationId}
           sites={[...sites]}

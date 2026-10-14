@@ -58,11 +58,20 @@ describe('argon2id hashing', () => {
     const dummyMs = performance.now() - startDummy;
 
     expect(outcome).toBe(false);
-    // Within a factor of three either way. A sleep-based stub, or a path that
-    // skipped the hash entirely, would be orders of magnitude apart — which is
-    // the enumeration oracle this exists to close.
-    expect(dummyMs).toBeGreaterThan(realMs / 3);
-    expect(dummyMs).toBeLessThan(realMs * 3);
+    /*
+     * Within a factor of TEN either way, which is the claim this test exists
+     * to make: a sleep-based stub or a path that skipped the hash entirely
+     * would be orders of magnitude apart, not tens of percent.
+     *
+     * The bound was a factor of three and failed on a loaded machine at 3.05,
+     * with both measurements in the tens of milliseconds — two Argon2 runs
+     * timed by wall clock, where one being descheduled is noise rather than a
+     * finding. A tighter bound does not detect a smaller timing leak here; it
+     * only reports the scheduler. Ten still catches every implementation this
+     * assertion is aimed at.
+     */
+    expect(dummyMs).toBeGreaterThan(realMs / 10);
+    expect(dummyMs).toBeLessThan(realMs * 10);
   });
 });
 

@@ -118,7 +118,8 @@ they can verify the file survived whatever channel they hand it over on.
 | `/dashboard` | What needs attention today, across every client. Two banners only — expired items and exports awaiting approval — because a dashboard that surfaces eight kinds of warning trains people to scroll past all of them. |
 | `/organizations` | Every client, with counts from independently RLS-scoped subqueries rather than a join that would fan out. |
 | `/organizations/:id` | One client: five widgets, then sites, contacts, expiring items, credentials with reveal controls, assets and documents. |
-| `/assets/:nodeId` | One asset, its type-specific detail, its **dependencies**, and its credentials. The dependency list is why this page exists: "what breaks if I take this offline" is answered by the graph, not by a description field somebody wrote in 2021. A flexible asset record renders here too, against the schema version it is pinned to — see *Filling in an asset type*. |
+| `/assets/:nodeId` | One asset, its type-specific detail, its **dependencies**, and its credentials. The dependency list is why this page exists: "what breaks if I take this offline" is answered by the graph, not by a description field somebody wrote in 2021. A flexible asset record renders here too, against the schema version it is pinned to — see *Filling in an asset type* — and a procedure gets its step editor, its published versions and the control that starts a run, see *Writing a procedure, and following one*. |
+| `/runs/:runId` | One checklist run: its steps, where it got to, and who checked each one off. Deliberately not under `/organizations/:id` — a run belongs to the person working through it as much as to the client it is for, which is where F2's My Tasks will link. |
 | `/expirations` | Certificates, domains, warranties, licences and contracts in one list, filtered by a severity that is computed at read time. |
 | `/search` | A plain GET form, not live filtering — a keystroke-per-request design puts a partial hostname on the wire and in the server log on every character. |
 | `/exports` | The ledger and the approval queue. Readable by anyone who may create an export, so "who exported this client's credentials and who approved it" needs no administrator. |
@@ -193,6 +194,38 @@ joins through `flexible_asset_type`, which is tenant-scoped and not
 organisation-scoped (0200), so a client-side role is shown nothing from it. The
 secret's label is `"<template> — <field>"`, so without that join the page would
 name a template the reader's role may not read.
+
+### Writing a procedure, and following one
+
+A procedure is an `asset_node` of type `sop`, so it lives on `/assets/:nodeId`
+like every other asset — but its substance is an ordered list of steps, and that
+list is a card rather than a detail field.
+
+**Three tables and one rule.** `sop_step` is the living definition, editable at
+any time. `sop_version` is an immutable published snapshot of it, append-only by
+trigger. `sop_run_step` holds a run's steps **copied by value** from a version's
+snapshot. The rule that connects them is 0090's: *"a run snapshots the SOP
+version it executed against. Pointing a run at a living, editable document would
+let today's edit rewrite yesterday's evidence."* So editing a template never
+changes a run that is already open, and starting a run uses the published text
+even when the draft on screen says something else — which is why the card says
+so, in those words, beside the Start control.
+
+**Publishing is not saving**, the same distinction the asset-type screens make
+one layer up, for the same reason and with the same consequence: correcting a
+published version means publishing the next one, because the row cannot be
+revised.
+
+**The step list is replaced, not patched.** `sop_step_position_uk` is
+`UNIQUE (sop_id, position)` and not DEFERRABLE, so an UPDATE that shuffles
+positions can collide partway through a statement depending on the order rows
+are visited — a defect that shows up only on reorder and only sometimes.
+Deleting the list and inserting it back has no such window, and nothing
+references `sop_step.id`, so the replace cannot orphan anything.
+
+**A run drives three statuses** — pending, done, skipped — out of the seven
+`sop_step_status` holds. The other four each want behaviour nothing has built
+yet; the enum keeps them and the page offers no control for them.
 
 ### Your own account
 

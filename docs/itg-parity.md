@@ -42,7 +42,7 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 2 | Result count, sorting, column chooser | **Exists** | The same three shell components, now composed by `clients-table.tsx` alongside `BulkBar` so bulk actions survived |
 | 2 | Client logo + initials fallback | **Partial** | `components/client-avatar.tsx` renders `logo_url` with an initials fallback. **Upload is still group I** |
 | 3 | Per-client sidebar, collapsible, counts | **Exists** | `shell/sidebar.tsx`, `src/lib/nav/org-categories.ts`, collapse persisted per browser |
-| 3 | Core asset entries | **Exists** | 16 categories incl. Domain Tracker, SSL Tracker, Locations, Networks, Passwords. Only "Checklists" absent — see #8 |
+| 3 | Core asset entries | **Exists** | 16 categories incl. Domain Tracker, SSL Tracker, Locations, Networks, Passwords. "Checklists" is still absent as a *word*, and deliberately: the rows live under SOPs, which F1 made usable. What is missing is the recurring part — see #8 |
 | 3 | Apps & Services in sidebar | **Exists** | Tenant's own `flexible_asset_type` rows with their configured icons — which a person can now create, as of C |
 | 3 | "Customize Sidebar" link | **Exists** | At the foot of the drawer, below "More" — group D |
 | 3 | Quick Notes, inline | **Exists** | `organization.quick_notes`, `components/notes-card.tsx` |
@@ -62,7 +62,7 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 6 | Cross-client expirations, filterable | **Exists** | `/expirations` page + `/api/expirations`, filters by severity and org |
 | 7 | My Tasks | **Missing** | `sop_step`/`sop_run_step` have no assignee and no due date |
 | 7 | Personal Credentials (private vault) | **Dropped** | Not built natively. Personal credentials will come from a Bitwarden/Vaultwarden integration — decision 14. The vault design that was drafted for it is kept below as background for that work |
-| 8 | Reusable checklist templates → per client | **Partial** | `sop`/`sop_version`/`sop_step` (template) and `sop_run`/`sop_run_step` (instance) already model exactly this |
+| 8 | Reusable checklist templates → per client | **Exists** | F1. `sop`/`sop_step` authored on `/assets/{id}`, published into an immutable `sop_version`, and `sop_run`/`sop_run_step` started against a client with the step copy 0090 describes. Assignment and due dates are F2; reminders are K |
 | 8 | Assignable tasks + due dates | **Missing** | Columns absent on both step tables |
 | 8 | Email notification on assign/due | **Missing** | No email channel anywhere; `webhook_endpoint` is Discord/Teams/Slack |
 | 9 | Domain tracker fields | **Exists** | `domain`: registrar, registered_at, expires_at, nameservers, dns_provider, dnssec, transfer_locked |
@@ -170,7 +170,8 @@ and PR.
 | **C2** | Records: the schema-driven **record** form behind the dead `+ New` button, a record `PATCH` route, and the `flexible_asset` rendering path `/assets/[nodeId]` never had | none | C lets a type be defined. Without this a record of one cannot be created, cannot be corrected, and renders none of its fields |
 | **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link — **landed** | 0620 | Follows the dashboard pattern; small and self-contained |
 | **E** | Profile/preferences: user timezone, theme, first/last name — **landed**. Side-panel toggle and MFA recovery token deferred, decision 15 | 0630 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
-| **F** | Checklists: `assigned_to` + `due_at` on both step tables, My Tasks under Personal | 0640 | Delivers half of the Personal section by extending SOPs |
+| **F1** | Checklists you can actually use: template authoring, publishing a version, starting a run against a client, the run page, SOP rows in the integration fixture — **landed** | 0640, for the purge conflict publishing exposed | 0090 modelled all of this and nothing in the application ever created a run. Assignment is meaningless until a run exists |
+| **F2** | `assigned_to` + `due_at` on run steps, a default assignee and due date on the run, My Tasks, an open-task count | 0650 | Delivers half of the Personal section by extending SOPs |
 | **G** | Global section: completion grid with % badges, per-client completion scores | 0650 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
 | **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0660 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
 | **I** | Documentation Health ring; client logo upload | 0670 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
@@ -187,6 +188,11 @@ here so nobody reuses a number:
 - **Dropping J freed 0680**, so K and L moved down into the gap: K is 0680 and
   L is 0690. Nothing was built for J, so there is no orphaned file and no
   number to retire.
+- **F1 needed no migration for its feature** — 0090 had the whole model
+  already, which was the finding the group turned on. It needed one for the
+  client-purge conflict it exposed: **0640 is F1's**
+  (`0640_purgeable_sop_versions.sql`, decision 17), so **F2 is 0650**, G 0660,
+  H 0670, I 0680, K 0690 and L 0700. **0640 must not be reused.**
 
 The numbers above are intentions rather than reservations — the next free
 number at the time of writing is what a group actually takes.
@@ -642,6 +648,99 @@ rotation due date and an audit timestamp stay UTC-suffixed and unconverted —
 "expires 2026-03-01" meaning three different instants is how a certificate
 lapses on a Sunday, and that rule is not being relaxed.
 
+### Group F1 — checklists you can actually use (migration 0640, for the purge conflict it exposed)
+
+The group that found its feature already built. 0090 modelled procedures,
+immutable published versions, runs that snapshot the version they executed
+against, and per-step execution state — and **nothing in the application had
+ever written `sop_version`, `sop_run` or `sop_run_step`.** The only SOP
+reference in `src/` was the export collector reading templates; the category
+page said in a comment that "SOPs are the one category with no create path";
+the integration fixture had no SOP rows at all. A complete model with no way in,
+which is why F1 needed no schema for its own feature.
+
+**What landed.** Create a procedure (`POST /api/sops`, its own route because
+`/api/assets` excludes `sop` on purpose — a procedure's payload is its steps);
+edit its columns (`PATCH /api/sops/[sopId]`); replace its ordered step list
+(`PUT .../steps`); publish (`POST .../versions`); start a run against a client
+(`POST /api/sop-runs`); drive a run (`PATCH /api/sop-runs/[runId]/steps/[stepId]`
+and `PATCH /api/sop-runs/[runId]`). `sop` joined `DETAIL_TABLES` so a procedure's
+own columns render, the template card carries the steps, versions and the three
+controls, the run page is at `/runs/[runId]`, and open and finished runs are
+listed on the client page.
+
+**A RUN FOLLOWS THE VERSION IT STARTED FROM, FOREVER,** which is the one
+property worth testing hardest. 0090: "a run snapshots the SOP version it
+executed against. Pointing a run at a living, editable document would let
+today's edit rewrite yesterday's evidence." So the run's steps are copied **from
+the published snapshot, not from `sop_step`** — the distinction that matters when
+a template has been edited since it was published, because then the draft and the
+snapshot disagree and only one of them is what the run says it followed.
+
+**The step list is replaced wholesale rather than patched,** because
+`sop_step_position_uk UNIQUE (sop_id, position)` is not DEFERRABLE: an UPDATE
+shuffling positions can collide halfway through depending on the order rows are
+visited, which is a bug that appears only sometimes and only on reorder. Nothing
+references `sop_step.id` — a run copies by value — so the replace cannot orphan
+a run or rewrite anybody's evidence.
+
+**The snapshot hash is computed in SQL, over the stored jsonb.** `jsonb::text`
+is canonical (Postgres normalises key order and whitespace on storage), so
+`digest(snapshot::text, 'sha256')` gives the same bytes whichever process wrote
+the object. Hashing the JavaScript string would hash one serialiser's formatting
+and a reader recomputing it from the row would get a different answer — which is
+the only check the column exists to support.
+
+**Three step states, not seven.** `sop_step_status` carries pending,
+in_progress, done, skipped, blocked, failed and not_applicable. The run page
+drives the three a person working through a list can reach; see decision 16.
+
+**What `+ New` opens is now one answer rather than five conditions.** The
+generic asset form's condition was "this category has a node_type", which is
+true of a procedure — a procedure IS an `asset_node` of type `sop` — so it
+claimed the SOPs category alongside the new procedure form, and a
+`category !== 'sops'` guard was the only thing between a right screen and a
+wrong one. `createFormFor()` in `src/lib/nav/org-categories.ts` returns exactly
+one form, so two cannot open.
+
+**Three things found while building it, none of them fixed here:**
+
+1. **A published procedure can never be deleted at all**, which is consistent
+   with the product's archive-not-delete stance and stays true. What could not
+   stay true is its consequence: **a client with a published procedure could not
+   be purged**, because `helm.delete_organization`'s cascade
+   `asset_node → sop → sop_version` fired the append-only trigger and failed the
+   whole operation. `tests/integration/delete.test.ts` went red on this branch
+   for exactly that reason. Fixed in **migration 0640** under decision 17 —
+   which is a rail change, so it was approved rather than assumed.
+2. **`client_admin` holds `sop:execute` but is rank 30**, and `sop_run`'s RLS
+   requires rank 40, so a client administrator passes the route's permission
+   gate and is then refused by the database. Failing closed, so not changed
+   here; reconciling the seed with the policy is a permission decision beyond
+   this group.
+3. **`handler.ts`'s `insufficient_privilege` branch returns the raw Postgres
+   message** — `new row violates row-level security policy for table "x"` names
+   an internal table to whoever asked. First seen in group D; it affects every
+   route that relies on a policy refusal rather than its own check, and it wants
+   its own PR.
+
+**Tests: 38 integration (`tests/integration/checklists.test.ts`), 23 unit
+(`sop-steps`), 6 unit (`create-forms`), plus a procedure row in `pages.test.ts`.
+21 deliberate sabotages, 14 caught immediately and 7 not** — every one of the
+seven a hole in the tests rather than in the code, each fixed with the reason
+written where it was fixed. The two worth naming:
+
+- **Reading the live `sop_step` rows instead of the published snapshot survived
+  the whole suite.** The test for "a run follows the version it started from"
+  edited the template *after* the run began, and at the moment of the copy the
+  live rows still agreed with the snapshot — so both implementations passed. The
+  missing case is an edit *between* publish and run, which is also the sentence
+  the template card shows the person pressing the button. That test exists now.
+- **Deleting a route's `permissions` option changed nothing**, because every
+  actor who lacks `sop:write` or `sop:execute` is also below the role rank the
+  matching policy demands: both layers refuse, with the same 403. The tests now
+  assert the gate's own message, so they can tell which layer spoke.
+
 ## Decisions
 
 The questions this document opened with have been answered. Recorded here
@@ -830,12 +929,103 @@ is how the same argument gets had twice.
     in the summary table rather than Missing, so the distinction between "not
     done" and "not done on purpose" survives in the one place people look.
 
+16. **The other four step statuses, evidence and approval are deferred, not
+    dropped (F1).** `sop_step_status` carries seven values; the run page drives
+    three — pending, done, skipped. The other four each need behaviour that does
+    not exist: `blocked` wants a reason and a way to unblock, `failed` wants an
+    incident, `not_applicable` wants a recorded judgement, `in_progress` wants
+    either a timer or a second control whose only job is to say "starting now".
+    `sop_run_step.requires_evidence` and `evidence jsonb` want an attachment
+    path, and `sop.requires_approval` with `sop_run.approved_by`/`approved_at`
+    wants an approval queue and a notion of who may approve. All five stay in
+    the schema — they are right, and 0090 was written with them in mind — and
+    none gets a control until the thing behind it is built. A dropdown of seven
+    words with behaviour behind three is the shape this plan has spent four
+    groups removing, and it is the same rule as decision 15: a control that
+    stores an answer nobody acts on is worse than its absence.
+
+17. **A client purge takes their published procedures with it (F1, 0640).**
+    Approved rather than assumed, because it widens a rail a previous migration
+    deliberately fenced.
+
+    `helm.delete_organization` ends with `DELETE FROM asset_node WHERE
+    organization_id = …`, which cascades to `sop` and then to `sop_version` —
+    and `sop_version` carries `helm.deny_mutation()`, so the whole purge fails
+    with *"DELETE on sop_version is not permitted; this table is append-only"*,
+    surfacing as a 403. Before F1 nothing could publish a version, so no row
+    existed outside a fixture and the conflict was invisible. F1 ships
+    publishing, so it is live: publish one checklist for a client and that
+    client can never be deleted. `tests/integration/delete.test.ts` fails on the
+    F1 branch for exactly this reason, which is the suite doing its job.
+
+    Both failure modes were measured, not reasoned about:
+
+    - a published version alone → the append-only trigger, as above;
+    - with a run against it, and the trigger exempted →
+      `update or delete on table "sop" violates foreign key constraint
+      "sop_run_sop_fk"`, because `sop_run.sop_id` is ON DELETE RESTRICT;
+    - deleting the runs first, then the versions inside a `helm.purging`
+      window, then the nodes → succeeds.
+
+    **Option A — a purge takes published procedures with it.** Point
+    `sop_version`'s trigger at the existing `helm.deny_mutation_unless_purging()`
+    (0520) and reissue `helm.delete_organization` to delete the client's runs and
+    then their versions inside the purge window. The two locks are unchanged —
+    the `helm.purging` GUC set with `SET LOCAL` inside a SECURITY DEFINER
+    function, plus table ownership that `helm_app` does not have — so no
+    ordinary path can touch a published version, and `audit_log` keeps the
+    unexempted `deny_mutation()`, which is what makes permanent deletion
+    defensible at all.
+
+    What makes this a question rather than a patch: **0520 contains a guard that
+    says this must not happen.** "AND SO ARE THE OTHER APPEND-ONLY TABLES. Only
+    `secret_version` was meant to become purgeable", and it raises if the
+    exemption appears on any other table. That guard runs at 0520's point in the
+    sequence, so a later migration would not trip it — stepping around it
+    silently is exactly what should not happen, so Option A means amending that
+    stated intent in the open.
+
+    The case for it: the one hard-delete path this product has already destroys
+    credentials *and their entire version history*, which is far more sensitive
+    than a checklist. "You cannot delete this client because somebody once
+    published a procedure for them" is a worse product than "purging a client
+    purges everything about them", and the audit log still records what was
+    destroyed.
+
+    **Option B, not taken — the rail stays absolute and the purge refuses
+    clearly.** `helm.delete_organization` would check for published procedures
+    up front and raise with a DETAIL the route turns into prose, the way
+    `archive_first` already works. It is recorded because it is the honest
+    alternative, and rejected because it leaves an existing, documented feature
+    permanently broken for a reason nobody can act on: any client you ever
+    published a checklist for would stay forever.
+
+    **What 0640 does, and what it deliberately does not.** `sop_version`'s
+    trigger now calls `helm.deny_mutation_unless_purging()`;
+    `helm.delete_organization` deletes the client's runs, then their versions
+    inside a `set_config('helm.purging', 'on', true)` window that is lowered
+    immediately, then their nodes; and the count the confirmation dialog quotes
+    back gained `checklist_runs`, because a run somebody is about to lose should
+    be named before it goes. Unchanged: `audit_log` keeps the unexempted
+    `deny_mutation()`, `UPDATE` on a published version is still refused outright
+    even inside a purge, `flexible_asset_type_version` is untouched, and
+    **deleting one published procedure is still impossible** — the exemption
+    fires inside a client purge and nowhere else, so archiving remains the only
+    way to retire a procedure that has ever been published.
+
+    0520's guard is re-stated in 0640 with the allowed set `{secret_version,
+    sop_version}`, and `db/tests/security.sql` §41(f) with it, so a third table
+    joining the list still fails the build until somebody writes the migration
+    that says why.
+
 Two further decisions taken at the same time:
 
 - **Checklists (F)** extend SOPs. No parallel tree. `sop`/`sop_version`/
   `sop_step` already model a reusable template and `sop_run`/`sop_run_step`
   model a per-client instance; F adds `assigned_to` and `due_at`. The comment
-  in `src/lib/nav/org-categories.ts` saying Helm has no checklist table is
-  wrong and is corrected as part of F.
+  in `src/lib/nav/org-categories.ts` saying Helm has no checklist table was
+  wrong — the premise, not just the conclusion — and F1 corrected it: the
+  tables have existed since 0090 and the application now uses them. What has
+  no equivalent is a *recurring* task list, which needs K's job channel.
 - **Sidebar customization (D)** mirrors `user_dashboard.widgets`, including the
   catalogue/validator agreement test.

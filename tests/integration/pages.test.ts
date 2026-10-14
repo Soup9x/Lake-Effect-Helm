@@ -78,6 +78,8 @@ const p = <T,>(value: T) => Promise.resolve(value);
 
 /** Set in beforeAll: the flexible grid needs a real type id in its path. */
 let flexibleTypeId = '';
+/** Set in beforeAll: a real run, because the run page takes one in its path. */
+let runId = '';
 
 beforeAll(async () => {
   resetDatabase();
@@ -129,6 +131,44 @@ beforeAll(async () => {
       RETURNING id
     `;
     flexibleTypeId = type!.id;
+
+    /*
+     * A checklist run, for the same reason: the run page takes one in its path.
+     * Made here rather than in fixtures.sql, which ships the PROCEDURE and its
+     * published version but no run — a run in the shared fixture would move
+     * every count the client page asserts.
+     *
+     * Steps are copied from the published snapshot exactly as POST /api/sop-runs
+     * does it, because a run whose steps came from somewhere else would not
+     * exercise what the page actually renders.
+     */
+    const [version] = await tx<{ id: string }[]>`
+      SELECT v.id FROM sop_version v
+      JOIN sop s ON s.id = v.sop_id AND s.current_version = v.version
+      WHERE v.sop_id = ${IDS.sopOffboard}::uuid
+    `;
+    const [run] = await tx<{ id: string }[]>`
+      INSERT INTO sop_run (
+        tenant_id, organization_id, sop_id, sop_version_id, title, status,
+        started_at, started_by
+      )
+      VALUES (
+        ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, ${IDS.sopOffboard}::uuid,
+        ${version!.id}::uuid, 'Offboard J. Doe', 'in_progress', now(),
+        ${IDS.admin1}::uuid
+      )
+      RETURNING id
+    `;
+    runId = run!.id;
+    await tx`
+      INSERT INTO sop_run_step (tenant_id, run_id, position, title, body, kind, status)
+      SELECT ${IDS.tenant1}::uuid, ${run!.id}::uuid,
+             (step ->> 'position')::int, step ->> 'title', step ->> 'body',
+             'manual', 'pending'
+      FROM sop_version v,
+           jsonb_array_elements(v.snapshot -> 'steps') AS step
+      WHERE v.id = ${version!.id}::uuid
+    `;
   });
 });
 
@@ -189,6 +229,31 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () =>
       (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
         params: p({ nodeId: IDS.firewall }),
+      }),
+  },
+  {
+    /*
+     * The same page for a PROCEDURE, which is a different arm of it: `sop` was
+     * added to DETAIL_TABLES in F1 and the template card is rendered only for
+     * this node type. The firewall row above exercises neither, so without
+     * this line the whole authoring surface renders in no test.
+     */
+    name: 'the asset page, for a procedure',
+    load: async () =>
+      (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
+        params: p({ nodeId: IDS.sopOffboard }),
+      }),
+  },
+  {
+    /*
+     * A checklist run. Added in F1, which is when anything could create one —
+     * sop_run had never been written by any code path, so this page is the
+     * first thing that reads it.
+     */
+    name: 'a checklist run',
+    load: async () =>
+      (await import('../../src/app/(app)/runs/[runId]/page')).default({
+        params: p({ runId }),
       }),
   },
   {
@@ -400,6 +465,83 @@ function propsOf(node: unknown, componentName: string): Record<string, unknown> 
   }
   return element.props ? propsOf(element.props.children, componentName) : null;
 }
+
+/**
+ * Collect every string in an element tree.
+ *
+ * The asset page renders its detail fields as inline JSX rather than handing
+ * them to a named component, so propsOf cannot reach them. Walking for text is
+ * how a detail field can be asserted without re-running the page's own query,
+ * which is the trap the top of this file describes.
+ */
+function textIn(node: unknown, found: string[] = []): string[] {
+  if (typeof node === 'string') {
+    found.push(node);
+    return found;
+  }
+  if (Array.isArray(node)) {
+    for (const child of node) textIn(child, found);
+    return found;
+  }
+  if (!node || typeof node !== 'object') return found;
+  const element = node as { props?: Record<string, unknown> };
+  if (element.props) for (const value of Object.values(element.props)) textIn(value, found);
+  return found;
+}
+
+describe('the procedure page', () => {
+  it('renders its own columns and its step list', async () => {
+    /*
+     * Two things that are each invisible to "the page did not throw":
+     *
+     *   the DETAIL_TABLES entry   without ['sop', 'sop'] the page shows "No
+     *                             type-specific detail recorded" over the
+     *                             category, summary and review interval, which
+     *                             is exactly the bug C2 found for records.
+     *   the template card         the only route to steps, publishing and
+     *                             starting a run.
+     *
+     * Both assert on values the page itself produced.
+     */
+    const rendered = await (
+      await import('../../src/app/(app)/assets/[nodeId]/page')
+    ).default({ params: p({ nodeId: IDS.sopOffboard }) });
+
+    expect(
+      textIn(rendered),
+      'the procedure"s own columns are not on its page — is `sop` in DETAIL_TABLES?',
+    ).toContain('Lifecycle');
+
+    /*
+     * And NOT a raw uuid. `sop` is the only subtype table with person-id
+     * columns — owner_user_id and reviewed_by — so this page is the only place
+     * the detail list's person-id filter can be seen at all. The fixture sets
+     * both for that reason.
+     */
+    expect(
+      textIn(rendered).join(' '),
+      'a person-id column reached the detail list as a raw uuid',
+    ).not.toContain(IDS.admin1);
+
+    const card = propsOf(rendered, 'ChecklistTemplateCard');
+    expect(card, 'the procedure page should render a ChecklistTemplateCard').toBeTruthy();
+
+    const template = card!.template as {
+      steps: { title: string }[];
+      current: { version: number; steps: number } | null;
+      unpublishedChanges: boolean;
+    };
+    expect(template.steps.map((step) => step.title)).toEqual([
+      'Disable the account', 'Forward the mailbox', 'Collect the laptop',
+    ]);
+    expect(template.current?.version, 'the published version did not reach the card').toBe(1);
+    expect(template.current?.steps, 'the card was given the live count, not the snapshot"s').toBe(3);
+    expect(
+      template.unpublishedChanges,
+      'the fixture publishes exactly what its step list says, so nothing is unpublished',
+    ).toBe(false);
+  });
+});
 
 describe('the query that broke production', () => {
   it('hands the documents card a real uploader name', async () => {

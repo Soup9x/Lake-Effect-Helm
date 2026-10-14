@@ -2218,11 +2218,19 @@ SELECT helm_test.check('audit_log still uses the unexempted deny_mutation()',
                WHERE NOT t.tgisinternal AND c.relname LIKE 'audit_log%'
                  AND t.tgname = 'audit_log_immutable'
                  AND t.tgfoid <> 'helm.deny_mutation()'::regprocedure));
-SELECT helm_test.check('the purge exemption exists on secret_version and nowhere else',
+-- Two tables carry it as of 0640, and the second one is sop_version: F1 gave
+-- the application a way to publish a procedure, and a client with one could no
+-- longer be deleted. A THIRD table joining this list is a decision rather than
+-- a detail, so it fails here until somebody writes the migration that says why.
+SELECT helm_test.check('the purge exemption exists on exactly secret_version and sop_version',
   (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
     WHERE NOT t.tgisinternal
       AND t.tgfoid = 'helm.deny_mutation_unless_purging()'::regprocedure
-      AND c.relname <> 'secret_version') = 0);
+      AND c.relname NOT IN ('secret_version', 'sop_version')) = 0);
+SELECT helm_test.check('...and sop_version is one of them',
+  EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+           WHERE NOT t.tgisinternal AND c.relname = 'sop_version'
+             AND t.tgfoid = 'helm.deny_mutation_unless_purging()'::regprocedure));
 SELECT helm_test.check_raises('helm_app cannot purge credential history itself',
   $$DELETE FROM secret_version WHERE secret_id = '1e000000-0000-0000-0000-000000000002'$$);
 
@@ -2237,6 +2245,90 @@ SELECT helm_test.check('no composite SET NULL key nulls a NOT NULL column',
         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k
         WHERE a.attnotnull
           AND (c.confdelsetcols = '{}'::int2[] OR k = ANY (c.confdelsetcols)))));
+
+-- (h) A CLIENT WITH A PUBLISHED CHECKLIST CAN STILL BE DELETED (0640), AND
+--     NOTHING ELSE ABOUT sop_version MOVED.
+--
+--     F1 is the first thing in the product that writes sop_version, and the
+--     cascade asset_node → sop → sop_version ran straight into the append-only
+--     trigger: publish one checklist for a client and that client could never
+--     be deleted. 0640 points that trigger at 0520's exempting function and
+--     reissues helm.delete_organization to remove the client's runs, then their
+--     versions inside the purge window, then their nodes.
+--
+--     The rows are created here rather than in the fixture so no other
+--     assertion's counts move, and because two of the five cases below need a
+--     procedure that has no run.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name) VALUES
+  ('1d000000-0000-0000-0000-0000000000f1', :t1, :t1_acme, 'sop', 'zz purge with a run'),
+  ('1d000000-0000-0000-0000-0000000000f2', :t1, :t1_acme, 'sop', 'zz purge no run');
+INSERT INTO sop (id, tenant_id, node_type, current_version) VALUES
+  ('1d000000-0000-0000-0000-0000000000f1', :t1, 'sop', 1),
+  ('1d000000-0000-0000-0000-0000000000f2', :t1, 'sop', 1);
+INSERT INTO sop_version (id, tenant_id, sop_id, version, snapshot, snapshot_sha256) VALUES
+  ('1f000000-0000-0000-0000-0000000000f1', :t1, '1d000000-0000-0000-0000-0000000000f1', 1,
+   '{"format": 1, "steps": [{"position": 1, "title": "zz step"}]}'::jsonb,
+   digest('{"format": 1, "steps": [{"position": 1, "title": "zz step"}]}', 'sha256')),
+  ('1f000000-0000-0000-0000-0000000000f2', :t1, '1d000000-0000-0000-0000-0000000000f2', 1,
+   '{"format": 1, "steps": [{"position": 1, "title": "zz step"}]}'::jsonb,
+   digest('{"format": 1, "steps": [{"position": 1, "title": "zz step"}]}', 'sha256'));
+INSERT INTO sop_run (tenant_id, organization_id, sop_id, sop_version_id, title, status,
+                     started_at, started_by)
+VALUES (:t1, :t1_acme, '1d000000-0000-0000-0000-0000000000f1',
+        '1f000000-0000-0000-0000-0000000000f1', 'zz run', 'in_progress', now(), :u_admin1);
+
+-- 1. ORDINARY CODE STILL CANNOT TOUCH IT, by three layers and in that order.
+--    The OUTERMOST is a grant: helm_app holds INSERT and SELECT on sop_version
+--    and nothing else, so a direct DELETE is refused before the trigger is
+--    even consulted — which is what the rejection text below says, and worth
+--    knowing when reading it, because it is NOT the exemption being tested.
+--    Raising the purge flag changes nothing for the same reason: helm_app may
+--    call set_config (nothing stops it) and still has no DELETE privilege.
+--
+--    The trigger is the layer that matters for a CASCADE, which is
+--    system-initiated and sidesteps the grant entirely — that is case 2 below,
+--    and the rejection there is the trigger's own message. The ownership lock
+--    is exercised positively by case 3: the purge succeeds only because
+--    helm.delete_organization is SECURITY DEFINER owned by the role that owns
+--    the table.
+SELECT helm_test.check_raises('a published version cannot be deleted by the request role',
+  $$DELETE FROM sop_version WHERE id = '1f000000-0000-0000-0000-0000000000f2'$$);
+SELECT set_config('helm.purging', 'on', true);
+SELECT helm_test.check_raises('...nor by the request role raising the purge flag itself',
+  $$DELETE FROM sop_version WHERE id = '1f000000-0000-0000-0000-0000000000f2'$$);
+SELECT helm_test.check_raises('...and a published version cannot be REWRITTEN even then',
+  $$UPDATE sop_version SET change_note = 'rewritten' WHERE id = '1f000000-0000-0000-0000-0000000000f2'$$);
+SELECT set_config('helm.purging', 'off', true);
+
+-- 2. ONE PROCEDURE IS STILL UNDELETABLE, which is deliberate and unchanged.
+--    The exemption fires inside a client purge and nowhere else, so archiving
+--    remains the only way to retire a procedure that has ever been published.
+--    Asserted on the one with no run, so this is the trigger refusing rather
+--    than sop_run's ON DELETE RESTRICT.
+SELECT helm_test.check_raises('a single published procedure still cannot be deleted',
+  $$DELETE FROM asset_node WHERE id = '1d000000-0000-0000-0000-0000000000f2'$$);
+
+-- 3. AND THE PURGE WORKS, runs and all.
+UPDATE organization SET archived_at = now() WHERE id = :t1_acme;
+SELECT helm.delete_organization(:t1_acme) AS destroyed \gset
+SELECT helm_test.check('a client with published checklists can be deleted',
+  NOT EXISTS (SELECT 1 FROM organization WHERE id = :t1_acme));
+SELECT helm_test.check('...and its published versions went with it',
+  NOT EXISTS (SELECT 1 FROM sop_version
+               WHERE sop_id IN ('1d000000-0000-0000-0000-0000000000f1',
+                                '1d000000-0000-0000-0000-0000000000f2')));
+SELECT helm_test.check('...and its runs, which are ON DELETE RESTRICT against sop',
+  NOT EXISTS (SELECT 1 FROM sop_run WHERE organization_id = :t1_acme));
+SELECT helm_test.check('...and the count it quoted back named them',
+  (:'destroyed'::jsonb ->> 'checklist_runs')::int = 1);
+SELECT helm_test.check('...and the purge window was lowered again',
+  current_setting('helm.purging', true) IS DISTINCT FROM 'on');
+SELECT helm_test.check('...and the audit trail about the client survived it',
+  EXISTS (SELECT 1 FROM audit_log WHERE organization_id = :t1_acme));
+ROLLBACK;
 
 \echo ''
 \echo '== 40. A per-user permission grant is not a way round the role catalogue =='

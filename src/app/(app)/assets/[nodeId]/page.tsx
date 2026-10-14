@@ -18,6 +18,8 @@ import { recordView } from '@/lib/workspace/queries';
 import { NotesCard } from '@/components/notes-card';
 import { FlexibleRecordForm } from '@/components/flexible-record-form';
 import { pointerFor, schemaToFields, type FieldDef } from '@/lib/flexible/fields';
+import { readTemplate } from '@/lib/sops/queries';
+import { ChecklistTemplateCard } from '@/components/checklist-template-card';
 
 interface NodeRow {
   id: string; node_type: string; name: string; description: string | null;
@@ -183,8 +185,17 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       FROM credential c
       WHERE c.id = ${nodeId}::uuid AND c.totp_secret_id IS NOT NULL
     `;
-    const [perm] = await tx<{ allowed: boolean }[]>`
-      SELECT helm.has_permission('secret:reveal') AS allowed
+    /*
+     * Three permissions in one round trip. Read from the database rather than
+     * inferred from the role key, because role_permission is editable per
+     * deployment and a per-user grant (0480) can add one to somebody whose role
+     * does not carry it. These only decide what the page OFFERS — every route
+     * and every policy checks again.
+     */
+    const [perm] = await tx<{ reveal: boolean; author: boolean; run: boolean }[]>`
+      SELECT helm.has_permission('secret:reveal') AS reveal,
+             helm.has_permission('sop:write')     AS author,
+             helm.has_permission('sop:execute')   AS run
     `;
 
     // Only for a record, so the other eleven node types pay nothing for it.
@@ -192,15 +203,24 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       ? await flexibleRecord(tx, node.id)
       : null;
 
+    // Same bargain for a procedure: its steps and published versions, read
+    // only when the node is one.
+    const template = node.node_type === 'sop' ? await readTemplate(tx, node.id) : null;
+
     return {
-      node, detail: detailRows, edges, secrets, expiries, sites, record,
+      node, detail: detailRows, edges, secrets, expiries, sites, record, template,
       totp: totp ?? null,
-      canReveal: perm?.allowed ?? false,
+      canReveal: perm?.reveal ?? false,
+      canAuthorProcedures: perm?.author ?? false,
+      canRunChecklists: perm?.run ?? false,
     };
   });
 
   if (!data) notFound();
-  const { node, detail, edges, secrets, expiries, sites, record, totp, canReveal } = data;
+  const {
+    node, detail, edges, secrets, expiries, sites, record, template, totp, canReveal,
+    canAuthorProcedures, canRunChecklists,
+  } = data;
   const canWrite = !isClientRole(identity.roleKey);
 
   return (
@@ -387,6 +407,23 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             </CardContent>
           </Card>
         </div>
+
+        {/*
+          A procedure's steps, its published versions, and the controls that
+          edit, publish and run it. Below the details and dependencies because
+          the steps are the long part of the page, and above Credentials
+          because a procedure rarely has any.
+        */}
+        {template && (
+          <ChecklistTemplateCard
+            sopId={node.id}
+            organizationId={node.organization_id}
+            sopName={node.name}
+            template={template}
+            canAuthor={canAuthorProcedures}
+            canRun={canRunChecklists}
+          />
+        )}
 
         <Card>
           <CardHeader>
@@ -590,6 +627,15 @@ const DETAIL_TABLES: ReadonlyMap<string, string> = new Map([
   ['license', 'license'],
   ['isp_circuit', 'isp_circuit'],
   ['vendor', 'vendor'],
+  /*
+   * Added in F1. `sop` has been an asset_node subtype since 0090 and was
+   * missing here for the same reason flexible_asset was: nothing in the
+   * application touched it, so nobody noticed that opening a procedure showed
+   * "No type-specific detail recorded" over its category, summary and review
+   * schedule. Its steps get a card of their own below — a procedure's steps
+   * are its substance, not a detail field.
+   */
+  ['sop', 'sop'],
 ]);
 
 async function detailFor(
@@ -619,10 +665,20 @@ async function detailFor(
    * seed.
    */
   const HIDDEN = new Set(['totp_algorithm', 'totp_digits', 'totp_period_seconds', 'totp_issuer', 'totp_account']);
+  /*
+   * Person ids go the same way as secret ids: a raw uuid in a detail list is
+   * noise whatever it points at, and inviting somebody to read one is worse.
+   * Checked against the catalogue before generalising — `owner_user_id` and
+   * `reviewed_by` on `sop` are the ONLY columns in all twelve subtype tables
+   * that match, so this changes nothing for the other eleven. Where who did it
+   * matters, the page resolves the name and says it in prose.
+   */
+  const isPersonId = (key: string) => key.endsWith('_user_id') || key.endsWith('_by');
   return Object.fromEntries(
     Object.entries(row).filter(
       ([key, value]) =>
-        value !== null && value !== '' && !key.endsWith('_secret_id') && !HIDDEN.has(key),
+        value !== null && value !== ''
+        && !key.endsWith('_secret_id') && !isPersonId(key) && !HIDDEN.has(key),
     ),
   );
 }

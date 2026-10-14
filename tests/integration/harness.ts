@@ -56,6 +56,9 @@ export const IDS = {
   domain: '1d000000-0000-0000-0000-000000000006',
   globexServer: '1d000000-0000-0000-0000-000000000007',
   contosoFirewall: '2d000000-0000-0000-0000-000000000001',
+  /** The fixture's published procedure, and the one that was never published. */
+  sopOffboard: '1d000000-0000-0000-0000-000000000008',
+  sopRestore: '1d000000-0000-0000-0000-000000000009',
 } as const;
 
 function psql(args: string[], database = PG.database): string {

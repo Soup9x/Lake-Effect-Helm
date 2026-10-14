@@ -1,0 +1,100 @@
+import { z } from 'zod';
+import { readJson, tenantRoute } from '@/lib/api/handler';
+import { ApiError } from '@/lib/api/errors';
+import { RUN_STEP_STATES } from '@/lib/sops/steps';
+
+/**
+ * PATCH /api/sop-runs/[runId]/steps/[stepId] — check a step off, or skip it.
+ *
+ * THREE STATES, NOT SEVEN. sop_step_status carries pending, in_progress, done,
+ * skipped, blocked, failed and not_applicable. This route drives the three a
+ * person working through a list can reach, and the others keep their place in
+ * the enum with no control until something is built that means them — a
+ * `blocked` step wants a reason and a way to unblock, `failed` wants an
+ * incident, `not_applicable` wants a judgement recorded. Offering a dropdown of
+ * seven words with no behaviour behind four of them is the shape this plan has
+ * been removing. Recorded as deferred in docs/itg-parity.md.
+ *
+ * completed_at IS SET BY THIS ROUTE, not defaulted, because
+ * sop_run_step_terminal_has_actor requires it for every terminal status —
+ * done, skipped, failed, not_applicable. Returning a step to `pending` clears
+ * it again, so unchecking a box genuinely undoes the check rather than leaving
+ * a timestamp that says it was finished.
+ *
+ * A NOTE IS REQUIRED TO SKIP A MANDATORY STEP, by
+ * sop_run_step_skip_needs_note. The constraint is the authority; the message
+ * here exists so the answer is a 400 naming the step rather than a 500 naming
+ * a constraint.
+ *
+ * A COMPLETED RUN IS CLOSED. Editing a step after the run is finished would
+ * rewrite the evidence the run exists to be — so this refuses rather than
+ * silently reopening it.
+ */
+const patchSchema = z.object({
+  status: z.enum(RUN_STEP_STATES),
+  note: z.string().trim().max(4000).nullable().optional(),
+});
+
+interface StepRow {
+  id: string;
+  status: string;
+  is_optional: boolean;
+  run_status: string;
+}
+
+export const PATCH = tenantRoute(
+  async ({ tx, request, identity, params }) => {
+    const runId = z.guid().safeParse(params.runId);
+    const stepId = z.guid().safeParse(params.stepId);
+    if (!runId.success || !stepId.success) throw ApiError.invalid('not a run step');
+
+    const body = await readJson(request, (raw) => {
+      const result = patchSchema.safeParse(raw);
+      if (!result.success) {
+        throw ApiError.invalid('a step status of pending, done or skipped', {
+          issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        });
+      }
+      return result.data;
+    });
+
+    // The step AND its run's status, so "the run is finished" is answered
+    // before anything is written rather than by a constraint afterwards. The
+    // join is what ties the step to the run in the URL: a step id from another
+    // run matches nothing.
+    const [step] = await tx<StepRow[]>`
+      SELECT s.id, s.status::text, s.is_optional, r.status::text AS run_status
+      FROM sop_run_step s
+      JOIN sop_run r ON r.id = s.run_id
+      WHERE s.id = ${stepId.data}::uuid AND s.run_id = ${runId.data}::uuid
+    `;
+    if (!step) throw ApiError.notFound('no such step on that run');
+
+    if (step.run_status === 'completed' || step.run_status === 'abandoned') {
+      throw ApiError.conflict(`this run is ${step.run_status} and its steps can no longer change`);
+    }
+
+    if (body.status === 'skipped' && !step.is_optional && !body.note) {
+      throw ApiError.invalid('skipping a required step needs a reason', {
+        issues: [{ path: 'note', message: 'required when skipping a step that is not optional' }],
+      });
+    }
+
+    const terminal = body.status !== 'pending';
+    const [updated] = await tx<{ id: string; status: string }[]>`
+      UPDATE sop_run_step SET
+        status       = ${body.status}::sop_step_status,
+        note         = ${body.note === undefined ? tx`note` : body.note},
+        completed_at = ${terminal ? tx`now()` : tx`NULL`},
+        completed_by = ${terminal ? tx`${identity.actorId}::uuid` : tx`NULL`}
+      WHERE id = ${stepId.data}::uuid
+      RETURNING id, status::text
+    `;
+    if (!updated) throw ApiError.notFound('no such step on that run');
+
+    return { stepId: updated.id, status: updated.status };
+  },
+  { permissions: ['sop:execute'] },
+);
+
+export const dynamic = 'force-dynamic';
