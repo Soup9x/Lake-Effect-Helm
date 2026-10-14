@@ -43,6 +43,34 @@ export const appUser = pgTable('app_user', {
   lastLoginAt: tstz('last_login_at'),
   disabledAt: tstz('disabled_at'),
   disabledReason: text('disabled_reason'),
+
+  /*
+   * Profile and preferences (0630).
+   *
+   * `name` stays the display column and the halves are additive, so every
+   * query selecting u.name keeps working; a trigger composes `name` from them
+   * when they are set. The halves are NULL on an account that arrived from an
+   * IdP with one name field and has not been split.
+   *
+   * These are per-PERSON and not per-tenant, which is why they live here
+   * rather than beside the layouts in db/schema/workspace.ts: somebody working
+   * for two MSPs through one account has one name, one time zone and one pair
+   * of eyes.
+   *
+   * `timezone` NULL means no preference — the interface keeps rendering UTC
+   * with an explicit suffix. A trigger refuses a zone the server does not
+   * know, because `AT TIME ZONE` raises on an unknown one and the symptom
+   * would be a 500 on every page that renders a date, for one person.
+   *
+   * `theme` is NOT NULL with 'system' as a real third answer rather than an
+   * absent one; globals.css has keyed off exactly these three states since the
+   * theme was built.
+   */
+  firstName: text('first_name'),
+  lastName: text('last_name'),
+  timezone: text('timezone'),
+  theme: text('theme').notNull().default('system').$type<'system' | 'light' | 'dark'>(),
+
   createdAt: tstz('created_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
 });
