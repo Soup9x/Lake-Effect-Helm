@@ -22,10 +22,10 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 
 | # | Feature | Status | Where it lives / what's missing |
 | --- | --- | --- | --- |
-| 1 | Four top-nav scopes | **Partial** | `src/components/shell/top-nav.tsx` has all four. `Personal`→`/account` and `Global`→`/search` are aliases, not sections |
+| 1 | Four top-nav scopes | **Partial** | `src/components/shell/top-nav.tsx` has all four. `Personal`→`/account` and `Global`→`/search` are aliases, not sections — **group L** makes them real pages |
 | 1 | Global search in header | **Exists** | `/search`, `src/app/api/search/route.ts` |
-| 1 | Recent-items dropdown | **Partial** | Data and API exist (`user_recent_view`, `/api/workspace/recent`); no header dropdown, no per-type icons |
-| 1 | Notifications + help icons | **Missing** | `webhook_endpoint` is outbound-only; there is no in-app notification surface |
+| 1 | Recent-items dropdown | **Partial** | Data and API exist (`user_recent_view`, `/api/workspace/recent`); no header dropdown, no per-type icons — **group L** |
+| 1 | Notifications + help icons | **Missing** | `webhook_endpoint` is outbound-only; there is no in-app notification surface — **group L**, with notifications conditional on K's channel |
 | 1 | User menu | **Exists** | Top-right account menu |
 | 2 | Recents + Favorites strip | **Exists** | `components/client-strip.tsx` — two avatar rows above the table, clients only; the mixed-type dropdown is #1 |
 | 2 | Clients table, star, Name, Status | **Exists** | `components/clients-table.tsx`; status shows the real six-stage value, grouped by the filter |
@@ -41,7 +41,7 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 | 3 | Credential Strength + buckets | **Exists** | `components/client-widgets.tsx` — four buckets from `v_secret_metadata.strength_score`, bucketed by `lib/ui/strength.ts`. A `Strength` filter on the Credentials section reaches the rows behind each count |
 | 3 | Documentation Health ring | **Missing** | `client_health` widget is a different measure; "not viewed recently"/"stale" needs defining |
 | 3 | Recently Viewed By You (this client) | **Exists** | `listRecentInOrganization()`. Assets only — the client's own row is in the history by the time the page renders, so an unfiltered query led with the page you were on |
-| 3 | Important Contacts | **Partial** | `contact` + `organization.primary_contact_id`; no "important" flag |
+| 3 | Important Contacts | **Partial** | `contact` + `organization.primary_contact_id`; no "important" flag — **group L** adds one plus the widget |
 | 3 | Recently Updated (this client) | **Exists** | `listRecentlyUpdated()` — `updated_at`/`updated_by` across assets, sites, contacts and documents. **Not `audit_log`:** the gap analysis said it was, and it is not. See the note below |
 | 3 | Popular Credentials | **Exists** | `secret.access_count` + `last_accessed_at`, both incremented inside `helm.reveal_secret()` straight after its `secret.revealed` audit write. A test asserts the count equals the audited reveals |
 | 3 | Upcoming Expirations + due tag | **Exists** | "Expiring" section, `expiration` table, `criticality` |
@@ -142,22 +142,60 @@ and PR.
 | --- | --- | --- | --- |
 | **A** | Clients list parity: reuse `data-table`/`column-menu`/`filter-toolbar` on `/organizations`; add Recents + Favorites strip; `organization.type` enum; surface Status and Sync Status | 0600 | Pure reuse of components already written. Highest visible change per line of code |
 | **B** | Client-page widgets from data already stored: Credential Strength buckets, Popular Credentials, Recently Updated, Recently Viewed (org-scoped), Activity Feed | none | No schema at all. Four widgets out of existing columns and `audit_log` |
-| **C** | Flexible asset **type authoring UI** — create/edit a type, its fields, icon, colour | none (maybe one for field ordering) | Unblocks the whole documentation model. The engine exists; nobody can drive it |
-| **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link | 0610 | Follows the dashboard pattern; small and self-contained |
-| **E** | Profile/preferences: user timezone, theme, side-panel toggle, first/last name, MFA recovery token | 0620 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
-| **F** | Checklists: `assigned_to` + `due_at` on both step tables, My Tasks under Personal | 0630 | Delivers half of the Personal section by extending SOPs |
-| **G** | Global section: completion grid with % badges, per-client completion scores | 0640 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
-| **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0650 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
-| **I** | Documentation Health ring; client logo upload | 0660 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
-| **J** | Personal Credentials vault | 0670 | Last, deliberately — blocked on the three policy questions above |
-| **K** | Email channel + notification toggles | 0680 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles |
+| **C** | Flexible asset **type authoring UI** — create/edit a type, its fields, icon, colour | none | Unblocks the documentation model. The engine exists; nobody can drive it. Needed three API routes too — see below |
+| **C2** | The schema-driven **record** form, replacing the dead `+ New` button | none | C lets a type be defined; without this a record of one still cannot be created through the UI |
+| **D** | Sidebar customization (per-user + admin default), "Customize Sidebar" link | 0620 | Follows the dashboard pattern; small and self-contained |
+| **E** | Profile/preferences: user timezone, theme, side-panel toggle, first/last name, MFA recovery token | 0630 | Mostly additive columns; the theme toggle touches every view, so do it before more views exist |
+| **F** | Checklists: `assigned_to` + `due_at` on both step tables, My Tasks under Personal | 0640 | Delivers half of the Personal section by extending SOPs |
+| **G** | Global section: completion grid with % badges, per-client completion scores | 0650 (materialised counts, if needed) | Needs C done first so custom types are real; the heaviest query work |
+| **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0660 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
+| **I** | Documentation Health ring; client logo upload | 0670 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
+| **J** | Personal Credentials vault | 0680 | Blocked on the policy questions, now answered in Decisions |
+| **K** | Email channel + notification toggles | 0690 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles |
+| **L** | Header and navigation parity: recent-items dropdown, notifications and help icons, Personal and Global as real landing pages, Important Contacts | 0700 | Last because three of its four parts are *assembly* — the dropdown, My Tasks, Personal Credentials and the completion grid all have to exist before a page can collect them |
+
+**Migration numbers shifted by one slot.** 0610 went to B2
+(`0610_audit_secret_row_visibility.sql`), which was not in the original plan, so
+D onwards moved up. The numbers above are intentions rather than reservations —
+the next free number at the time of writing is what a group actually takes.
 
 Deferred, flagged rather than silently dropped:
 
-- **In-app notifications and help icon (#1)** — needs a notification *store*,
-  which is a feature in its own right, not a header icon.
 - **Checklist email reminders (#8)** — folded into K, since they cannot work
   before an email channel exists.
+
+### Group L in detail
+
+Four parts, and the ordering is the point: L is deliberately last because most
+of it is assembly over things earlier groups build.
+
+**The recent-items dropdown** reads `user_recent_view` through the existing
+`/api/workspace/recent` route — the data, the API and the pruning have been
+there since 0370. What is missing is a header control and per-type icons. This
+is the one part of L that could have been done at any time; it sits here so the
+header is changed once rather than four times.
+
+**Notifications and the help icon.** The help icon is a link. Notifications are
+not: an in-app notification surface needs a *store*, and `webhook_endpoint` is
+outbound-only. So this is conditional on K — if K has landed, the icon reads
+whatever K's channel records; if not, it ships as a visible stub that says
+there is nothing to show rather than a bell that silently never lights. A bell
+that cannot be distinguished from an empty inbox is worse than no bell.
+
+**Personal and Global as real pages.** Today `Personal` → `/account` and
+`Global` → `/search` are aliases, which is why they look like parity on the
+summary table and are not. Personal collects My Tasks (F) and Personal
+Credentials (J); Global collects the completion grid (G) alongside the existing
+cross-client expirations and an assets view. Both are therefore blocked on F,
+G and J — building them earlier would mean shipping two pages with one card
+each and revisiting them three times.
+
+**Important Contacts** is the only part needing schema: a flag on `contact`,
+plus the client-page widget that lists them. `organization.primary_contact_id`
+already exists and is a different thing — one primary contact, versus the
+handful a technician wants on the client page. The widget is small; it is in L
+because it is a header/navigation-adjacent "where do I find the person to call"
+feature rather than because it depends on anything.
 
 ## Landed
 
