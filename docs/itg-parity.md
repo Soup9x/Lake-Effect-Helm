@@ -325,10 +325,8 @@ a credential — and un-hiding `secret.revealed` here would hand that back with
 timestamps attached, through a different door. A test fails by name if the CASE
 is ever widened, so whoever widens it has to revisit the card too.
 
-**Open question for the product owner:** should `secret.revealed`,
-`secret.reveal_denied` and `secret.copied` also become visible to a scoped
-reader with `audit:read`? It is one line. It is not taken here because it
-reverses the preceding decision.
+**Settled:** `secret.revealed`, `secret.reveal_denied` and `secret.copied`
+stay hidden from an org-scoped reader. See decision 7.
 
 ## Decisions
 
@@ -369,6 +367,17 @@ only in a conversation gets re-litigated.
    reverse decision 5. Fixed in the policy rather than in the stored `node_id`
    because the hash chain covers that column and rewriting it would invalidate
    history.
+
+7. **Reveal activity stays hidden from clients (B2, settled).**
+   `secret.revealed`, `secret.reveal_denied` and `secret.copied` remain
+   invisible to an org-scoped reader, consistent with decision 5. The two are
+   the same disclosure reached by different routes — a count on a card, or a
+   per-event log with an actor and a timestamp — so they are governed together.
+   If read activity is ever shown to clients it will be one deliberate
+   "transparency" feature that flips both at once, not a side effect of a
+   predicate fix. `tests/integration/audit-visibility.test.ts` fails by name if
+   the CASE in 0610 is widened, which is the tripwire that sends whoever widens
+   it back to this entry.
 
 Two further decisions taken at the same time:
 
