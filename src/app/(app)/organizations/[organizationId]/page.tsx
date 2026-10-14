@@ -17,11 +17,18 @@ import { SectionBoundary } from '@/components/section-boundary';
 import { maxUploadBytes } from '@/lib/documents/limits';
 import type { DocumentRow, FolderRow } from '@/lib/ui/documents';
 import { isClientRole } from '@/lib/ui/roles';
-import { isWeakStrength, strengthLabel } from '@/lib/ui/strength';
+import {
+  countStrength, isWeakStrength, strengthBucket, strengthLabel,
+} from '@/lib/ui/strength';
 import { FavoriteStar } from '@/components/favorite-star';
 import { NotesCard } from '@/components/notes-card';
 import { HealthDot } from '@/components/ui/health-dot';
-import { isFavorite, recordView } from '@/lib/workspace/queries';
+import { isFavorite, listRecentInOrganization, recordView } from '@/lib/workspace/queries';
+import { listClientActivity, listRecentlyUpdated } from '@/lib/clients/activity';
+import {
+  ActivityFeedWidget, ClientRecentlyViewedWidget, CredentialStrengthWidget,
+  PopularCredentialsWidget, RecentlyUpdatedWidget, type PopularCredential,
+} from '@/components/client-widgets';
 import { Badge, severityTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { RevealButton } from '@/components/reveal-button';
@@ -54,6 +61,10 @@ interface CredentialRow {
   url: string | null; secret_id: string | null; sensitivity: string | null;
   requires_reason: boolean; requires_step_up: boolean; is_break_glass: boolean;
   strength_score: number | null; tags: string[];
+  /* Both maintained inside helm.reveal_secret(), immediately after it writes
+     the secret.revealed audit row. "Most used" is therefore a view of the
+     audited path and not a second, unaudited counter. */
+  access_count: string | null; last_accessed_at: Date | null;
   notes: string | null; criticality: number; secret_label: string | null;
   /** Whether a TOTP seed is attached. A boolean, never the id and never the seed. */
   has_totp: boolean;
@@ -109,8 +120,10 @@ export default async function OrganizationPage({
     // somebody's history for a client they cannot see.
     await recordView(tx, { organizationId });
 
-    const [sites, contacts, assets, credentials, expiries, health, pinned, folders, documents] =
-      await Promise.all([
+    const [
+      sites, contacts, assets, credentials, expiries, health, pinned, folders, documents,
+      recentlyUpdated, recentlyViewed, activity,
+    ] = await Promise.all([
       tx<SiteRow[]>`
         SELECT id, name, code, is_primary, address_line1, city, region, main_phone, notes
         FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
@@ -135,7 +148,8 @@ export default async function OrganizationPage({
                c.secret_id::text, c.is_break_glass,
                c.totp_secret_id IS NOT NULL AS has_totp,
                m.label AS secret_label,
-               m.sensitivity::text, m.requires_reason, m.requires_step_up, m.strength_score
+               m.sensitivity::text, m.requires_reason, m.requires_step_up, m.strength_score,
+               m.access_count, m.last_accessed_at
         FROM credential c
         JOIN asset_node n ON n.id = c.id
         LEFT JOIN v_secret_metadata m ON m.id = c.secret_id
@@ -184,12 +198,29 @@ export default async function OrganizationPage({
         ORDER BY lower(a.filename)
         LIMIT 2000
       `,
+      /*
+       * The three widget reads. In the same Promise.all as everything else and
+       * on the same transaction, so they add round trips rather than a second
+       * connection hold, and they see exactly the rows RLS gave the queries
+       * above.
+       *
+       * listClientActivity returns [] for an actor without `audit:read` —
+       * the policy filters every row and the query still succeeds. That is why
+       * `canReadAudit` is read from the session below and passed to the widget:
+       * from the array alone, "no permission" and "nothing happened" are the
+       * same empty list.
+       */
+      listRecentlyUpdated(tx, organizationId),
+      listRecentInOrganization(tx, organizationId),
+      listClientActivity(tx, organizationId),
     ]);
 
     return {
       organization, sites, contacts, assets, credentials, expiries,
       health: health[0], pinned, folders, documents,
+      recentlyUpdated, recentlyViewed, activity,
       canDeleteDocuments: session.permissions.includes('asset:delete'),
+      canReadAudit: session.permissions.includes('audit:read'),
     };
   });
 
@@ -198,7 +229,8 @@ export default async function OrganizationPage({
 
   const {
     organization, sites, contacts, assets, credentials, expiries, health, pinned,
-    folders, documents, canDeleteDocuments,
+    folders, documents, recentlyUpdated, recentlyViewed, activity,
+    canDeleteDocuments, canReadAudit,
   } = data;
   const canWrite = !isClientRole(identity.roleKey);
 
@@ -208,6 +240,32 @@ export default async function OrganizationPage({
     name: f.name,
     isInternalOnly: f.is_internal_only,
   }));
+  /*
+   * Two widgets out of rows the page already had.
+   *
+   * The credentials list was fetched above with its strength and access columns
+   * joined in; bucketing and sorting it here costs no query and, more to the
+   * point, guarantees the figures on the cards describe exactly the list
+   * underneath them. A second query with its own WHERE would eventually
+   * disagree with the first, and the card would be blamed for the discrepancy.
+   */
+  const withSecret = credentials.filter((c) => c.secret_id !== null);
+  const strengthCounts = countStrength(withSecret.map((c) => c.strength_score));
+  const popularCredentials: PopularCredential[] = withSecret
+    .map((c) => ({
+      nodeId: c.node_id,
+      name: c.name,
+      accessCount: Number(c.access_count ?? 0),
+      lastAccessedAt: c.last_accessed_at,
+    }))
+    // Never-read credentials are not "least popular", they are absent from the
+    // question. access_count is a bigint, so it arrives as a string and
+    // Number() above is what makes this a numeric sort rather than a lexical
+    // one — '9' > '10' is true for strings and would put nine reads above ten.
+    .filter((c) => c.accessCount > 0)
+    .sort((a, b) => b.accessCount - a.accessCount)
+    .slice(0, 5);
+
   const documentRows: DocumentRow[] = documents.map((d) => ({
     id: d.id,
     folderId: d.folder_id,
@@ -290,6 +348,31 @@ export default async function OrganizationPage({
           notes={organization.notes}
           canEdit={canWrite}
         />
+        {/*
+          THE WIDGET ROWS, above the sections rather than beside them.
+
+          A right-hand column was the other option and it is what the reference
+          product does, but the five sections below are already three-up and
+          two-up grids: squeezing a sidebar next to them leaves the credentials
+          table about forty characters wide on a laptop. Across the top, the
+          cards are glanceable on the way to the thing somebody came for, and
+          they collapse to one column on a phone like everything else here.
+
+          Three compact cards, then two lists. All five take data the server
+          component fetched; none of them queries. See client-widgets.tsx.
+        */}
+        <div className="grid gap-4 lg:grid-cols-3">
+          <CredentialStrengthWidget
+            counts={strengthCounts}
+            withoutSecret={credentials.length - withSecret.length}
+          />
+          <PopularCredentialsWidget credentials={popularCredentials} />
+          <ClientRecentlyViewedWidget items={recentlyViewed} />
+        </div>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <RecentlyUpdatedWidget items={recentlyUpdated} organizationId={organization.id} />
+          <ActivityFeedWidget activity={activity} canReadAudit={canReadAudit} />
+        </div>
         {/*
           FIVE SECTIONS, FIVE CARDS, and the lists themselves in modals.
           Each of these used to render inline and in full: every credential,
@@ -428,6 +511,10 @@ export default async function OrganizationPage({
             filters={[
               { key: 'type', label: 'Account type' },
               { key: 'sensitivity', label: 'Sensitivity' },
+              // The strength card above counts these buckets; this is how you
+              // get from a count to the rows behind it. Same strengthBucket(),
+              // so the filter cannot disagree with the number.
+              { key: 'strength', label: 'Strength' },
             ]}
             columns={[
               'Credential',
@@ -446,6 +533,11 @@ export default async function OrganizationPage({
               facets: {
                 type: credential.credential_type,
                 sensitivity: credential.sensitivity ?? 'unknown',
+                // A credential with no stored secret has no strength to filter
+                // on; the card counts those separately for the same reason.
+                strength: credential.secret_id
+                  ? strengthBucket(credential.strength_score)
+                  : 'no_secret',
               },
               cells: [
                 <div key="name">

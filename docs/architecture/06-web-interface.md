@@ -117,13 +117,42 @@ they can verify the file survived whatever channel they hand it over on.
 | --- | --- |
 | `/dashboard` | What needs attention today, across every client. Two banners only — expired items and exports awaiting approval — because a dashboard that surfaces eight kinds of warning trains people to scroll past all of them. |
 | `/organizations` | Every client, with counts from independently RLS-scoped subqueries rather than a join that would fan out. |
-| `/organizations/:id` | One client: sites, contacts, expiring items, credentials with reveal controls, assets. |
+| `/organizations/:id` | One client: five widgets, then sites, contacts, expiring items, credentials with reveal controls, assets and documents. |
 | `/assets/:nodeId` | One asset, its type-specific detail, its **dependencies**, and its credentials. The dependency list is why this page exists: "what breaks if I take this offline" is answered by the graph, not by a description field somebody wrote in 2021. |
 | `/expirations` | Certificates, domains, warranties, licences and contracts in one list, filtered by a severity that is computed at read time. |
 | `/search` | A plain GET form, not live filtering — a keystroke-per-request design puts a partial hostname on the wire and in the server log on every character. |
 | `/exports` | The ledger and the approval queue. Readable by anyone who may create an export, so "who exported this client's credentials and who approved it" needs no administrator. |
 | `/audit` | The trail, and the chain-integrity panel most audit UIs omit: `chain_seq` minus `anchored_seq` is how much history is currently protected only by the database. |
 | `/settings` | Key custody, integration health, and what each background worker may decrypt. Nothing is editable — worker authorisation is fixed by trigger, because a UI that can widen the sync worker's purposes is a UI that can hand it the vault. |
+
+### The client page's widgets
+
+Five cards sit above the sections on `/organizations/:id`: credential strength
+in four buckets, most-used credentials, what you looked at in this client,
+recently updated, and the client's slice of the audit trail. They are in
+`src/components/client-widgets.tsx` and they follow the dashboard's rule —
+**no widget queries.** The server component fetches, the widget renders. Two of
+the five are computed from rows the credentials list had already fetched, so
+they cost no query at all and cannot disagree with the table beneath them.
+
+Two things about them are worth stating here rather than only in the code.
+
+**"Recently updated" and "Activity" read different sources and neither
+substitutes for the other.** Helm audits security-relevant events — reveals,
+rotations, exports, refusals — and does not audit ordinary field edits. Those
+move `updated_at`/`updated_by` instead. So a rotation shows up in Activity and
+not in Recently updated (it touches `secret`, not the credential's
+`asset_node`), and a corrected hostname shows up in Recently updated and not
+in Activity. Each card carries a footer line saying so, because a reader who
+expects one list to contain everything will conclude an edit was lost.
+
+**An empty audit feed says *which* kind of empty it is.** `audit_log`'s policy
+requires `audit:read`, so an actor without it receives zero rows from a query
+that succeeded. The page passes `session.permissions.includes('audit:read')`
+to the widget, which then distinguishes "no audited events for this client
+yet" from "your role does not include reading the audit log". Returning an
+empty list and letting the UI guess is how somebody spends an afternoon
+looking for events they are not allowed to see.
 
 ---
 

@@ -6,6 +6,9 @@ visual one: Helm keeps its own look, wording and assets.
 Assessed against `main` at `0eebae3`. 76 tables, 61 migrations, next free
 migration number **0600** (the `09xx` range is seed data and stays last).
 
+**Updated as groups land.** Group A and group B are in the "Landed" section
+below; their rows above read **Exists**.
+
 **The short version:** far more of this exists than the feature list assumes.
 The documentation model (#5) is built and versioned — what it lacks is an
 authoring screen. The client sidebar (#3) is built. Cross-client expirations
@@ -35,15 +38,15 @@ preferences. Several "widgets" are already-stored data needing only a reader.
 | 3 | Apps & Services in sidebar | **Exists** | Tenant's own `flexible_asset_type` rows with their configured icons |
 | 3 | "Customize Sidebar" link | **Missing** | See #4 |
 | 3 | Quick Notes, inline | **Exists** | `organization.quick_notes`, `components/notes-card.tsx` |
-| 3 | Credential Strength + buckets | **Partial** | **`secret.current_strength_score` is already stored.** Needs bucketing and a widget only |
+| 3 | Credential Strength + buckets | **Exists** | `components/client-widgets.tsx` — four buckets from `v_secret_metadata.strength_score`, bucketed by `lib/ui/strength.ts`. A `Strength` filter on the Credentials section reaches the rows behind each count |
 | 3 | Documentation Health ring | **Missing** | `client_health` widget is a different measure; "not viewed recently"/"stale" needs defining |
-| 3 | Recently Viewed By You (this client) | **Partial** | `user_recent_view` is global; needs an org filter |
+| 3 | Recently Viewed By You (this client) | **Exists** | `listRecentInOrganization()`. Assets only — the client's own row is in the history by the time the page renders, so an unfiltered query led with the page you were on |
 | 3 | Important Contacts | **Partial** | `contact` + `organization.primary_contact_id`; no "important" flag |
-| 3 | Recently Updated (this client) | **Missing** | `audit_log` holds it; no reader |
-| 3 | Popular Credentials | **Partial** | `secret.access_count` + `last_accessed_at` already maintained |
+| 3 | Recently Updated (this client) | **Exists** | `listRecentlyUpdated()` — `updated_at`/`updated_by` across assets, sites, contacts and documents. **Not `audit_log`:** the gap analysis said it was, and it is not. See the note below |
+| 3 | Popular Credentials | **Exists** | `secret.access_count` + `last_accessed_at`, both incremented inside `helm.reveal_secret()` straight after its `secret.revealed` audit write. A test asserts the count equals the audited reveals |
 | 3 | Upcoming Expirations + due tag | **Exists** | "Expiring" section, `expiration` table, `criticality` |
 | 3 | Locations | **Exists** | "Sites" section |
-| 3 | Activity Feed | **Partial** | `audit_log`, `/api/audit`, `/audit` page; not on the client page |
+| 3 | Activity Feed | **Exists** | `listClientActivity()` on the client page, `organization_id`-scoped. Distinguishes "no activity" from "no `audit:read`" |
 | 4 | Customize Your Sidebar | **Missing** | No table, no page. `user_dashboard.widgets` is the precedent to copy |
 | 5 | Flexible/custom asset types | **Partial** | **Schema is complete and versioned**: `flexible_asset_type` (icon, colour, client_visible), `flexible_asset_type_version` (json_schema, ui_schema, secret_fields, searchable_fields), `flexible_asset_record`, `flexible_asset_secret`, API `/api/flexible-assets/{types,records}`, render page. **Missing: any UI to define or edit a type.** Today a type arrives by API call or SQL |
 | 6 | Assets completion grid + % badges | **Missing** | Needs a per-type/per-client coverage query |
@@ -186,12 +189,116 @@ outside had no way to untick anything — Clear would hide the bar and leave
 every checkbox set. That is the smallest seam that fixes it without making
 selection a controlled prop for every caller.
 
-## Open questions
+### Group B — client-page widgets (no migration)
 
-1. Personal Credentials: the three questions above.
-2. Does the Global completion grid count archived clients? (`archived_at`,
-   `status`, and `is_msp_internal` all plausibly exclude a row.)
-3. "Not viewed recently" for Documentation Health — per user, or per tenant?
-   `user_recent_view` is per user, so a tenant-wide answer needs `audit_log`.
-4. Air-gapped installs: should H be opt-in, given `docs/deployment` promises a
-   working air-gapped deployment?
+Five cards above the sections on `/organizations/{id}`: Credential strength,
+Most used credentials, You looked at, Recently updated, Activity. Every one
+reads a column or table that already existed. Six things worth knowing.
+
+**The gap analysis was wrong about Recently Updated.** It said `audit_log`
+holds it. It does not. Helm audits security-relevant *events* — reveals,
+rotations, exports, refusals — and deliberately does not audit ordinary field
+edits: no write route calls `helm.audit()` for a corrected serial number, and
+an audit trail that logged every typo is one nobody reads. What does record
+them is `updated_at`, maintained by `helm.touch_updated_at()`, with
+`updated_by` set by each write route. So "Recently updated" reads that, and
+"Activity" reads `audit_log`, and **neither is derivable from the other**:
+
+- rotating a password moves `secret.updated_at`, not the credential's
+  `asset_node.updated_at`, so it appears in Activity (`secret.rotated`) and
+  not in Recently updated;
+- correcting a hostname moves `asset_node.updated_at` and writes no audit row,
+  so it appears in Recently updated and not in Activity.
+
+The two cards sit side by side for that reason, and each says so in a footer
+line rather than leaving a reader to work out why an edit is missing.
+
+**Popular Credentials reads the audited path, as the brief required.**
+`access_count` and `last_accessed_at` are incremented *inside*
+`helm.reveal_secret()`, immediately after its `helm.audit('secret.revealed')`
+call (0590). There is no second counter. A test asserts
+`secret.access_count = count(audit_log WHERE action = 'secret.revealed')` per
+secret, so a future path that bumps one without the other fails the suite.
+
+**`access_count` is a `bigint`, which postgres.js returns as a string.** Ten
+reads sorted below two, because `'2' > '10'`. The page coerces with `Number()`
+before sorting and a test asserts both the order and the type — ten versus two
+specifically, because that is the smallest pair where a lexical sort and a
+numeric one disagree.
+
+**No new authorization logic, deliberately.** `audit_log`'s policy already
+carries all of it:
+
+```
+tenant_id = helm.current_tenant_id()
+AND helm.has_permission('audit:read')
+AND (helm.is_tenant_wide()
+     OR (organization_id IS NOT NULL
+         AND helm.org_in_scope(organization_id)
+         AND helm.node_visible(node_id)))
+```
+
+An actor without `audit:read` therefore gets an empty array from a query that
+*succeeded* — identical, from the widget's side, to a client nothing has
+happened to. The page passes `session.permissions.includes('audit:read')` so
+the card can say "your role does not include reading the audit log" instead of
+"nothing recorded yet". Tested by rendering the page as `client_read_only`.
+
+**What a co-managed client user now sees, stated rather than left implicit.**
+`access_count` and `last_accessed_at` were already columns on
+`v_secret_metadata`, and `secret_rls_select` gates that view on org scope and
+`helm.secret_node_visible()` — **not** on `secret:read`. So a
+`client_read_only` actor could already read both and simply had nowhere to see
+them; the Most used card now displays them. That is a display change, not a
+new grant, and it is consistent with the existing model: `client_admin` holds
+`audit:read` deliberately so a co-managed customer can see who touched their
+documentation, and the Credentials list already shows them `strength_score`
+and `sensitivity` from the same view on the same page. Worth knowing because
+"the MSP read our domain admin password 47 times" is now on a client's screen
+where before it was only in the database. Reversible in one line (gate the
+card on `secret:reveal`) if that is not wanted.
+
+**Known under-report, found while building this and not fixed here.**
+`helm.write_secret_version()` audits `secret.created`/`secret.rotated` with
+`node_id` set to the **secret's** id. `helm.node_visible(p_node_id)` is
+`EXISTS (SELECT 1 FROM asset_node WHERE id = p_node_id ...)`, and no
+`asset_node` has a secret's id — so for an actor who is not tenant-wide (a
+`client_admin` reading their own trail, say) those two event types are filtered
+out of both `/audit` and this widget. It fails *closed*: it hides rows, it does
+not leak them. Fixing it means changing an RLS policy or the audit call's
+arguments, which is a migration, so it does not belong in a no-migration
+group. Worth doing — candidate for the next group that touches audit.
+
+## Decisions
+
+The four questions this document opened with have been answered. Recorded here
+because the groups they govern are not built yet, and a decision that lives
+only in a conversation gets re-litigated.
+
+1. **Personal Credentials (J).** Tenant DEK; `owner_user_id` on `secret`; RLS
+   adds `owner_user_id = helm.current_user_id()`. **No break-glass** — admins
+   are *refused*, not audited, so the UI can honestly call it private.
+   Excluded from offboarding export bundles, client exports and cross-client
+   search. A deactivated user's personal secrets stay locked rather than
+   deleted; a `super_admin` can purge them and can never read them. To be
+   written up in `docs/security-model.md` as part of J.
+2. **Completion grid (G).** Excludes archived clients, inactive clients and
+   `is_msp_internal` by default, with a filter toggle to include them.
+3. **"Not viewed recently" (I).** Tenant-wide, from `audit_log` — documentation
+   health is a property of the document, not of the viewer. 180-day threshold,
+   configurable in tenant settings.
+4. **Domain/SSL refresh (H).** Opt-in, off by default, enabled in tenant
+   settings. With it off, or when egress fails, manual entry keeps working and
+   the UI shows "last checked: never/failed" rather than erroring. An
+   air-gapped install must keep working with zero configuration. Lock key
+   `0x48_45_4c_4d_0b`.
+
+Two further decisions taken at the same time:
+
+- **Checklists (F)** extend SOPs. No parallel tree. `sop`/`sop_version`/
+  `sop_step` already model a reusable template and `sop_run`/`sop_run_step`
+  model a per-client instance; F adds `assigned_to` and `due_at`. The comment
+  in `src/lib/nav/org-categories.ts` saying Helm has no checklist table is
+  wrong and is corrected as part of F.
+- **Sidebar customization (D)** mirrors `user_dashboard.widgets`, including the
+  catalogue/validator agreement test.

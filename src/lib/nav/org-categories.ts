@@ -57,5 +57,25 @@ export function categoryBySlug(slug: string): OrgCategory | undefined {
   return BY_SLUG.get(slug);
 }
 
+/*
+ * The same taxonomy read the other way: given a node_type or a table name,
+ * which category is it?
+ *
+ * The "Recently updated" widget knows what a row IS — `asset_node.node_type`,
+ * or the table it came out of — and needs a word for it and somewhere to send
+ * a reader. Deriving both from this list rather than from humanise() means the
+ * widget says "SSL Tracker" and "Licences" exactly as the sidebar does, instead
+ * of "Ssl certificate" and "License" beside it on the same page.
+ *
+ * Returns undefined for a source with no category, which today is
+ * `flexible_asset`: those are the tenant's own types and the sidebar lists them
+ * individually, so there is no one entry to point at. Callers fall back.
+ */
+const BY_SOURCE = new Map(ORG_CATEGORIES.map((c) => [c.source, c]));
+
+export function categoryBySource(source: string): OrgCategory | undefined {
+  return BY_SOURCE.get(source);
+}
+
 /** Counts keyed by slug, plus one entry per flexible asset type keyed by `fa:<id>`. */
 export type CategoryCounts = Record<string, number>;

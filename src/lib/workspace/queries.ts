@@ -182,6 +182,53 @@ export async function listRecent(tx: HelmTx, limit = 10): Promise<RecentItem[]> 
   }));
 }
 
+/**
+ * The acting user's recent views WITHIN one client — assets only.
+ *
+ * ASSETS ONLY, AND NOT THE CLIENT ITSELF. Opening the client page calls
+ * recordView() for the organisation, so the organisation's own row is in
+ * user_recent_view by the time this runs. listRecent() above UNIONs a client
+ * half with an asset half and would therefore lead with it on every load: a
+ * list whose top item is always "the page you are looking at".
+ *
+ * The INNER JOIN is what excludes it — an organisation's history row has
+ * node_id NULL, and NULL matches no asset_node id. The `r.node_id IS NOT NULL`
+ * below is redundant with that and kept for the same reason listRecent() has
+ * one: it says which half of the table this query is about.
+ *
+ * No user id, like everything else in this file — user_recent_view's RLS
+ * resolves the actor from helm.current_actor_id(), so this cannot be pointed at
+ * somebody else's history. The organisation id narrows WHICH of the caller's
+ * own views come back, and is not an authorisation argument: `helm.org_in_scope`
+ * already decided whether this client is readable at all.
+ */
+export async function listRecentInOrganization(
+  tx: HelmTx,
+  organizationId: string,
+  limit = 6,
+): Promise<RecentItem[]> {
+  const rows = await tx<{ id: string; name: string; node_type: string; viewed_at: Date }[]>`
+    SELECT n.id::text, n.name, n.node_type::text, r.viewed_at
+    FROM user_recent_view r
+    JOIN asset_node n ON n.id = r.node_id
+    WHERE r.node_id IS NOT NULL
+      AND n.organization_id = ${organizationId}::uuid
+      AND n.archived_at IS NULL
+    ORDER BY r.viewed_at DESC
+    LIMIT ${limit}
+  `;
+  return rows.map((r) => ({
+    kind: 'asset',
+    id: r.id,
+    href: `/assets/${r.id}`,
+    name: r.name,
+    // The node type rather than the client's name: every row here belongs to
+    // the client whose page this is, so repeating it on each line says nothing.
+    context: r.node_type,
+    viewedAt: r.viewed_at,
+  }));
+}
+
 /** The saved layout, or the default for somebody who has never customised it. */
 export async function getLayout(tx: HelmTx): Promise<WidgetKey[]> {
   const [row] = await tx<{ widgets: unknown }[]>`SELECT widgets FROM user_dashboard`;
