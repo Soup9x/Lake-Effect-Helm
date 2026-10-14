@@ -54,7 +54,12 @@ const publishSchema = z.object({
   // site rather than being loosely typed here where the shape is documented.
   jsonSchema: z.unknown(),
   uiSchema: z.record(z.string(), z.unknown()).default({}),
-  /** Fields promoted into global search. Allow-list, never inferred. */
+  /**
+   * Fields promoted into global search. Allow-list, never inferred — and JSON
+   * POINTERS, not bare names: '/hostname'. 0240's indexing trigger does
+   * `substring(v_path from 2)`, so 'hostname' indexes data->>'ostname', which
+   * is NULL. See src/lib/flexible/fields.ts.
+   */
   searchableFields: z.array(z.string()).default([]),
   changeNote: z.string().max(1000).optional(),
 });
@@ -87,6 +92,31 @@ export const POST = tenantRoute(
     const inspection = getFlexibleAssetValidator().inspect(body.jsonSchema);
     if (!inspection.ok) {
       throw ApiError.invalid('the schema was rejected', { issues: inspection.issues });
+    }
+
+    /*
+     * searchableFields must be pointers resolving to a declared property.
+     *
+     * This check was missing, and its absence made the overlap check below
+     * ineffective rather than merely permissive. inspection.secretFields are
+     * JSON pointers ('/api_token'); a caller sending the bare 'api_token' got
+     * no match from `includes`, and `flexible_version_secrets_not_searchable`
+     * compares the same two arrays and so did not fire either — a secret field
+     * could be stored as searchable. Nothing leaked, because the same
+     * off-by-one mangles the key into a NULL lookup and a secret's value never
+     * reaches `data` at all, but the guard was not doing its job. Refusing the
+     * bare form is what makes the two checks below mean something.
+     */
+    const properties = ((body.jsonSchema as { properties?: Record<string, unknown> })
+      .properties ?? {});
+    const badPointers = body.searchableFields.filter(
+      (f) => !f.startsWith('/') || !(f.slice(1) in properties),
+    );
+    if (badPointers.length > 0) {
+      throw ApiError.invalid(
+        'searchable fields must be JSON pointers to fields this schema declares, like "/hostname"',
+        { fields: badPointers },
+      );
     }
 
     const overlap = body.searchableFields.filter((f) => inspection.secretFields.includes(f));
