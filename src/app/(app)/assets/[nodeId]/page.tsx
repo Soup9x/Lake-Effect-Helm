@@ -10,11 +10,14 @@ import { isClientRole } from '@/lib/ui/roles';
 import { isWeakStrength, strengthLabel } from '@/lib/ui/strength';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, severityTone } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { RevealButton } from '@/components/reveal-button';
 import { TotpPanel } from '@/components/totp-panel';
 import { formatDate, formatDateTime, humanise } from '@/lib/ui/format';
 import { recordView } from '@/lib/workspace/queries';
 import { NotesCard } from '@/components/notes-card';
+import { FlexibleRecordForm } from '@/components/flexible-record-form';
+import { pointerFor, schemaToFields, type FieldDef } from '@/lib/flexible/fields';
 
 interface NodeRow {
   id: string; node_type: string; name: string; description: string | null;
@@ -126,6 +129,29 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           UNION
           SELECT s.private_key_secret_id FROM ssl_certificate s
             WHERE s.id = ${nodeId}::uuid AND s.private_key_secret_id IS NOT NULL
+          UNION
+          /*
+           * A secret field on a custom template. The same reveal control as a
+           * credential's password, because it is the same kind of material
+           * written through the same audited path — and without this arm the
+           * record shows a field whose value has nowhere to be read from.
+           *
+           * JOINED THROUGH flexible_asset_type, WHICH IS WHAT KEEPS THIS
+           * HONEST. flexible_asset_type is tenant-scoped and NOT
+           * organisation-scoped (0200), so its policy admits only tenant-wide
+           * actors — a client-side role cannot see a template at all, and the
+           * Details card above shows them nothing for the same reason. The
+           * secret's own label is "<template> — <field>", so listing it
+           * without this join would tell a client administrator the name of a
+           * template they may not read, through a row RLS does let them see.
+           * The join makes one policy decide both halves of the page instead
+           * of two rules that can drift apart.
+           */
+          SELECT f.secret_id
+            FROM flexible_asset_secret f
+            JOIN flexible_asset_record r ON r.id = f.record_id
+            JOIN flexible_asset_type t ON t.id = r.type_id
+           WHERE f.record_id = ${nodeId}::uuid
         )
       `,
       tx<ExpiryRow[]>`
@@ -161,15 +187,20 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       SELECT helm.has_permission('secret:reveal') AS allowed
     `;
 
+    // Only for a record, so the other eleven node types pay nothing for it.
+    const record = node.node_type === 'flexible_asset'
+      ? await flexibleRecord(tx, node.id)
+      : null;
+
     return {
-      node, detail: detailRows, edges, secrets, expiries, sites,
+      node, detail: detailRows, edges, secrets, expiries, sites, record,
       totp: totp ?? null,
       canReveal: perm?.allowed ?? false,
     };
   });
 
   if (!data) notFound();
-  const { node, detail, edges, secrets, expiries, sites, totp, canReveal } = data;
+  const { node, detail, edges, secrets, expiries, sites, record, totp, canReveal } = data;
   const canWrite = !isClientRole(identity.roleKey);
 
   return (
@@ -203,7 +234,12 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       />
       <PageBody>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge tone="brand">{humanise(node.node_type)}</Badge>
+          {/* The TEMPLATE's name for a record, because "Flexible asset" is what
+              the schema calls this row and "Backup Job" is what it is. */}
+          <Badge tone="brand">{record ? record.typeName : humanise(node.node_type)}</Badge>
+          {record?.needsMigration && (
+            <Badge tone="warning">Needs migration</Badge>
+          )}
           <Badge tone={node.status === 'active' ? 'ok' : 'neutral'}>{node.status}</Badge>
           <Badge tone={node.criticality >= 4 ? 'critical' : 'neutral'}>
             Criticality {node.criticality}
@@ -228,11 +264,60 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
         <div className="grid gap-4 lg:grid-cols-2">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex-row items-center justify-between gap-2">
               <CardTitle>Details</CardTitle>
+              {/* Edits the TEMPLATE's fields, which is why it lives on this card
+                  and not beside the header's Edit: that one writes asset_node's
+                  own columns and knows nothing about a schema. */}
+              {record && record.editableFields !== null && canWrite && (
+                <FlexibleRecordForm
+                  type={{
+                    id: record.typeId,
+                    name: record.typeName,
+                    fields: record.editableFields,
+                  }}
+                  organizationId={node.organization_id}
+                  sites={sites}
+                  record={{
+                    nodeId: node.id,
+                    values: record.data,
+                    heldSecrets: record.heldSecrets,
+                  }}
+                  trigger={
+                    <Button variant="secondary" size="sm">
+                      Edit fields
+                    </Button>
+                  }
+                />
+              )}
             </CardHeader>
             <CardContent>
-              {Object.keys(detail).length === 0 ? (
+              {record ? (
+                record.fields.length === 0 ? (
+                  <p className="text-sm text-ink-faint">
+                    This template has no fields, so there is nothing recorded against it.
+                  </p>
+                ) : (
+                  <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
+                    {record.fields.map((field) => (
+                      <div key={field.key} className="contents">
+                        <dt className="truncate text-ink-muted" title={field.help}>
+                          {field.label}
+                        </dt>
+                        <dd className="min-w-0 break-words text-ink">
+                          {field.secret ? (
+                            <span className="text-ink-faint">
+                              {field.held ? 'Encrypted — see Credentials below' : 'Not set'}
+                            </span>
+                          ) : (
+                            renderValue(field.value)
+                          )}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )
+              ) : Object.keys(detail).length === 0 ? (
                 <p className="text-sm text-ink-faint">No type-specific detail recorded.</p>
               ) : (
                 <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
@@ -246,7 +331,15 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
               )}
               <p className="mt-4 text-xs text-ink-faint">
                 Last updated {formatDateTime(node.updated_at)}
+                {record && ` · ${record.typeName} v${record.pinnedVersion}`}
               </p>
+              {record?.needsMigration && (
+                <p className="mt-2 text-xs text-warning">
+                  This record was written against version {record.pinnedVersion} of the template,
+                  which has since changed in a way that may not accept it. Opening “Edit fields”
+                  and saving validates it against the current version and clears this.
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -350,6 +443,138 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       </PageBody>
     </>
   );
+}
+
+/** One field of a record, ready to render. */
+interface RenderedField {
+  key: string;
+  label: string;
+  help: string | undefined;
+  value: unknown;
+  secret: boolean;
+  /** For a secret field: whether a value is actually stored. */
+  held: boolean;
+}
+
+interface FlexibleRecordView {
+  typeId: string;
+  typeName: string;
+  /** The version the record is pinned to — the schema that describes `data`. */
+  pinnedVersion: number;
+  needsMigration: boolean;
+  data: Record<string, unknown>;
+  heldSecrets: string[];
+  /** Rendered against the PINNED version. */
+  fields: RenderedField[];
+  /** The CURRENT version's fields, for editing. null when there is none. */
+  editableFields: FieldDef[] | null;
+}
+
+/**
+ * A flexible asset record, decoded far enough to be rendered.
+ *
+ * WHY THIS IS NOT A DETAIL_TABLES ENTRY. Every other node type has a subtype
+ * table whose columns ARE the fields, so `to_jsonb(t)` and humanise() on each
+ * key is a faithful rendering. A record's fields live in one jsonb document
+ * whose keys are identifiers chosen by whoever defined the template, and whose
+ * labels, order, kinds and help text are in the schema version beside it. Sent
+ * through the generic path it rendered as nothing at all — flexible_asset was
+ * simply absent from the map, so detailFor() returned {} and every record in
+ * the product displayed "No type-specific detail recorded" over its entire
+ * contents.
+ *
+ * TWO VERSIONS, FOR TWO DIFFERENT QUESTIONS, and conflating them is the subtle
+ * bug this avoids:
+ *
+ *   - READING uses the version the record is PINNED to. That schema is the one
+ *     that describes the keys actually in `data`: it has a label for each of
+ *     them and does not promise fields the document never had. Rendering
+ *     against the current version would drop a field removed since — showing a
+ *     reader less than the record contains.
+ *
+ *   - EDITING uses the type's CURRENT version, because a save is validated
+ *     against it. Offering the pinned fields would produce a form that cannot
+ *     be saved the moment the template moves on.
+ *
+ * Normally they are the same row and the distinction costs nothing.
+ */
+async function flexibleRecord(
+  tx: Parameters<Parameters<typeof withTenant>[1]>[0],
+  nodeId: string,
+): Promise<FlexibleRecordView | null> {
+  const [row] = await tx<{
+    type_id: string; type_name: string; data: Record<string, unknown>;
+    needs_migration: boolean; pinned_version: number;
+    pinned_schema: unknown; pinned_ui: unknown;
+    current_schema: unknown; current_ui: unknown;
+  }[]>`
+    SELECT r.type_id, t.name AS type_name, r.data, r.needs_migration,
+           pinned.version AS pinned_version,
+           pinned.json_schema AS pinned_schema, pinned.ui_schema AS pinned_ui,
+           cur.json_schema AS current_schema, cur.ui_schema AS current_ui
+    FROM flexible_asset_record r
+    JOIN flexible_asset_type t ON t.id = r.type_id
+    JOIN flexible_asset_type_version pinned ON pinned.id = r.type_version_id
+    -- LEFT, and twice over: current_version_id is ON DELETE SET NULL, and a
+    -- retired type should still render the records written under it rather
+    -- than making them unreadable as well as uneditable.
+    LEFT JOIN flexible_asset_type_version cur
+           ON cur.id = t.current_version_id AND t.is_active
+    WHERE r.id = ${nodeId}::uuid
+  `;
+  if (!row) return null;
+
+  const held = new Set(
+    (
+      await tx<{ field_path: string }[]>`
+        SELECT field_path FROM flexible_asset_secret WHERE record_id = ${nodeId}::uuid
+      `
+    ).map((r) => r.field_path),
+  );
+
+  const defined = schemaToFields(row.pinned_schema, row.pinned_ui);
+  const fields: RenderedField[] = defined.map((field) => ({
+    key: field.key,
+    label: field.label,
+    help: field.help,
+    value: row.data[field.key],
+    secret: field.kind === 'secret',
+    held: held.has(pointerFor(field.key)),
+  }));
+
+  /*
+   * Anything in the document the pinned schema does not describe, appended.
+   *
+   * It should not happen — every write validates with additionalProperties:
+   * false — so this is for the row that arrived by SQL, by import, or from a
+   * schema edited outside the field model. Showing it with humanise() on the
+   * raw key is ugly on purpose: a field with no label is visibly not part of
+   * the template, which is better than a value nobody can see.
+   */
+  const describedKeys = new Set(defined.map((f) => f.key));
+  for (const [key, value] of Object.entries(row.data)) {
+    if (describedKeys.has(key)) continue;
+    fields.push({
+      key,
+      label: humanise(key),
+      help: 'Not declared by this version of the template.',
+      value,
+      secret: false,
+      held: false,
+    });
+  }
+
+  return {
+    typeId: row.type_id,
+    typeName: row.type_name,
+    pinnedVersion: row.pinned_version,
+    needsMigration: row.needs_migration,
+    data: row.data,
+    heldSecrets: [...held],
+    fields,
+    editableFields:
+      row.current_schema === null ? null : schemaToFields(row.current_schema, row.current_ui),
+  };
 }
 
 /** node_type is a database enum, so the table name can never come from input. */

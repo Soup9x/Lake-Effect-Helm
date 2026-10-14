@@ -4,6 +4,8 @@ import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { CategoryGrid, type CategoryRecord } from '@/components/shell/category-grid';
 import { ViewHeader } from '@/components/shell/view-header';
 import { Button } from '@/components/ui/button';
+import { FlexibleRecordForm } from '@/components/flexible-record-form';
+import { schemaToFields, type FieldDef } from '@/lib/flexible/fields';
 import { isClientRole } from '@/lib/ui/roles';
 
 export const dynamic = 'force-dynamic';
@@ -35,11 +37,34 @@ export default async function FlexibleAssetPage({
     `;
     if (!org) return null;
 
-    const [type] = await tx<{ id: string; name: string; description: string | null }[]>`
-      SELECT id, name, description FROM flexible_asset_type
-      WHERE id = ${typeId}::uuid AND is_active
+    /*
+     * The type AND its current published schema, because the "+ New" button is
+     * a form over that schema rather than a link to one. Read in the same query
+     * so there is no window in which the page offers fields from a version that
+     * has since been superseded.
+     *
+     * The LEFT JOIN is not defensive dressing: current_version_id is ON DELETE
+     * SET NULL, so a type whose only version was a deleted draft genuinely has
+     * no schema, and its records (if any predate that) still have to list.
+     */
+    const [type] = await tx<{
+      id: string; name: string; description: string | null;
+      json_schema: unknown; ui_schema: unknown;
+    }[]>`
+      SELECT t.id, t.name, t.description, v.json_schema, v.ui_schema
+      FROM flexible_asset_type t
+      LEFT JOIN flexible_asset_type_version v ON v.id = t.current_version_id
+      WHERE t.id = ${typeId}::uuid AND t.is_active
     `;
     if (!type) return null;
+
+    // For the create form's site picker. Read through RLS, so it can only ever
+    // offer sites this actor may already see.
+    const sites = await tx<{ id: string; name: string }[]>`
+      SELECT id, name FROM site
+      WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+      ORDER BY name
+    `;
 
     const [rank] = await tx<{ rank: number }[]>`SELECT helm.current_role_rank() AS rank`;
 
@@ -62,6 +87,13 @@ export default async function FlexibleAssetPage({
     return {
       org,
       type,
+      sites,
+      // null, not [], when there is no published version: "nothing to fill in"
+      // and "no template to fill in" are different answers and the button below
+      // depends on which one it is.
+      fields: type.json_schema === null
+        ? null
+        : schemaToFields(type.json_schema, type.ui_schema) satisfies FieldDef[],
       actorRoleRank: rank?.rank ?? 0,
       records: rows.map<CategoryRecord>((r) => ({
         id: r.id,
@@ -90,10 +122,17 @@ export default async function FlexibleAssetPage({
         title={data.type.name}
         description={data.type.description ?? undefined}
         actions={
-          canWrite ? (
-            <Button variant="cta" size="sm">
-              + New
-            </Button>
+          canWrite && data.fields !== null ? (
+            <FlexibleRecordForm
+              type={{ id: data.type.id, name: data.type.name, fields: data.fields }}
+              organizationId={organizationId}
+              sites={data.sites}
+              trigger={
+                <Button variant="cta" size="sm">
+                  + New
+                </Button>
+              }
+            />
           ) : null
         }
       />
