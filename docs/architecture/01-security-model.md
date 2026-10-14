@@ -405,6 +405,18 @@ a row, and the sophisticated case — editing a row *and recomputing its hash* s
 it is internally consistent, which still fails because every later row's
 `prev_hash` was computed from the original.
 
+**And it constrains what a bug fix may do.** `node_id` is inside the canonical
+form, so a migration that "corrected" a stored `node_id` would invalidate every
+hash after it. When the secret rows turned out to carry the wrong `node_id`
+(0610 — `helm.audit()`'s sixth parameter received the secret's id, so
+`helm.node_visible(node_id)` was false for every one of them and a scoped
+reader saw none of its own credential history), the fix had to be to the
+*policy* rather than to the data. The predicate now asks
+`helm.secret_node_visible(entity_id)` for `secret.created` and
+`secret.rotated` — the question a row about a secret can answer — and the rows
+already written are unchanged, so the chain still verifies. A log you can
+retroactively tidy up is not evidence.
+
 **What it does not give you:** protection from someone with superuser or
 filesystem access, who can disable triggers and recompute the whole chain
 forward. Tamper *evidence* requires the head to be witnessed somewhere Postgres

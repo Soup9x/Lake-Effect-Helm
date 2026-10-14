@@ -278,16 +278,57 @@ fixture actor for exactly that reason — it is the only one that distinguishes
 `secret:read` from `secret:reveal`, and it is also the role the restriction is
 most about.
 
-**Known under-report, found while building this and not fixed here.**
-`helm.write_secret_version()` audits `secret.created`/`secret.rotated` with
-`node_id` set to the **secret's** id. `helm.node_visible(p_node_id)` is
-`EXISTS (SELECT 1 FROM asset_node WHERE id = p_node_id ...)`, and no
-`asset_node` has a secret's id — so for an actor who is not tenant-wide (a
-`client_admin` reading their own trail, say) those two event types are filtered
-out of both `/audit` and this widget. It fails *closed*: it hides rows, it does
-not leak them. Fixing it means changing an RLS policy or the audit call's
-arguments, which is a migration, so it does not belong in a no-migration
-group. Worth doing — candidate for the next group that touches audit.
+**Known under-report, found while building this.** Fixed in B2 — see below.
+
+### Group B2 — audit visibility for secret rows (migration 0610)
+
+**The bug.** Every `helm.audit()` call about a secret passes the **secret's**
+id as `helm.audit()`'s sixth parameter, which is `p_node_id`:
+
+```sql
+helm.audit('secret.rotated', 'secret', v_secret.id, 'success',
+           v_secret.organization_id, v_secret.id, ...)
+--                                   ^^^^^^^^^^^ p_node_id
+```
+
+The `audit_log` policy then asked `helm.node_visible(node_id)` of it, and that
+is `EXISTS (SELECT 1 FROM asset_node WHERE id = node_id AND NOT
+is_internal_only)`. No `asset_node` has a secret's id, so the predicate was
+false for every secret row and every reader who is not tenant-wide. A
+`client_admin` — which holds `audit:read` deliberately, because 0390's own
+header says "a co-managed customer being able to see who touched their
+documentation is a feature" — saw none of it.
+
+It failed **closed**, which is why it survived: it hid rows rather than leaking
+them, so nothing ever looked wrong. It surfaced because group B put an activity
+feed on the client page and that feed was empty for exactly one role.
+
+**The policy, not the data.** The obvious fix is to pass the owning credential
+node's id, and it is not enough: it cannot reach a single row already written.
+`audit_log` is append-only, and `node_id` is inside
+`helm.audit_canonical_form()`, so it is covered by `row_hash` and by the
+per-tenant hash chain. Rewriting it would invalidate the chain, which is the
+one property that makes the table evidence. So 0610 changes the predicate only,
+to ask `helm.secret_node_visible(entity_id)` — a function that already existed
+for exactly this shape, and which resolves a secret to the credential nodes
+pointing at it. Internal-only documentation therefore stays hidden: the fix
+un-hides only what 0390 meant to leave visible.
+
+**Scope: `secret.created` and `secret.rotated` only, deliberately.**
+`secret.revealed` carries the same wrong `node_id` and the same one-line change
+would un-hide it. It is excluded, because the two groups disclose different
+things: created/rotated say "this client's documentation changed, by whom,
+when", while revealed says "your MSP read this password, at this time". The
+second line was drawn one commit earlier — the Most used credentials card was
+gated on `secret:reveal` so a customer would not learn how often their MSP read
+a credential — and un-hiding `secret.revealed` here would hand that back with
+timestamps attached, through a different door. A test fails by name if the CASE
+is ever widened, so whoever widens it has to revisit the card too.
+
+**Open question for the product owner:** should `secret.revealed`,
+`secret.reveal_denied` and `secret.copied` also become visible to a scoped
+reader with `audit:read`? It is one line. It is not taken here because it
+reverses the preceding decision.
 
 ## Decisions
 
@@ -320,6 +361,14 @@ only in a conversation gets re-litigated.
    enforced in the page: an actor without the permission is handed an empty
    array, so no count is serialised into the RSC payload. `client_admin` sees
    the audit trail for its own organisation and not the reveal counts.
+
+6. **Audit visibility for secret rows (B2).** The `audit_log` policy asks
+   `helm.secret_node_visible(entity_id)` for `secret.created` and
+   `secret.rotated`, and `helm.node_visible(node_id)` for everything else. Not
+   widened to the whole `secret.*` family, because `secret.revealed` would
+   reverse decision 5. Fixed in the policy rather than in the stored `node_id`
+   because the hash chain covers that column and rewriting it would invalidate
+   history.
 
 Two further decisions taken at the same time:
 
