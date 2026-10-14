@@ -20,6 +20,8 @@ import { FlexibleRecordForm } from '@/components/flexible-record-form';
 import { pointerFor, schemaToFields, type FieldDef } from '@/lib/flexible/fields';
 import { listAssignableUsers, readTemplate } from '@/lib/sops/queries';
 import { ChecklistTemplateCard } from '@/components/checklist-template-card';
+import { ExternalCheckNote, type ExternalCheckState } from '@/components/external-check-note';
+import { readExternalCheckSetting } from '@/lib/external/settings';
 
 interface NodeRow {
   id: string; node_type: string; name: string; description: string | null;
@@ -206,6 +208,45 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     // Same bargain for a procedure: its steps and published versions, read
     // only when the node is one.
     const template = node.node_type === 'sop' ? await readTemplate(tx, node.id) : null;
+    /*
+     * Only for the two node types a probe can reach. Read even when checking is
+     * OFF, because "off" is the sentence the card needs: never checked because
+     * nobody enabled it is a different fact from never checked because the
+     * registry will not answer, and a card that could not tell them apart would
+     * send somebody hunting a fault that does not exist.
+     */
+    const checkable = node.node_type === 'domain' || node.node_type === 'ssl_certificate';
+    const checkSetting = checkable ? await readExternalCheckSetting(tx) : null;
+    /*
+     * The probe columns, read by name rather than taken from `detail`.
+     *
+     * detailFor() hides them — they are rendered as a sentence by
+     * ExternalCheckNote, not as five humanised rows — and it also drops every
+     * NULL, which is exactly the state this card exists to describe. So they
+     * are selected here, typed, and `recorded` comes with them so the
+     * comparison is between two values read the same way.
+     */
+    const checkRow = !checkable ? null : (
+      node.node_type === 'domain'
+        ? (await tx<{
+            recorded: Date | null; observed: Date | null; checked: Date | null;
+            status: string | null; error: string | null;
+          }[]>`
+            SELECT expires_at AS recorded, registry_expires_at AS observed,
+                   last_checked_at AS checked, last_check_status::text AS status,
+                   last_check_error AS error
+            FROM domain WHERE id = ${node.id}::uuid
+          `)[0] ?? null
+        : (await tx<{
+            recorded: Date | null; observed: Date | null; checked: Date | null;
+            status: string | null; error: string | null;
+          }[]>`
+            SELECT not_after AS recorded, observed_not_after AS observed,
+                   last_checked_at AS checked, last_check_status::text AS status,
+                   last_check_error AS error
+            FROM ssl_certificate WHERE id = ${node.id}::uuid
+          `)[0] ?? null
+    );
     // Only for the picker in the start-a-run dialog, so only when that dialog
     // can be opened at all.
     const assignable = template && perm?.run ? await listAssignableUsers(tx) : [];
@@ -217,14 +258,32 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       canAuthorProcedures: perm?.author ?? false,
       canRunChecklists: perm?.run ?? false,
       assignable,
+      checkSetting,
+      checkRow,
     };
   });
 
   if (!data) notFound();
   const {
     node, detail, edges, secrets, expiries, sites, record, template, totp, canReveal,
-    canAuthorProcedures, canRunChecklists, assignable,
+    canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
   } = data;
+
+  /** The probe's answer, shaped for the card. */
+  const checkState: ExternalCheckState | null = checkSetting === null || checkRow === null
+    ? null
+    : {
+        enabled: node.node_type === 'domain'
+          ? checkSetting.domainsEnabled
+          : checkSetting.certificatesEnabled,
+        recorded: checkRow.recorded,
+        observed: checkRow.observed,
+        lastCheckedAt: checkRow.checked,
+        status: (checkRow.status as ExternalCheckState['status']) ?? null,
+        error: checkRow.error,
+        source: node.node_type === 'domain' ? 'the registry' : 'the server',
+        recordedLabel: node.node_type === 'domain' ? 'Expires' : 'Not after',
+      };
   const canWrite = !isClientRole(identity.roleKey);
 
   return (
@@ -366,6 +425,15 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
               )}
             </CardContent>
           </Card>
+
+          {/*
+            Above Dependencies because it is about THIS asset's own facts, and
+            below the detail card because it comments on a value shown there.
+            Rendered whenever the node type is probeable — including when
+            checking is switched off, since "off" is the sentence that stops
+            somebody hunting a fault that does not exist.
+          */}
+          {checkState && <ExternalCheckNote state={checkState} />}
 
           <Card>
             <CardHeader>
@@ -669,7 +737,21 @@ async function detailFor(
    * which is TotpPanel's business, and they mean nothing on a credential with no
    * seed.
    */
-  const HIDDEN = new Set(['totp_algorithm', 'totp_digits', 'totp_period_seconds', 'totp_issuer', 'totp_account']);
+  /*
+   * The totp_* parameters, and 0670's check bookkeeping.
+   *
+   * next_check_at is scheduling machinery — the answer to "when will a worker
+   * get round to this" is nobody's business on an asset page — and the status,
+   * error and observed value are all rendered properly by ExternalCheckNote
+   * below, where they can be a sentence instead of five humanised rows.
+   * Leaving them in the generic list as well would say everything twice and
+   * badly.
+   */
+  const HIDDEN = new Set([
+    'totp_algorithm', 'totp_digits', 'totp_period_seconds', 'totp_issuer', 'totp_account',
+    'next_check_at', 'last_checked_at', 'last_check_status', 'last_check_error',
+    'registry_expires_at', 'observed_not_after', 'observed_fingerprint_sha256',
+  ]);
   /*
    * Person ids go the same way as secret ids: a raw uuid in a detail list is
    * noise whatever it points at, and inviting somebody to read one is worse.
