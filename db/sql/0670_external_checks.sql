@@ -233,28 +233,41 @@ $$;
 -- THE SETTING IS THE FILTER. A tenant with no row, or with the relevant flag
 -- off, contributes nothing: an air-gapped install returns an empty backlog
 -- forever and the job reports idle.
+--
+-- AND IT RETURNS THE TENANT'S WORKER IDENTITY, which is not a convenience.
+-- helm_worker is subject to RLS like any other role, so the job cannot write to
+-- `domain` with no tenant context — an UPDATE would match zero rows and report
+-- success, which is exactly what the first version of this did. Every
+-- enumerator in 0300 returns worker_actor_id for this reason, and the job wraps
+-- its writes in withTenant() with it. 'system_sync' is the role the integration
+-- sync already writes asset facts as; a tenant whose service account is missing
+-- or disabled is skipped rather than silently failing.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION helm.external_check_backlog(p_limit integer DEFAULT 25)
   RETURNS TABLE (
-    kind          text,
-    row_id        uuid,
-    tenant_id     uuid,
-    target        text,
-    rdap_base_url text,
-    interval_hours integer
+    kind            text,
+    row_id          uuid,
+    tenant_id       uuid,
+    worker_actor_id uuid,
+    target          text,
+    rdap_base_url   text,
+    interval_hours  integer
   )
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = public, helm, extensions, pg_catalog, pg_temp
 AS $$
   SELECT * FROM (
     SELECT 'domain'::text AS kind, d.id AS row_id, d.tenant_id,
+           helm.worker_actor(d.tenant_id, 'system_sync') AS worker_actor_id,
            d.domain_name AS target, s.rdap_base_url, s.interval_hours
     FROM domain d
     JOIN external_check_setting s ON s.tenant_id = d.tenant_id
     WHERE s.domains_enabled
       AND (d.next_check_at IS NULL OR d.next_check_at <= now())
+      AND helm.worker_actor(d.tenant_id, 'system_sync') IS NOT NULL
     UNION ALL
     SELECT 'certificate'::text, c.id, c.tenant_id,
+           helm.worker_actor(c.tenant_id, 'system_sync'),
            -- The name to connect to. common_name is what a certificate is FOR,
            -- which is the only host this can honestly probe: Helm does not
            -- record where a certificate is installed as a reachable address.
@@ -263,6 +276,7 @@ AS $$
     JOIN external_check_setting s ON s.tenant_id = c.tenant_id
     WHERE s.certificates_enabled
       AND (c.next_check_at IS NULL OR c.next_check_at <= now())
+      AND helm.worker_actor(c.tenant_id, 'system_sync') IS NOT NULL
   ) due
   -- Oldest claim first is not available (NULL sorts with no date), so ordering
   -- is by id: stable, arbitrary, and fair enough for work that repeats daily.

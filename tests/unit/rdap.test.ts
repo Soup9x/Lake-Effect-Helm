@@ -9,12 +9,14 @@
  * "insecure" switch to lookupDomainExpiry so a test could pass would be putting
  * a hole in the product to make the test easy.
  *
- * Vitest isolates each test file in its own worker, so this affects nothing
- * else in the suite.
+ * Vitest isolates each test file in its own process — measured, not assumed:
+ * two files run in one command report different pids and the second sees the
+ * variable unset. The afterAll below restores it anyway, so the suite does not
+ * depend on a vitest default (`isolate`, or the pool) staying what it is.
  */
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { expiryFromRdap, lookupDomainExpiry, RdapError } from '../../src/lib/external/rdap';
 import { FakeRdap, type RdapMode } from '../support/fake-external';
 
@@ -26,6 +28,9 @@ async function service(options?: { mode?: RdapMode; expiresAt?: string }): Promi
 }
 afterEach(async () => {
   while (running.length > 0) await running.pop()!.stop();
+});
+afterAll(() => {
+  delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
 });
 
 describe('reading an expiry out of an RDAP document', () => {

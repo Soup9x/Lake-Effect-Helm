@@ -70,7 +70,7 @@ export class FakeTlsHost {
   get notBefore(): Date { return this.material.notBefore; }
 
   static async start(
-    options: { commonName?: string; days?: number } = {},
+    options: { commonName?: string; days?: number; port?: number } = {},
   ): Promise<FakeTlsHost> {
     const material = certificate(options.commonName ?? 'probe.test', options.days ?? 90);
     const server = createHttpsServer(
@@ -80,7 +80,13 @@ export class FakeTlsHost {
       // to be well formed.
       (_req, res) => { res.writeHead(200); res.end('ok'); },
     );
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    /*
+     * A FIXED PORT IS OFFERED because the production probe connects on 443 and
+     * takes no port — a certificate's reachable address is its common name, and
+     * inventing a port parameter so a test could pass would be widening the
+     * product to suit the test. This container runs as root, so 443 binds.
+     */
+    await new Promise<void>((resolve) => server.listen(options.port ?? 0, '127.0.0.1', resolve));
     const address = server.address() as AddressInfo;
     return new FakeTlsHost(server, material, '127.0.0.1', address.port);
   }

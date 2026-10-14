@@ -26,8 +26,19 @@
  * 'unsupported' IS NOT 'failed'. A ccTLD that publishes no expiry event will
  * never publish one; showing that in red beside a real outage trains people to
  * ignore both.
+ *
+ * WRITES ARE TENANT-SCOPED, through withTenant(..., { role: 'worker' }), and
+ * that is not boilerplate: helm_worker is subject to RLS like every other role.
+ * The first version of this job read the backlog as the bare worker and then ran
+ * `UPDATE domain ... WHERE id = $1` with no tenant context, so every write
+ * matched ZERO ROWS and reported success — the job logged a tidy count of
+ * failures recorded while recording nothing at all. An integration test caught
+ * it; nothing in the SQL could have, because an UPDATE that matches no rows is
+ * not an error. The cross-tenant read stays on the bare worker because
+ * helm.external_check_backlog() is SECURITY DEFINER; it hands back the tenant's
+ * own system_sync actor so each write can go back inside that tenant.
  */
-import { db } from '../lib/db/client';
+import { db, withTenant } from '../lib/db/client';
 import { observeCertificate, CertificateProbeError } from '../lib/external/certificate';
 import { lookupDomainExpiry, RdapError } from '../lib/external/rdap';
 import type { Job, JobContext, JobResult } from './runtime';
@@ -36,9 +47,18 @@ interface BacklogRow {
   kind: 'domain' | 'certificate';
   row_id: string;
   tenant_id: string;
+  /** The tenant's system_sync service account; see WRITES ARE TENANT-SCOPED. */
+  worker_actor_id: string;
   target: string | null;
   rdap_base_url: string;
   interval_hours: number;
+}
+
+/** What withTenant needs to put a worker inside one tenant. */
+type Actor = { tenantId: string; actorId: string; actorType: 'service_account' };
+
+function actorFor(row: BacklogRow): Actor {
+  return { tenantId: row.tenant_id, actorId: row.worker_actor_id, actorType: 'service_account' };
 }
 
 /** How long a claim holds before another worker may retry the same row. */
@@ -67,16 +87,25 @@ async function runExternalChecks(ctx: JobContext): Promise<JobResult> {
   for (const row of backlog) {
     if (ctx.stopping()) break;
 
+    const actor = actorFor(row);
+
     // Claimed one row at a time, so a shutdown mid-backlog leaves the rest
     // unclaimed for the next tick rather than holding a block of them.
-    const [claim] = row.kind === 'domain'
-      ? await db('worker')<{ claimed: boolean }[]>`
-          SELECT helm.claim_domain_check(${row.row_id}::uuid, ${CLAIM_SECONDS}) AS claimed
-        `
-      : await db('worker')<{ claimed: boolean }[]>`
-          SELECT helm.claim_certificate_check(${row.row_id}::uuid, ${CLAIM_SECONDS}) AS claimed
-        `;
-    if (!claim?.claimed) {
+    const claimed = await withTenant(
+      actor,
+      async (tx) => {
+        const [claim] = row.kind === 'domain'
+          ? await tx<{ claimed: boolean }[]>`
+              SELECT helm.claim_domain_check(${row.row_id}::uuid, ${CLAIM_SECONDS}) AS claimed
+            `
+          : await tx<{ claimed: boolean }[]>`
+              SELECT helm.claim_certificate_check(${row.row_id}::uuid, ${CLAIM_SECONDS}) AS claimed
+            `;
+        return claim?.claimed === true;
+      },
+      { role: 'worker' },
+    );
+    if (!claimed) {
       counts.skipped += 1;
       continue;
     }
@@ -89,6 +118,7 @@ async function runExternalChecks(ctx: JobContext): Promise<JobResult> {
       // whatever an empty string resolves to.
       await record(
         row,
+        actor,
         'unsupported',
         `no ${row.kind === 'domain' ? 'domain name' : 'common name'} to look up`,
       );
@@ -99,28 +129,36 @@ async function runExternalChecks(ctx: JobContext): Promise<JobResult> {
     try {
       if (row.kind === 'domain') {
         const found = await lookupDomainExpiry(row.rdap_base_url, row.target);
-        await db('worker')`
-          UPDATE domain SET
-            registry_expires_at = ${found.expiresAt},
-            last_checked_at     = now(),
-            next_check_at       = now() + make_interval(hours => ${row.interval_hours}),
-            last_check_status   = 'ok',
-            last_check_error    = NULL
-          WHERE id = ${row.row_id}::uuid
-        `;
+        await withTenant(
+          actor,
+          async (tx) => tx`
+            UPDATE domain SET
+              registry_expires_at = ${found.expiresAt},
+              last_checked_at     = now(),
+              next_check_at       = now() + make_interval(hours => ${row.interval_hours}),
+              last_check_status   = 'ok',
+              last_check_error    = NULL
+            WHERE id = ${row.row_id}::uuid
+          `,
+          { role: 'worker' },
+        );
         counts.domains += 1;
       } else {
         const found = await observeCertificate(row.target);
-        await db('worker')`
-          UPDATE ssl_certificate SET
-            observed_not_after          = ${found.notAfter},
-            observed_fingerprint_sha256 = ${found.fingerprintSha256},
-            last_checked_at             = now(),
-            next_check_at               = now() + make_interval(hours => ${row.interval_hours}),
-            last_check_status           = 'ok',
-            last_check_error            = NULL
-          WHERE id = ${row.row_id}::uuid
-        `;
+        await withTenant(
+          actor,
+          async (tx) => tx`
+            UPDATE ssl_certificate SET
+              observed_not_after          = ${found.notAfter},
+              observed_fingerprint_sha256 = ${found.fingerprintSha256},
+              last_checked_at             = now(),
+              next_check_at               = now() + make_interval(hours => ${row.interval_hours}),
+              last_check_status           = 'ok',
+              last_check_error            = NULL
+            WHERE id = ${row.row_id}::uuid
+          `,
+          { role: 'worker' },
+        );
         counts.certificates += 1;
       }
     } catch (error) {
@@ -139,7 +177,7 @@ async function runExternalChecks(ctx: JobContext): Promise<JobResult> {
         log.debug('probe did not answer', { status, message });
       }
 
-      await record(row, status, message);
+      await record(row, actor, status, message);
       if (unsupported) counts.unsupported += 1;
       else counts.failed += 1;
     }
@@ -164,27 +202,34 @@ async function runExternalChecks(ctx: JobContext): Promise<JobResult> {
  */
 async function record(
   row: BacklogRow,
+  actor: Actor,
   status: 'failed' | 'unsupported',
   message: string,
 ): Promise<void> {
   // Truncated: an error message is for a human reading one row, and some
   // registries answer with an HTML page.
   const error = message.slice(0, 500);
-  if (row.kind === 'domain') {
-    await db('worker')`
-      UPDATE domain SET
-        next_check_at     = now() + make_interval(hours => ${row.interval_hours}),
-        last_check_status = ${status}::external_check_status,
-        last_check_error  = ${error}
-      WHERE id = ${row.row_id}::uuid
-    `;
-  } else {
-    await db('worker')`
-      UPDATE ssl_certificate SET
-        next_check_at     = now() + make_interval(hours => ${row.interval_hours}),
-        last_check_status = ${status}::external_check_status,
-        last_check_error  = ${error}
-      WHERE id = ${row.row_id}::uuid
-    `;
-  }
+  await withTenant(
+    actor,
+    async (tx) => {
+      if (row.kind === 'domain') {
+        await tx`
+          UPDATE domain SET
+            next_check_at     = now() + make_interval(hours => ${row.interval_hours}),
+            last_check_status = ${status}::external_check_status,
+            last_check_error  = ${error}
+          WHERE id = ${row.row_id}::uuid
+        `;
+      } else {
+        await tx`
+          UPDATE ssl_certificate SET
+            next_check_at     = now() + make_interval(hours => ${row.interval_hours}),
+            last_check_status = ${status}::external_check_status,
+            last_check_error  = ${error}
+          WHERE id = ${row.row_id}::uuid
+        `;
+      }
+    },
+    { role: 'worker' },
+  );
 }
