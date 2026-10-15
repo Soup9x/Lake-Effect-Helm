@@ -405,6 +405,12 @@ export function UnifiSettingsCard({
   }
 
   async function remove(id: string) {
+    // Destructive and one click away: say what goes with it before doing it.
+    const confirmed = window.confirm(
+      'Remove this controller and its stored API key? The devices it found ' +
+      'stay, but they stop being kept up to date.',
+    );
+    if (!confirmed) return;
     setBusy(true);
     setFeedback(null);
     try {
@@ -419,6 +425,8 @@ export function UnifiSettingsCard({
         message: 'Controller removed. The devices it found, and anything written on them, stayed.',
       });
       router.refresh();
+    } catch {
+      setFeedback({ ok: false, message: 'The request did not reach the server. Nothing was changed.' });
     } finally {
       setBusy(false);
     }

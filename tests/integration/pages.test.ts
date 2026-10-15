@@ -1336,3 +1336,46 @@ describe('who to call, on the client page', () => {
     ).not.toContain('zz Bill Billing');
   });
 });
+
+describe('a malformed id in the path', () => {
+  /*
+   * Each of these pages interpolated its path segment into a `::uuid` cast, so
+   * /assets/not-a-uuid was a Postgres syntax error and the error page, digest
+   * and all. It is a page that does not exist, and Next's notFound() says so.
+   */
+  const NOT_A_UUID = 'not-a-uuid';
+  const notFoundDigest = /NEXT_HTTP_ERROR_FALLBACK;404/;
+
+  const cases: { name: string; load: () => Promise<unknown> }[] = [
+    {
+      name: 'an asset',
+      load: async () =>
+        (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
+          params: p({ nodeId: NOT_A_UUID }),
+        }),
+    },
+    {
+      name: 'a client',
+      load: async () =>
+        (await import('../../src/app/(app)/organizations/[organizationId]/page')).default({
+          params: p({ organizationId: NOT_A_UUID }),
+          searchParams: p({}),
+        } as never),
+    },
+    {
+      name: 'a checklist run',
+      load: async () =>
+        (await import('../../src/app/(app)/runs/[runId]/page')).default({
+          params: p({ runId: NOT_A_UUID }),
+        }),
+    },
+  ];
+
+  for (const c of cases) {
+    it(`is a 404 for ${c.name}`, async () => {
+      await expect(c.load()).rejects.toSatisfy(
+        (error: unknown) => notFoundDigest.test(String((error as { digest?: string }).digest)),
+      );
+    });
+  }
+});

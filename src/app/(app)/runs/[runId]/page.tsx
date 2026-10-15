@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import { isUuid } from '@/lib/ids';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
@@ -29,6 +30,7 @@ export const dynamic = 'force-dynamic';
 export default async function RunPage({ params }: { params: Promise<{ runId: string }> }) {
   const identity = await getServerIdentity();
   const { runId } = await params;
+  if (!isUuid(runId)) notFound();
 
   const data = await withTenant(actorOf(identity), async (tx) => {
     const run = await readRun(tx, runId);

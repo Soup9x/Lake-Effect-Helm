@@ -279,6 +279,12 @@ export function NotificationSettingsCard({
   }
 
   async function remove(id: string) {
+    // Destructive and one click away: say what goes with it before doing it.
+    const confirmed = window.confirm(
+      'Remove this destination? Nothing more is sent to it, and a webhook URL' +
+      ' is deleted rather than kept.',
+    );
+    if (!confirmed) return;
     setBusy(true);
     setFeedback(null);
     try {
@@ -295,6 +301,8 @@ export function NotificationSettingsCard({
           : 'Destination removed, and its webhook URL with it.',
       });
       router.refresh();
+    } catch {
+      setFeedback({ ok: false, message: 'The request did not reach the server. Nothing was changed.' });
     } finally {
       setBusy(false);
     }

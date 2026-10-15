@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import { isUuid } from '@/lib/ids';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { CategoryGrid, type CategoryRecord } from '@/components/shell/category-grid';
@@ -29,6 +30,7 @@ export default async function FlexibleAssetPage({
   params: Promise<{ organizationId: string; typeId: string }>;
 }) {
   const { organizationId, typeId } = await params;
+  if (!isUuid(organizationId) || !isUuid(typeId)) notFound();
   const identity = await getServerIdentity();
 
   const data = await withTenant(actorOf(identity), async (tx) => {

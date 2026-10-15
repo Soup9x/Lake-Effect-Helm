@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { isUuid } from '@/lib/ids';
 import { Boxes, CalendarClock, KeyRound, MapPin, Users } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -119,6 +120,7 @@ export default async function OrganizationPage({
 }) {
   const identity = await getServerIdentity();
   const { organizationId } = await params;
+  if (!isUuid(organizationId)) notFound();
 
   const data = await withTenant(actorOf(identity), async (tx, session) => {
     const [organization] = await tx<OrgRow[]>`

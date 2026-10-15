@@ -8,9 +8,9 @@ import { Badge, severityTone } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDate, humanise, relativeDays } from '@/lib/ui/format';
 import { cn } from '@/lib/ui/cn';
+import { isUuid } from '@/lib/ids';
 
 const SEVERITIES = ['expired', 'critical', 'warning', 'notice', 'info'] as const;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface ExpirationRow {
   id: string;
@@ -44,7 +44,7 @@ export default async function ExpirationsPage({
   // A malformed id is dropped rather than refused: this is a filter on a list,
   // and an unparseable one should show the unfiltered list, not an error page.
   // The value is parameterised regardless, and RLS scopes the result either way.
-  const organizationId = UUID.test(params.organizationId ?? '') ? params.organizationId : undefined;
+  const organizationId = isUuid(params.organizationId) ? params.organizationId : undefined;
 
   const { rows, organizationName } = await withTenant(actorOf(identity), async (tx) => {
     const list = await tx<ExpirationRow[]>`
