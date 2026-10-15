@@ -94,9 +94,9 @@ export const POST = publicRoute(async (request) => {
 /**
  * An administrator issues a code for somebody else, and reads it back.
  *
- * Requires a signed-in administrator holding user:write, and the target must
- * share the administrator's current tenant — an MSP administrator must not be
- * able to mint a reset for a rival MSP's account.
+ * Requires a signed-in administrator holding user:write. The target must share
+ * the administrator's current tenant, must not outrank them, and must not
+ * belong to any other tenant — see db/sql/0710_reset_authority.sql.
  */
 async function issueOutOfBand(
   email: string,
@@ -116,41 +116,63 @@ async function issueOutOfBand(
     throw error;
   }
 
-  // The permission check and the shared-tenant check both happen inside a
-  // tenant context, so they are the database's answer rather than this file's.
-  const permitted = await withTenant(
+  // Every rule — the permission, the shared tenant, the caller's rank against
+  // the target's, and the target belonging to no other tenant — is decided by
+  // helm.authorise_out_of_band_reset() (0710). Issuing somebody's reset code is
+  // authority over their account, so it follows the same rank rule 0350
+  // applies to their membership: a tier3 must not be able to become the
+  // super_admin by resetting their password.
+  const [decision] = await withTenant(
     { tenantId: identity.tenantId, actorId: identity.actorId },
-    async (tx) => {
-      const [row] = await tx<{ id: string }[]>`
-        SELECT u.id
-        FROM app_user u
-        JOIN membership m ON m.user_id = u.id AND m.tenant_id = ${identity.tenantId}::uuid
-        WHERE u.email = ${email}::citext AND m.status = 'active'
-      `;
-
-      const [permission] = await tx<{ allowed: boolean }[]>`
-        SELECT helm.has_permission('user:write') AS allowed
-      `;
-
-      return { targetId: row?.id ?? null, allowed: permission?.allowed ?? false };
-    },
+    async (tx) => tx<{ user_id: string | null; refusal: string | null }[]>`
+      SELECT * FROM helm.authorise_out_of_band_reset(${email}::citext)
+    `,
   );
 
-  if (!permitted.allowed) {
-    return NextResponse.json(
-      { error: { code: 'forbidden', message: 'Issuing a reset code requires user:write.' } },
-      { status: 403 },
-    );
+  switch (decision?.refusal ?? null) {
+    case null:
+      break;
+    case 'forbidden':
+      return NextResponse.json(
+        { error: { code: 'forbidden', message: 'Issuing a reset code requires user:write.' } },
+        { status: 403 },
+      );
+    case 'not_found':
+      // An administrator inside their own tenant is allowed to know whether a
+      // colleague has an account — they can already see the membership list —
+      // so this branch answers honestly rather than acknowledging blindly.
+      return NextResponse.json(
+        { error: { code: 'not_found', message: 'No active member of this tenant with that address.' } },
+        { status: 404 },
+      );
+    case 'outranks_caller':
+      return NextResponse.json(
+        {
+          error: {
+            code: 'forbidden',
+            message: 'That person’s role outranks yours. Ask an administrator of equal or higher rank.',
+          },
+        },
+        { status: 403 },
+      );
+    case 'member_elsewhere':
+      return NextResponse.json(
+        {
+          error: {
+            code: 'forbidden',
+            message:
+              'That account also belongs to another tenant, so its password is not this ' +
+              'tenant’s to reset. The person can use self-service reset instead.',
+          },
+        },
+        { status: 403 },
+      );
+    default:
+      throw new Error(`unrecognised reset refusal: ${String(decision?.refusal)}`);
   }
 
-  // An administrator inside their own tenant is allowed to know whether a
-  // colleague has an account — they can already see the membership list — so
-  // this branch answers honestly rather than acknowledging blindly.
-  if (!permitted.targetId) {
-    return NextResponse.json(
-      { error: { code: 'not_found', message: 'No active member of this tenant with that address.' } },
-      { status: 404 },
-    );
+  if (!decision?.user_id) {
+    throw new Error('authorise_out_of_band_reset returned neither a user nor a refusal');
   }
 
   const issued = await issuePasswordReset({

@@ -412,6 +412,78 @@ describe('POST /api/auth/local/reset', () => {
     );
     expect(response.status).toBe(404);
   });
+
+  /*
+   * 0710. A tier3 holds user:write, so before 0710 this path handed them the
+   * super_admin's reset link — and with it the super_admin's account, which
+   * 0350 exists to stop a tier3 from ever reaching.
+   */
+  describe('rank and scope (0710)', () => {
+    beforeEach(async () => {
+      await su`UPDATE membership SET role_key = 'tier3' WHERE user_id = ${IDS.tech1}::uuid`;
+    });
+
+    afterEach(async () => {
+      await su`UPDATE membership SET role_key = 'tier1' WHERE user_id = ${IDS.tech1}::uuid`;
+      await su`DELETE FROM membership WHERE tenant_id = ${IDS.tenant2}::uuid AND user_id = ${IDS.tech1}::uuid`;
+    });
+
+    it('refuses a tier3 issuing a code for the super_admin, and issues nothing', async () => {
+      currentUser = { id: IDS.tech1, email: 'tech1@northwind.test' };
+      mocks.tenantCookie = IDS.tenant1;
+
+      const response = await resetRoute(
+        post('/api/auth/local/reset', { email: ADMIN, outOfBand: true }),
+      );
+      expect(response.status).toBe(403);
+      expect((await json(response)).error.message).toMatch(/outranks yours/);
+
+      const [issued] = await su<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM password_reset WHERE user_id = ${IDS.admin1}::uuid
+      `;
+      expect(issued!.n).toBe(0);
+    });
+
+    it('still lets a tier3 issue a code for somebody they outrank', async () => {
+      currentUser = { id: IDS.tech1, email: 'tech1@northwind.test' };
+      mocks.tenantCookie = IDS.tenant1;
+
+      const response = await resetRoute(
+        post('/api/auth/local/reset', { email: 'viewer@acme.test', outOfBand: true }),
+      );
+      expect(response.status).toBe(200);
+      expect((await json(response)).resetUrl).toBeTruthy();
+    });
+
+    it('lets a super_admin issue a code for a peer of equal rank', async () => {
+      // Equal rank is the break-glass case: one super_admin recovering another.
+      await su`UPDATE membership SET role_key = 'super_admin' WHERE user_id = ${IDS.tech1}::uuid`;
+      currentUser = { id: IDS.admin1, email: ADMIN };
+      mocks.tenantCookie = IDS.tenant1;
+
+      const response = await resetRoute(
+        post('/api/auth/local/reset', { email: 'tech1@northwind.test', outOfBand: true }),
+      );
+      expect(response.status).toBe(200);
+    });
+
+    it('refuses an account that also belongs to another tenant', async () => {
+      // The password is one credential for every tenant the person is in;
+      // tenant 1's administrator has no authority over their way into tenant 2.
+      await su`
+        INSERT INTO membership (tenant_id, user_id, role_key, org_scope_all)
+        VALUES (${IDS.tenant2}::uuid, ${IDS.tech1}::uuid, 'tier1', true)
+      `;
+      currentUser = { id: IDS.admin1, email: ADMIN };
+      mocks.tenantCookie = IDS.tenant1;
+
+      const response = await resetRoute(
+        post('/api/auth/local/reset', { email: 'tech1@northwind.test', outOfBand: true }),
+      );
+      expect(response.status).toBe(403);
+      expect((await json(response)).error.message).toMatch(/another tenant/);
+    });
+  });
 });
 
 // -----------------------------------------------------------------------------
