@@ -1,10 +1,11 @@
 import { readTheme, type Theme } from '@/lib/ui/preferences';
+import { THEME_STORAGE_KEY } from '@/lib/ui/theme';
 
 /**
  * The account's theme, applied when this browser has no opinion of its own.
  *
  * A SERVER COMPONENT RENDERING AN INLINE SCRIPT, and the shape is copied from
- * THEME_SCRIPT in theme-toggle.tsx for the same reason that one exists: a
+ * THEME_SCRIPT in lib/ui/theme.ts for the same reason that one exists: a
  * preference applied in an effect arrives after first paint, which is a white
  * flash on every navigation for somebody who chose dark — exactly the thing
  * dark mode is for. Anything deferred is already too late.
@@ -38,7 +39,7 @@ export function ThemeSync({ accountTheme }: { accountTheme: Theme }) {
    */
   const script =
     `(function(){try{if(!document.documentElement.hasAttribute('data-theme')`
-    + `&&!localStorage.getItem('helm.theme')){`
+    + `&&!localStorage.getItem('${THEME_STORAGE_KEY}')){`
     + `document.documentElement.setAttribute('data-theme','${theme}')}}catch(e){`
     // A privacy configuration that throws on localStorage still gets the
     // account's theme: the attribute check alone is enough to know the first
