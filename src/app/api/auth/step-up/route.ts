@@ -44,6 +44,7 @@
  */
 import { NextResponse } from 'next/server';
 import { publicRoute } from '@/lib/api/handler';
+import { readJsonObjectOrEmpty } from '@/lib/api/body';
 import { ApiError } from '@/lib/api/errors';
 import { withTenant } from '@/lib/db/client';
 import { attemptLocalLogin } from '@/lib/auth/local';
@@ -71,7 +72,7 @@ export const POST = publicRoute(async (request) => {
   // memoised.
   await installSessionResolver();
 
-  const body = (await request.json().catch(() => ({}))) as StepUpBody;
+  const body = (await readJsonObjectOrEmpty(request)) as StepUpBody;
   if (typeof body.password !== 'string' || body.password.length === 0) {
     throw ApiError.invalid('password is required');
   }

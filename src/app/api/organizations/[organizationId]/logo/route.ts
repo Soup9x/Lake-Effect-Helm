@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ApiError } from '@/lib/api/errors';
 import { serviceRoute } from '@/lib/api/handler';
+import { readFormDataBounded } from '@/lib/api/body';
 import {
   getLogoService, LogoError, LOGO_CONTENT_TYPES, MAX_LOGO_BYTES,
 } from '@/lib/logos/service';
@@ -96,8 +97,15 @@ export const POST = serviceRoute(
 
     let form: FormData;
     try {
-      form = await request.formData();
+      // Bounded while reading: the Content-Length check above is skipped by a
+      // chunked upload, and formData() buffers whatever arrives.
+      const bounded = await readFormDataBounded(request, MAX_LOGO_BYTES + 64 * 1024);
+      if (!bounded) {
+        throw ApiError.invalid('that upload is larger than the limit');
+      }
+      form = bounded;
     } catch (cause) {
+      if (cause instanceof ApiError) throw cause;
       throw ApiError.invalid('expected a multipart/form-data upload', {
         issues: [{ path: 'body', message: String((cause as Error).message).slice(0, 200) }],
       });

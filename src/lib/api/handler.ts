@@ -23,6 +23,7 @@ import { HelmCryptoError } from '../crypto/errors';
 import { ApiError, toErrorBody, type ErrorCode } from './errors';
 import { resolveIdentity, type RequestIdentity } from '../auth/identity';
 import { installSessionResolver } from '../auth/bootstrap';
+import { readTextBounded } from './body';
 
 export interface RouteContext {
   /** Tenant-scoped transaction. The only database handle a route ever sees. */
@@ -474,14 +475,27 @@ function mapSecretDenial(error: SecretAccessDeniedError): ApiError {
 export async function readJson<T>(
   request: NextRequest,
   parse: (value: unknown) => T,
+  maxBytes = JSON_BODY_MAX_BYTES,
 ): Promise<T> {
+  // Bounded while reading: request.json() buffers any size of body first.
+  const text = await readTextBounded(request, maxBytes);
+  if (text === null) {
+    throw ApiError.invalid(`request body is larger than ${Math.floor(maxBytes / 1024)} KB`);
+  }
   let raw: unknown;
   try {
-    raw = await request.json();
+    raw = JSON.parse(text);
   } catch {
     throw ApiError.invalid('request body is not valid JSON');
   }
   return parse(raw);
 }
+
+/**
+ * The default cap for a JSON body. The largest legitimate one is a CSV import
+ * (2 MiB of text, which JSON escaping can roughly double); everything else is
+ * a few kilobytes.
+ */
+export const JSON_BODY_MAX_BYTES = 8 * 1024 * 1024;
 
 export type { ErrorCode };

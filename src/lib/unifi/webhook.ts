@@ -75,8 +75,12 @@ const consoleLog: ReceiverLog = {
   error: (m, f) => console.error(JSON.stringify({ level: 'error', msg: m, ...f })),
 };
 
-/** A body larger than this is refused unread. A console sends kilobytes. */
-const MAX_BODY_BYTES = 1_000_000;
+/**
+ * A body larger than this is refused unread. A console sends kilobytes. The
+ * route enforces it while reading (lib/api/body.ts); the check below is the
+ * second lock, for any other caller of receiveWebhook.
+ */
+export const MAX_WEBHOOK_BODY_BYTES = 1_000_000;
 
 export async function receiveWebhook(
   mappingId: string,
@@ -84,7 +88,7 @@ export async function receiveWebhook(
   headers: Headers,
   log: ReceiverLog = consoleLog,
 ): Promise<WebhookOutcome> {
-  if (rawBody.length > MAX_BODY_BYTES) {
+  if (Buffer.byteLength(rawBody, 'utf8') > MAX_WEBHOOK_BODY_BYTES) {
     return refuse('body too large');
   }
 

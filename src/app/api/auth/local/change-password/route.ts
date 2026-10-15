@@ -13,6 +13,7 @@
  */
 import { NextResponse } from 'next/server';
 import { publicRoute } from '@/lib/api/handler';
+import { readJsonObjectOrEmpty } from '@/lib/api/body';
 import { attemptLocalLogin, setLocalPassword } from '@/lib/auth/local';
 import { clientIp } from '@/lib/auth/identity';
 import { getServerIdentity, NotAuthenticatedError } from '@/lib/auth/server-identity';
@@ -23,7 +24,7 @@ interface ChangeBody {
 }
 
 export const POST = publicRoute(async (request) => {
-  const body = (await request.json().catch(() => ({}))) as ChangeBody;
+  const body = (await readJsonObjectOrEmpty(request)) as ChangeBody;
 
   if (typeof body.currentPassword !== 'string' || typeof body.newPassword !== 'string') {
     return NextResponse.json(

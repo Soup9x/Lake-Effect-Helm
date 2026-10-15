@@ -18,6 +18,7 @@
  */
 import { NextResponse, type NextRequest } from 'next/server';
 import { publicRoute } from '@/lib/api/handler';
+import { readJsonObjectOrEmpty } from '@/lib/api/body';
 import { issuePasswordReset } from '@/lib/auth/local';
 import { getResetDelivery, resetDeliveryAvailable } from '@/lib/auth/reset-delivery';
 import { clientIp } from '@/lib/auth/identity';
@@ -37,7 +38,7 @@ const ACKNOWLEDGED = {
 } as const;
 
 export const POST = publicRoute(async (request) => {
-  const body = (await request.json().catch(() => ({}))) as ResetBody;
+  const body = (await readJsonObjectOrEmpty(request)) as ResetBody;
 
   if (typeof body.email !== 'string' || body.email.length === 0) {
     return NextResponse.json(
