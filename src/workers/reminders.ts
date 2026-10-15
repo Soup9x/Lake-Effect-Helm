@@ -129,6 +129,7 @@ async function deliverReminders(ctx: JobContext): Promise<JobResult> {
     // Per tenant, not the run's total: tenant A's bad address must not make
     // tenant B's relay read as broken on its settings page.
     let tenantFailures = 0;
+    let tenantSent = 0;
     try {
       batch = await EmailBatch.open(actor);
       if (!batch) {
@@ -166,6 +167,7 @@ async function deliverReminders(ctx: JobContext): Promise<JobResult> {
           });
           await record(actor, reminder.reminder_id, true);
           sent += 1;
+          tenantSent += 1;
         } catch (error) {
           const described = error instanceof EmailTransportError
             ? error
@@ -186,8 +188,10 @@ async function deliverReminders(ctx: JobContext): Promise<JobResult> {
       // The relay's own health, for the settings page. Recorded once per tenant
       // per run rather than per message: "the last send failed" is about the
       // relay, and twenty successes followed by one refused address should not
-      // read as a broken relay.
-      await recordRelayResult(tenant.tenant_id, tenantFailures === 0);
+      // read as a broken relay. So: healthy if anything got through, or if
+      // nothing failed. (This used to be `tenantFailures === 0`, which was
+      // exactly the one-refused-address case the sentence above rules out.)
+      await recordRelayResult(tenant.tenant_id, tenantSent > 0 || tenantFailures === 0);
     } catch (error) {
       failed += 1;
       tenantFailures += 1;
