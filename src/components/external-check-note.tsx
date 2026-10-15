@@ -98,7 +98,7 @@ export function ExternalCheckNote({ state }: { state: ExternalCheckState }) {
 
         {state.observed && (
           <p className="flex items-start gap-2">
-            <CircleCheck className="mt-0.5 size-4 shrink-0 text-sev-ok" aria-hidden />
+            <CircleCheck className="mt-0.5 size-4 shrink-0 text-ok" aria-hidden />
             <span className="text-ink">
               {state.source[0]?.toUpperCase()}{state.source.slice(1)} reports{' '}
               <strong className="font-semibold">{formatDate(state.observed)}</strong>

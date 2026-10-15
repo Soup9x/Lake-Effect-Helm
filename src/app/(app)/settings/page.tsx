@@ -1,5 +1,7 @@
 import Link from 'next/link';
-import { Boxes, Globe, KeyRound, PanelLeft, Plug, ShieldCheck, Bot, Building } from 'lucide-react';
+import {
+  Activity, Boxes, Globe, KeyRound, PanelLeft, Plug, ShieldCheck, Bot, Building,
+} from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
@@ -8,6 +10,8 @@ import { Button } from '@/components/ui/button';
 import { RenameTenant } from '@/components/rename-tenant';
 import { SidebarCustomise } from '@/components/sidebar-customise';
 import { ExternalChecksForm } from '@/components/external-checks-form';
+import { HealthWindowForm } from '@/components/health-window-form';
+import { readHealthSetting } from '@/lib/health/queries';
 import { readExternalCheckSetting } from '@/lib/external/settings';
 import { readTenantSidebarDefault } from '@/lib/nav/sidebar-queries';
 import { ORG_CATEGORIES } from '@/lib/nav/org-categories';
@@ -308,11 +312,12 @@ export default async function SettingsPage() {
   const {
     keys, integrations, workers, tenant, radius, oidc, destinations, deliveries,
     unifi, organizations, canManageNetwork, flexibleTypeCount,
-    sidebarDefault, sidebarDefaultSet, externalChecks,
+    sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow,
   } = await withTenant(actorOf(identity), async (tx) => {
     const [keyRows, integrationRows, workerRows, tenantRows, radiusRows, oidcRows,
            destinationRows, deliveryRows, unifiRows, organizationRows, networkRows,
-           flexibleTypeRows, sidebarDefaultRow, externalCheckRow] = await Promise.all([
+           flexibleTypeRows, sidebarDefaultRow, externalCheckRow,
+           healthWindowRow] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -375,6 +380,7 @@ export default async function SettingsPage() {
       // Whether Helm may reach outside, and how. Read unconditionally: "off"
       // is what the card needs to say, and an absent row means off.
       readExternalCheckSetting(tx),
+      readHealthSetting(tx),
     ]);
     return {
       keys: keyRows,
@@ -392,6 +398,7 @@ export default async function SettingsPage() {
       sidebarDefault: sidebarDefaultRow.categories,
       sidebarDefaultSet: sidebarDefaultRow.set,
       externalChecks: externalCheckRow,
+      healthWindow: healthWindowRow,
     };
   });
 
@@ -729,6 +736,40 @@ export default async function SettingsPage() {
                 trigger={
                   <Button variant="secondary" size="sm">
                     {externalChecks.configured ? 'Edit' : 'Set up'}
+                  </Button>
+                }
+              />
+            ) : (
+              <p className="text-xs text-ink-faint">Requires tenant settings access.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="size-4 text-ink-faint" aria-hidden /> Documentation health
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div className="max-w-xl space-y-1">
+              <p className="text-ink-muted">
+                Where the line falls between documentation that is current and documentation
+                that has gone quiet. Shown as counts on each client, never as a score —
+                Helm can see what has been documented, not what exists.
+              </p>
+              <p className="text-ink-faint">
+                Stale after {healthWindow.staleAfterDays} days without an edit; unopened
+                after {healthWindow.unviewedAfterDays} days without anybody looking.
+                {!healthWindow.configured && ' Both are the shipped defaults.'}
+              </p>
+            </div>
+            {tenant?.can_write_tenant ? (
+              <HealthWindowForm
+                setting={healthWindow}
+                trigger={
+                  <Button variant="secondary" size="sm">
+                    {healthWindow.configured ? 'Edit' : 'Change'}
                   </Button>
                 }
               />

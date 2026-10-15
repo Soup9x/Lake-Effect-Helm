@@ -23,6 +23,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DocumentService } from '../../src/lib/documents/service';
+import { LogoService } from '../../src/lib/logos/service';
 import { FilesystemExportStorage } from '../../src/lib/exports/storage';
 
 export const PG = {
@@ -126,6 +127,7 @@ export interface Harness {
   keys: TenantKeyService;
   links: LinkEngine;
   documents: DocumentService;
+  logos: LogoService;
   /** Where this harness's document bytes landed, so a test can look at them. */
   documentRoot: string;
 }
@@ -151,6 +153,10 @@ export function buildHarness(): Harness {
       dekCache,
       storage: new FilesystemExportStorage(documentRoot),
     }),
+    // Same storage as the documents above, because 0680 reuses the document
+    // store on purpose — so a test reading bytes off disk is reading the same
+    // directory either way.
+    logos: new LogoService({ storage: new FilesystemExportStorage(documentRoot) }),
     documentRoot,
   };
 }

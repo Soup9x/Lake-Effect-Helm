@@ -496,3 +496,45 @@ export type Sop = typeof sop.$inferSelect;
 export type SopRun = typeof sopRun.$inferSelect;
 export type Expiration = typeof expiration.$inferSelect;
 export type ExportJob = typeof exportJob.$inferSelect;
+
+/**
+ * 0680 — documentation health, and a client logo somebody uploaded.
+ *
+ * `nodeViewStat` is deliberately NOT a column on `asset_node`, and 0680's
+ * header has the measurement behind that: `asset_node_touch` fires on any
+ * update of the row and sets `updated_at := now()`, so recording a view there
+ * marked the record as freshly revised and a 400-day-old node measured as 0
+ * days old. Keeping read traffic off the documentation table makes the mistake
+ * unavailable rather than guarded.
+ *
+ * `organizationLogo` is deliberately NOT an `attachment` row: a logo is chrome
+ * rather than documentation, and as an attachment it would appear in the
+ * client's document tree and in export bundles.
+ */
+export const documentationHealthSetting = pgTable('documentation_health_setting', {
+  tenantId: uuid('tenant_id').primaryKey(),
+  staleAfterDays: integer('stale_after_days').notNull(),
+  unviewedAfterDays: integer('unviewed_after_days').notNull(),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by'),
+});
+
+export const nodeViewStat = pgTable('node_view_stat', {
+  nodeId: uuid('node_id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  lastViewedAt: tstz('last_viewed_at').notNull(),
+  viewCount: bigint('view_count', { mode: 'number' }).notNull().default(1),
+});
+
+export const organizationLogo = pgTable('organization_logo', {
+  organizationId: uuid('organization_id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull(),
+  contentType: text('content_type').notNull(),
+  byteSize: bigint('byte_size', { mode: 'number' }).notNull(),
+  storageKey: text('storage_key').notNull().unique(),
+  contentSha256: bytea('content_sha256').notNull(),
+  dataKeyId: uuid('data_key_id'),
+  encryptionNonce: bytea('encryption_nonce'),
+  uploadedAt: tstz('uploaded_at').notNull().defaultNow(),
+  uploadedBy: uuid('uploaded_by'),
+});
