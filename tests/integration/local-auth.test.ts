@@ -443,6 +443,9 @@ describe('lockout', () => {
 
 describe('password reset', () => {
   beforeEach(async () => {
+    // Independent of each other: 0740 throttles a self-service request while
+    // an earlier one from the last five minutes is outstanding.
+    await su`DELETE FROM password_reset`;
     await setLocalPassword({ userId: IDS.admin1, password: GOOD });
   });
 
@@ -490,11 +493,38 @@ describe('password reset', () => {
 
   it('invalidates the previous token when a second is issued', async () => {
     const first = await issuePasswordReset({ email: EMAIL, origin: 'self' });
+    // Outside the five-minute throttle (0740), as a second request would be.
+    await su`UPDATE password_reset SET created_at = now() - interval '10 minutes' WHERE id = ${first!.resetId}::uuid`;
     const second = await issuePasswordReset({ email: EMAIL, origin: 'self' });
 
     // "Request five resets and use the first one" must not work.
     expect((await redeemPasswordReset(first!.token, ALSO_GOOD)).ok).toBe(false);
     expect((await redeemPasswordReset(second!.token, ALSO_GOOD)).ok).toBe(true);
+  });
+
+  it('issues nothing for a second self-service request inside five minutes (0740)', async () => {
+    const first = await issuePasswordReset({ email: EMAIL, origin: 'self' });
+    const second = await issuePasswordReset({ email: EMAIL, origin: 'self' });
+
+    // Reported as an unknown address is, so the throttle reveals nothing; and
+    // the first link is untouched rather than replaced.
+    expect(second).toBeNull();
+    expect((await redeemPasswordReset(first!.token, ALSO_GOOD)).ok).toBe(true);
+  });
+
+  it('never invalidates an administrator’s code from a self-service request (0740)', async () => {
+    const admin = await issuePasswordReset({ email: EMAIL, origin: 'admin', issuedBy: IDS.admin1 });
+    await issuePasswordReset({ email: EMAIL, origin: 'self' });
+
+    expect((await redeemPasswordReset(admin!.token, ALSO_GOOD)).ok).toBe(true);
+  });
+
+  it('still lets an administrator’s code replace a self-service one', async () => {
+    const self = await issuePasswordReset({ email: EMAIL, origin: 'self' });
+    const admin = await issuePasswordReset({ email: EMAIL, origin: 'admin', issuedBy: IDS.admin1 });
+
+    expect((await redeemPasswordReset(self!.token, ALSO_GOOD)).ok).toBe(false);
+    expect((await redeemPasswordReset(admin!.token, ALSO_GOOD)).ok).toBe(true);
   });
 
   it('refuses an expired token', async () => {

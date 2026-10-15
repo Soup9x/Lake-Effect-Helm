@@ -6,7 +6,9 @@
  *   ANONYMOUS  Self-service. Emails a link, and answers identically whether or
  *              not the address exists. The answer is the security property:
  *              an endpoint that says "no account with that address" needs no
- *              password and no rate limit to be a user-enumeration tool.
+ *              password and no rate limit to be a user-enumeration tool. It
+ *              cannot cancel an administrator's code, and repeats within five
+ *              minutes issue nothing (0740).
  *
  *   ADMIN      An administrator issues a code for somebody else and the
  *              response CONTAINS it, once. That is not a lapse — it is the
@@ -17,7 +19,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { publicRoute } from '@/lib/api/handler';
 import { issuePasswordReset } from '@/lib/auth/local';
-import { getResetDelivery, ResetDeliveryUnavailable } from '@/lib/auth/reset-delivery';
+import { getResetDelivery, resetDeliveryAvailable } from '@/lib/auth/reset-delivery';
 import { clientIp } from '@/lib/auth/identity';
 import { getServerIdentity, NotAuthenticatedError } from '@/lib/auth/server-identity';
 import { withTenant } from '@/lib/db/client';
@@ -50,12 +52,28 @@ export const POST = publicRoute(async (request) => {
     return issueOutOfBand(body.email, ip, request);
   }
 
+  // Decided before the address is looked up, so the answer is the same for
+  // every address. An operator who has not configured a channel needs to hear
+  // that from this endpoint rather than from a user who believes they are
+  // locked out — but it must not be the account's existence that decides it.
+  if (!resetDeliveryAvailable()) {
+    return NextResponse.json(
+      {
+        error: {
+          code: 'reset_delivery_unavailable',
+          message:
+            'Self-service reset is not available on this deployment. Ask an ' +
+            'administrator to issue a reset code.',
+        },
+      },
+      { status: 503 },
+    );
+  }
+
   const issued = await issuePasswordReset({ email: body.email, origin: 'self', ip });
 
-  // No account. Answer exactly as the success path does, and do not spend the
-  // time a delivery would have taken — the timing difference here is a round
-  // trip to a mail relay, which is not something an attacker can read reliably
-  // through a queue they cannot see.
+  // No account, or a link for this person already went out in the last five
+  // minutes (0740). Answer exactly as the success path does.
   if (!issued) {
     return NextResponse.json(ACKNOWLEDGED);
   }
@@ -69,23 +87,12 @@ export const POST = publicRoute(async (request) => {
       origin: 'self',
     });
   } catch (error) {
-    if (error instanceof ResetDeliveryUnavailable) {
-      // Do not claim to have sent something. An operator who has not configured
-      // a mail relay needs to hear that from this endpoint rather than from a
-      // user who believes they are locked out.
-      return NextResponse.json(
-        {
-          error: {
-            code: 'reset_delivery_unavailable',
-            message:
-              'Self-service reset is not available on this deployment. Ask an ' +
-              'administrator to issue a reset code.',
-          },
-        },
-        { status: 503 },
-      );
-    }
-    throw error;
+    // A configured channel that failed this time. Logged for the operator and
+    // answered as usual: a distinct response here would again be one only an
+    // address with an account can produce.
+    console.error('[reset] self-service delivery failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   return NextResponse.json(ACKNOWLEDGED);

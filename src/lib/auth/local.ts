@@ -460,8 +460,9 @@ export interface IssueResetRequest {
 /**
  * Mint a single-use reset token.
  *
- * Returns null when the address has no account — and the CALLER MUST STILL
- * ANSWER THE SAME WAY it would have on success. "If an account exists for that
+ * Returns null when the address has no account, or when a self-service link
+ * for it is already outstanding from the last five minutes (0740) — and the
+ * CALLER MUST STILL ANSWER THE SAME WAY it would have on success. "If an account exists for that
  * address, a reset has been sent" is not a politeness; a reset form that
  * distinguishes the two is a user-enumeration endpoint that needs no password
  * and no rate limit to be useful.
@@ -493,6 +494,10 @@ export async function issuePasswordReset(request: IssueResetRequest): Promise<Is
       ${request.issuedBy ?? null}::uuid, ${request.ip ?? null}::inet)
   `;
   if (!issued) throw new Error('helm.issue_password_reset returned no row');
+  // NULL: a self-service link for this person is already outstanding and was
+  // issued in the last five minutes (0740). Reported exactly as an unknown
+  // address is, so the caller cannot tell the two apart.
+  if (issued.issue_password_reset === null) return null;
 
   return {
     resetId: issued.issue_password_reset,

@@ -342,9 +342,62 @@ describe('POST /api/auth/local/reset', () => {
     expect(response.status).toBe(503);
     expect((await json(response)).error.code).toBe('reset_delivery_unavailable');
     // "Check your email" when nothing was sent produces somebody who believes
-    // they are locked out permanently.
+    // they are locked out permanently. And nothing is issued: there is no
+    // channel to send it through.
     const [row] = await db('auth')<{ n: number }[]>`SELECT count(*)::int AS n FROM password_reset`;
-    expect(row!.n).toBe(1); // issued, then found undeliverable — not silently claimed as sent
+    expect(row!.n).toBe(0);
+  });
+
+  it('gives that refusal for every address, so it says nothing about which exist', async () => {
+    // Before, the refusal came from send(), which only an address WITH an
+    // account ever reached: 503 meant "exists", 200 meant "does not".
+    const known = await observable(await resetRoute(post('/api/auth/local/reset', { email: ADMIN })));
+    const unknown = await observable(
+      await resetRoute(post('/api/auth/local/reset', { email: 'ghost@northwind.test' })),
+    );
+    expect(known).toEqual(unknown);
+    expect(known.status).toBe(503);
+  });
+
+  it('answers a failed delivery exactly as a successful one', async () => {
+    setResetDelivery({ name: 'broken', send: async () => { throw new Error('relay down'); } });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const known = await observable(await resetRoute(post('/api/auth/local/reset', { email: ADMIN })));
+      const unknown = await observable(
+        await resetRoute(post('/api/auth/local/reset', { email: 'ghost@northwind.test' })),
+      );
+      expect(known).toEqual(unknown);
+      expect(known.status).toBe(200);
+      expect(errors).toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('does not let an anonymous request cancel an administrator’s code (0740)', async () => {
+    currentUser = { id: IDS.admin1, email: ADMIN };
+    mocks.tenantCookie = IDS.tenant1;
+    const issued = await json(
+      await resetRoute(post('/api/auth/local/reset', { email: ADMIN, outOfBand: true })),
+    );
+    const adminToken = new URL(issued.resetUrl as string).searchParams.get('token')!;
+
+    // Anybody, repeatedly, during the outage the code exists for.
+    currentUser = null;
+    mocks.tenantCookie = undefined;
+    setResetDelivery({ name: 'capture', send: async (m) => { delivered.push(m); } });
+    for (let i = 0; i < 3; i += 1) {
+      expect((await resetRoute(post('/api/auth/local/reset', { email: ADMIN }))).status).toBe(200);
+    }
+    // ...and only the first of those produced a message: the rest were inside
+    // the five-minute window and issued nothing.
+    expect(delivered.length).toBe(1);
+
+    const redeemed = await redeemRoute(
+      post('/api/auth/local/reset/redeem', { token: adminToken, password: NEW_PASSWORD }),
+    );
+    expect(redeemed.status).toBe(200);
   });
 
   it('answers an unknown address exactly as a known one', async () => {
