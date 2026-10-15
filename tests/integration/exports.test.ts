@@ -8,7 +8,7 @@
  * that actually deletes the bytes, and an incomplete bundle that says so on its
  * cover page rather than being quietly short a password.
  */
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,7 +18,7 @@ import { resetServices, setKekProvider } from '../../src/lib/services';
 import { getExportService } from '../../src/lib/exports/service';
 import { FilesystemExportStorage, setExportStorage } from '../../src/lib/exports/storage';
 import { isEncryptedBundle, unpackBundle } from '../../src/lib/exports/bundle';
-import { expireExportsJob } from '../../src/workers/exports';
+import { FilePassphraseSink, expireExportsJob, setPassphraseSink } from '../../src/workers/exports';
 import type { JobLogger } from '../../src/workers/runtime';
 import {
   IDS, actor, buildHarness, connectPools, disconnectPools, resetDatabase, superuserSql,
@@ -570,6 +570,12 @@ describe('export engine', () => {
       // inside withTenant() — as this test used to — skips the job's own
       // enumeration, which is the part that returned zero tenants under RLS and
       // left every export unexpired until 0720.
+      // And the passphrase file for it, which used to outlive the bundle forever.
+      const passphraseDir = mkdtempSync(join(tmpdir(), 'helm-passphrases-'));
+      const passphraseFile = join(passphraseDir, `${request.exportJobId}.passphrase`);
+      writeFileSync(passphraseFile, 'correct horse\n', { mode: 0o600 });
+      setPassphraseSink(new FilePassphraseSink(passphraseDir));
+
       const errors: string[] = [];
       const log: JobLogger = {
         debug: () => {},
@@ -579,6 +585,8 @@ describe('export engine', () => {
         child: () => log,
       };
       const result = await expireExportsJob().run({ log, stopping: () => false });
+      setPassphraseSink(null);
+      expect(existsSync(passphraseFile)).toBe(false);
 
       expect(errors).toEqual([]);
       expect(result.counts?.expired).toBeGreaterThanOrEqual(1);

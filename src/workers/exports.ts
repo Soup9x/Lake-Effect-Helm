@@ -55,6 +55,11 @@ interface ExportBacklogRow {
 export interface PassphraseSink {
   readonly name: string;
   deliver(delivery: PassphraseDelivery): Promise<void>;
+  /**
+   * Discard what deliver() left behind, once the export it opens has expired.
+   * Optional: a sink that hands the passphrase to a person keeps nothing.
+   */
+  forget?(exportJobId: string): Promise<void>;
 }
 
 export interface PassphraseDelivery {
@@ -92,6 +97,17 @@ export class FilePassphraseSink implements PassphraseSink {
       `${delivery.passphrase}\n`,
       { mode: 0o600, flag: 'wx' },
     );
+  }
+
+  /**
+   * Deleted when the export expires. Kept past that, these files only
+   * accumulated — every credential export's passphrase, at rest on this host,
+   * for bundles that no longer exist.
+   */
+  async forget(exportJobId: string): Promise<void> {
+    const { rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    await rm(join(this.directory, `${exportJobId}.passphrase`), { force: true });
   }
 }
 
@@ -264,6 +280,7 @@ async function expireExports(ctx: JobContext): Promise<JobResult> {
   if (tenants.length === 0) return { idle: true };
 
   const storage = getExportStorage();
+  const sink = resolvePassphraseSink();
   let expired = 0;
   let orphaned = 0;
 
@@ -280,6 +297,14 @@ async function expireExports(ctx: JobContext): Promise<JobResult> {
 
     for (const row of rows) {
       expired += 1;
+      try {
+        await sink?.forget?.(row.export_job_id);
+      } catch (error) {
+        ctx.log.error('an expired export\'s passphrase file could not be deleted', {
+          export: row.export_job_id,
+          ...describeError(error),
+        });
+      }
       if (!row.storage_key) continue;
       try {
         await storage.remove(row.storage_key);
