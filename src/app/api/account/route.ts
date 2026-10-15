@@ -91,31 +91,19 @@ export const PATCH = tenantRoute(async ({ tx, request, identity }) => {
   const lastName = blankToNull(body.lastName);
   const timezone = blankToNull(body.timezone);
 
-  let updated: AccountRow | undefined;
-  try {
-    [updated] = await tx<AccountRow[]>`
-      UPDATE app_user SET
-        name       = ${name === undefined ? tx`name` : name},
-        first_name = ${firstName === undefined ? tx`first_name` : firstName},
-        last_name  = ${lastName === undefined ? tx`last_name` : lastName},
-        timezone   = ${timezone === undefined ? tx`timezone` : timezone},
-        theme      = ${body.theme === undefined ? tx`theme` : body.theme},
-        updated_at = now()
-      WHERE id = ${identity.actorId}::uuid
-      RETURNING name, first_name, last_name, timezone, theme
-    `;
-  } catch (error) {
-    // The time zone trigger raises invalid_parameter_value with a message that
-    // names the offending zone and nothing else, so it is safe to pass on and
-    // it is the only thing a person can act on. Everything else goes through
-    // the handler's own mapping.
-    if ((error as { code?: string }).code === '22023') {
-      throw ApiError.invalid(
-        (error as { message?: string }).message?.replace(/^helm: /, '') ?? 'not a valid time zone',
-      );
-    }
-    throw error;
-  }
+  // An unknown time zone is refused by a trigger with invalid_parameter_value
+  // and a `helm:` message naming the zone; the handler maps it to a 400.
+  const [updated] = await tx<AccountRow[]>`
+    UPDATE app_user SET
+      name       = ${name === undefined ? tx`name` : name},
+      first_name = ${firstName === undefined ? tx`first_name` : firstName},
+      last_name  = ${lastName === undefined ? tx`last_name` : lastName},
+      timezone   = ${timezone === undefined ? tx`timezone` : timezone},
+      theme      = ${body.theme === undefined ? tx`theme` : body.theme},
+      updated_at = now()
+    WHERE id = ${identity.actorId}::uuid
+    RETURNING name, first_name, last_name, timezone, theme
+  `;
 
   // The policy matched no row, which here means the actor's own row is gone —
   // a deactivated account mid-request. Not a 404: the request was about an

@@ -397,7 +397,7 @@ describe('POST /api/secrets', () => {
         value: 'should-not-persist',
       }),
     );
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(403);
 
     const sql = superuserSql();
     try {

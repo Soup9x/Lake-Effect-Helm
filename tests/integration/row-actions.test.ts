@@ -221,7 +221,9 @@ describe('permissions', () => {
 
     const response = await patchSecret(req('PATCH', { minRoleRank: 100 }),
       { params: Promise.resolve({ secretId }) });
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    // The guard is a `helm:` RAISE in the trigger, which the handler now maps
+    // to a 400 carrying its sentence rather than a bare 500.
+    expect(response.status).toBe(400);
     expect(await scalar(`SELECT min_role_rank::text FROM secret WHERE id='${secretId}'`))
       .not.toBe('100');
 

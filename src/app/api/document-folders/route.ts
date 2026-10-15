@@ -89,7 +89,6 @@ export function translateFolderError(cause: unknown): unknown {
       message.includes('helm:') ? stripPrefix(message) : 'that folder name is not allowed',
     );
   }
-  if (code === '42501') return ApiError.forbidden('that is not permitted');
   return cause;
 }
 

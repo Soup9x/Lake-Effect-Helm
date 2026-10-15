@@ -24,6 +24,7 @@ import { ApiError, toErrorBody, type ErrorCode } from './errors';
 import { resolveIdentity, type RequestIdentity } from '../auth/identity';
 import { installSessionResolver } from '../auth/bootstrap';
 import { readTextBounded } from './body';
+import { helmMessage, mapDatabaseError, postgresError } from './pg-errors';
 
 export interface RouteContext {
   /** Tenant-scoped transaction. The only database handle a route ever sees. */
@@ -226,11 +227,7 @@ export function publicRoute<T>(
  * reaching into the driver's internals for one that may be renamed.
  */
 function isInsufficientPrivilege(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { code?: unknown }).code === '42501'
-  );
+  return postgresError(error)?.code === '42501';
 }
 
 /**
@@ -266,11 +263,8 @@ function isStepUpRefusal(error: unknown): boolean {
  * the detail stays in the server log.
  */
 function refusalMessage(error: unknown): string {
-  const message = (error as { message?: unknown }).message;
-  if (typeof message === 'string' && message.startsWith('helm: ')) {
-    return message.slice('helm: '.length);
-  }
-  return 'your role does not permit this operation';
+  const pg = postgresError(error);
+  return (pg && helmMessage(pg)) ?? 'your role does not permit this operation';
 }
 
 function assertPermitted(session: ResolvedSessionContext, options: TenantRouteOptions): void {
@@ -354,6 +348,23 @@ export function errorResponse(error: unknown, requestId: string): Response {
       403,
       requestId,
     );
+  }
+
+  // Every other refusal the schema can raise — a `helm:` RAISE, a CHECK, a
+  // UNIQUE or FOREIGN KEY constraint, a value that would not cast — used to be
+  // a bare 500 here unless the route had translated it by hand. pg-errors.ts
+  // decides what each becomes; what it declines stays a fault below. The
+  // original is logged under the request id so the detail a client must not
+  // see is still one grep away.
+  const mapped = mapDatabaseError(error);
+  if (mapped) {
+    const pg = postgresError(error);
+    console.warn(`[${requestId}] database refusal`, {
+      code: pg?.code,
+      constraint: pg?.constraint,
+      message: pg?.message.split('\n')[0],
+    });
+    return json(toErrorBody(mapped, requestId), mapped.status, requestId);
   }
 
   if (error instanceof HelmCryptoError) {

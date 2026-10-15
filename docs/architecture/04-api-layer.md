@@ -158,6 +158,9 @@ how a technician writes documentation into the wrong MSP.
 | Secret needs a justification | 403 | `reason_required` |
 | Role too low / no permission | 403 | `forbidden` |
 | Not found **or not yours** | 404 | `not_found` |
+| A `helm:` RAISE, a CHECK, a value that would not cast | 400 | `invalid_request` |
+| A UNIQUE or EXCLUSION constraint, two writers crossing | 409 | `conflict` |
+| `no_data_found` inside a function | 404 | `not_found` |
 | Anything unexpected | 500 | `internal` |
 
 Three decisions worth stating:
@@ -177,6 +180,18 @@ that renders different messages hands that distinction straight back.
 Unknown errors collapse to a bare 500 carrying only the request id. A Postgres
 error message can contain a column name, a constraint body, or part of a query,
 and the client may be a co-managed customer.
+
+**The schema's own refusals are 4xx, and say what the schema said.**
+`src/lib/api/pg-errors.ts` maps the SQLSTATEs a request can legitimately
+provoke. A message Helm raised itself — `RAISE EXCEPTION 'helm: configure a
+mail relay before adding an email destination'` — passes through with the
+prefix removed, because that prefix is the schema's declaration that the
+sentence is for a person. A message Postgres composed ("new row for relation
+smtp_setting violates check constraint smtp_pin_shape") never does: it becomes
+one fixed sentence per code, and the original is logged under the request id.
+Codes not in the table (a statement timeout, a lost connection) stay 500s; a
+400 would hide an outage. A route may still throw its own `ApiError` for a
+more specific sentence, and that wins.
 
 The denial reason mapping is `switch`-exhaustive over the SQL API's denial
 reasons: adding one without a mapping fails the build rather than silently
