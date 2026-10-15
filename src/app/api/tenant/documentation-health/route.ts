@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { readHealthSetting, writeHealthSetting } from '@/lib/health/queries';
 import { HEALTH_DAYS_MAX, HEALTH_DAYS_MIN } from '@/lib/health/window';
 
@@ -42,9 +42,7 @@ export const PUT = tenantRoute(
         throw ApiError.invalid(
           `two windows in days, each between ${HEALTH_DAYS_MIN} and ${HEALTH_DAYS_MAX}`,
           {
-            issues: result.error.issues.map(
-              (i) => ({ path: i.path.join('.'), message: i.message }),
-            ),
+            issues: zodIssues(result.error),
           },
         );
       }

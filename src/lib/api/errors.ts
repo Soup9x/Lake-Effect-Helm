@@ -109,3 +109,15 @@ export function toErrorBody(error: ApiError, requestId: string): ErrorBody {
     },
   };
 }
+
+/**
+ * A zod error as the `issues` detail every 400 carries: where, and what.
+ *
+ * One definition rather than the same one-liner in fifty-odd routes, so the
+ * shape a client parses cannot drift between them.
+ */
+export function zodIssues(error: {
+  issues: readonly { path: readonly PropertyKey[]; message: string }[];
+}): { path: string; message: string }[] {
+  return error.issues.map((i) => ({ path: i.path.map(String).join('.'), message: i.message }));
+}

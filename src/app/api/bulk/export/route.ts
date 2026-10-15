@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { MAX_SELECTION, resolveClients, resolveNodes } from '@/lib/bulk/service';
 import { getExportService } from '@/lib/exports/service';
 
@@ -46,7 +46,7 @@ export const POST = tenantRoute(
       const result = schema.safeParse(raw);
       if (!result.success) {
         throw ApiError.invalid('invalid bulk export request', {
-          issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+          issues: zodIssues(result.error),
         });
       }
       return result.data;

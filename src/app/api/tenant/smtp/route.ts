@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { readSmtpSetting, writeSmtpSetting } from '@/lib/email/settings';
 
 /**
@@ -60,7 +60,7 @@ export const PUT = tenantRoute(
       const result = schema.safeParse(raw);
       if (!result.success) {
         throw ApiError.invalid('a host, a port, a security mode and a sending address', {
-          issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+          issues: zodIssues(result.error),
         });
       }
       return result.data;

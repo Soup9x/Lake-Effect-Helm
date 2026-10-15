@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { serviceRoute } from '@/lib/api/handler';
 import { readFormDataBounded } from '@/lib/api/body';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { getDocumentService } from '@/lib/services';
 import { DocumentError } from '@/lib/documents/service';
 import { checkUpload, maxUploadBytes } from '@/lib/documents/limits';
@@ -72,7 +72,7 @@ export const POST = serviceRoute(
     });
     if (!parsed.success) {
       throw ApiError.invalid('invalid upload', {
-        issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        issues: zodIssues(parsed.error),
       });
     }
 

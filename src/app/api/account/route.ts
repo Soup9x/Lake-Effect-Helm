@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { THEMES, type Theme } from '@/lib/ui/preferences';
 
 /**
@@ -67,7 +67,7 @@ export const PATCH = tenantRoute(async ({ tx, request, identity }) => {
     const result = patchSchema.safeParse(raw);
     if (!result.success) {
       throw ApiError.invalid('a name of at most 120 characters, name halves of 60, an IANA time zone, or a known theme', {
-        issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        issues: zodIssues(result.error),
       });
     }
     return result.data;

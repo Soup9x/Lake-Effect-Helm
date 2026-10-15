@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { clearRead, listInbox, markRead, unreadCount } from '@/lib/notifications/inbox';
 
 /**
@@ -43,7 +43,7 @@ export const PUT = tenantRoute(async ({ tx, request }) => {
     const result = schema.safeParse(raw);
     if (!result.success) {
       throw ApiError.invalid('a list of notification ids, or nothing for all of them', {
-        issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        issues: zodIssues(result.error),
       });
     }
     return result.data;

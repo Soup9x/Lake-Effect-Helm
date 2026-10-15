@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { serviceRoute, readJson } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { getExportService } from '@/lib/exports/service';
 
 const scopeSchema = z.object({
@@ -31,7 +31,7 @@ const parser = <T>(schema: { safeParse: (raw: unknown) => { success: true; data:
     const result = schema.safeParse(raw);
     if (!result.success) {
       throw ApiError.invalid(label, {
-        issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        issues: zodIssues(result.error),
       });
     }
     return result.data;

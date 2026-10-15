@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import {
   INTERVAL_MAX_HOURS, INTERVAL_MIN_HOURS,
   readExternalCheckSetting, writeExternalCheckSetting,
@@ -55,7 +55,7 @@ export const PUT = tenantRoute(
       const result = schema.safeParse(raw);
       if (!result.success) {
         throw ApiError.invalid('an interval in hours and an https RDAP endpoint', {
-          issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+          issues: zodIssues(result.error),
         });
       }
       return result.data;

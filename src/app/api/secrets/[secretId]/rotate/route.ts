@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, serviceRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { getSecretService } from '@/lib/services';
 
 /**
@@ -52,7 +52,7 @@ export const POST = serviceRoute(
       const result = rotateSchema.safeParse(raw);
       if (!result.success) {
         throw ApiError.invalid('invalid rotation', {
-          issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+          issues: zodIssues(result.error),
         });
       }
       return result.data;

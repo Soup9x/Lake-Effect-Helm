@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, serviceRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { getLinkEngine } from '@/lib/services';
 import { ALL_RELATIONS } from '@/lib/graph/relations';
 
@@ -35,7 +35,7 @@ const parse = (raw: unknown) => {
   const result = linkSchema.safeParse(raw);
   if (!result.success) {
     throw ApiError.invalid('invalid link', {
-      issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+      issues: zodIssues(result.error),
     });
   }
   return result.data;

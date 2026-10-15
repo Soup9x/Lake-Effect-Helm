@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { MAX_PAGE_SIZE, RESULT_KINDS, search } from '@/lib/search/service';
 
 const querySchema = z.object({
@@ -36,7 +36,7 @@ export const GET = tenantRoute(
 
     if (!parsed.success) {
       throw ApiError.invalid('invalid search parameters', {
-        issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        issues: zodIssues(parsed.error),
       });
     }
 
