@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
-import { readSmtpSetting, writeSmtpSetting } from '@/lib/email/settings';
+import { readSmtpSetting, resolvePinnedCertificate, writeSmtpSetting } from '@/lib/email/settings';
 
 /**
  * The mail relay.
@@ -76,6 +76,12 @@ export const PUT = tenantRoute(
       );
     }
 
+    // The pin the save would end with, stored one included. The three guards
+    // below used to look only at the request, so a relay saved with
+    // verification off and a pasted certificate refused every later save that
+    // did not paste it again — which the form never does, by design.
+    const pinned = (await resolvePinnedCertificate(tx, body)) !== null;
+
     if (body.tlsPinnedCertificate && body.security === 'plaintext') {
       throw ApiError.invalid(
         'a pinned certificate cannot be checked on a plaintext connection, '
@@ -84,7 +90,7 @@ export const PUT = tenantRoute(
       );
     }
 
-    if (!body.tlsVerify && !body.tlsPinnedCertificate && body.security !== 'plaintext') {
+    if (!body.tlsVerify && !pinned && body.security !== 'plaintext') {
       throw ApiError.invalid(
         'turning verification off with no pinned certificate accepts any '
         + 'certificate at all. Paste the relay’s certificate to pin it, or '

@@ -150,11 +150,39 @@ export interface SmtpSettingInput {
  * acknowledgement, so a caller cannot attribute the change to somebody else —
  * the same rule helm.audit() follows.
  */
+/**
+ * The pinned certificate the save should end with.
+ *
+ * Three states, the same contract as the password: undefined keeps what is
+ * stored, an empty string or null clears it, a PEM replaces it. The function
+ * underneath cannot tell "absent" from "clear" — it writes whatever it is
+ * handed — so "keep" is resolved here by reading the stored PEM back through
+ * helm.smtp_settings(). Before this, every save that did not re-paste the PEM
+ * silently dropped the pin, and a relay with verification off then refused
+ * every later save, because the pin was the only thing permitting it.
+ *
+ * A move to plaintext drops the pin whatever was sent: no certificate is ever
+ * presented on that connection, and a stored one would be a claim nothing
+ * checks.
+ */
+export async function resolvePinnedCertificate(
+  tx: HelmTx,
+  input: Pick<SmtpSettingInput, 'tlsPinnedCertificate' | 'security'>,
+): Promise<string | null> {
+  if (input.security === 'plaintext') return null;
+  if (input.tlsPinnedCertificate !== undefined) return input.tlsPinnedCertificate || null;
+  const [row] = await tx<{ tls_pinned_certificate: string | null }[]>`
+    SELECT tls_pinned_certificate FROM helm.smtp_settings()
+  `;
+  return row?.tls_pinned_certificate ?? null;
+}
+
 export async function writeSmtpSetting(
   tx: HelmTx,
   input: SmtpSettingInput,
 ): Promise<SmtpSettingView> {
   const clearPassword = input.password === '';
+  const pin = await resolvePinnedCertificate(tx, input);
   const sealed = input.password && input.password.length > 0
     // Sealed against the tenant, which is also the row's key — see
     // src/lib/email/secret.ts for why the binding differs from a webhook's.
@@ -168,7 +196,7 @@ export async function writeSmtpSetting(
       ${input.port},
       ${input.security}::smtp_security,
       ${input.tlsVerify},
-      ${input.tlsPinnedCertificate ?? null},
+      ${pin},
       ${input.username ?? null},
       ${input.fromAddress},
       ${input.fromName ?? null},
