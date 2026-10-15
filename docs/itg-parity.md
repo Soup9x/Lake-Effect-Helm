@@ -40,14 +40,14 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 2 | **Type** (Client/Prospect/Vendor/…) | **Exists** | `organization.relationship` (0600). Named `relationship`, not `type`, because four `*_type` columns already exist; labelled "Type" in the UI |
 | 2 | Sync Status column | **Exists** | Last `integration_sync_run` per client via LATERAL; "Not linked" where no integration is mapped |
 | 2 | Result count, sorting, column chooser | **Exists** | The same three shell components, now composed by `clients-table.tsx` alongside `BulkBar` so bulk actions survived |
-| 2 | Client logo + initials fallback | **Partial** | `components/client-avatar.tsx` renders `logo_url` with an initials fallback. **Upload is still group I** |
+| 2 | Client logo + initials fallback | **Exists** | I (0680). `organization_logo` — bytes on the document store, encrypted with the tenant DEK, served through an authenticated route under an ETag. Not an `attachment` row: a logo is chrome, and as an attachment it would appear in the client's document tree and in export bundles. SVG refused by a sniffer and a CHECK. `logo_url` still works and an upload wins — `src/lib/ui/logo.ts` is the one place that chooses |
 | 3 | Per-client sidebar, collapsible, counts | **Exists** | `shell/sidebar.tsx`, `src/lib/nav/org-categories.ts`, collapse persisted per browser |
 | 3 | Core asset entries | **Exists** | 16 categories incl. Domain Tracker, SSL Tracker, Locations, Networks, Passwords. "Checklists" is still absent as a *word*, and deliberately: the rows live under SOPs, which F1 made usable. What is missing is the recurring part — see #8 |
 | 3 | Apps & Services in sidebar | **Exists** | Tenant's own `flexible_asset_type` rows with their configured icons — which a person can now create, as of C |
 | 3 | "Customize Sidebar" link | **Exists** | At the foot of the drawer, below "More" — group D |
 | 3 | Quick Notes, inline | **Exists** | `organization.quick_notes`, `components/notes-card.tsx` |
 | 3 | Credential Strength + buckets | **Exists** | `components/client-widgets.tsx` — four buckets from `v_secret_metadata.strength_score`, bucketed by `lib/ui/strength.ts`. A `Strength` filter on the Credentials section reaches the rows behind each count |
-| 3 | Documentation Health ring | **Missing** | `client_health` widget is a different measure; "not viewed recently"/"stale" needs defining |
+| 3 | Documentation Health ring | **Exists** | I (0680). `v_documentation_health` — three disjoint counts over a client's non-archived `asset_node` rows (revised recently / revised long ago / never revised) plus how many nobody has opened lately, beside the ring rather than in it. **Counts, never a score**, and a migration guard fails if a `score` or `percent` column ever appears on the view — decision 20. Windows per tenant, 180 days by default |
 | 3 | Recently Viewed By You (this client) | **Exists** | `listRecentInOrganization()`. Assets only — the client's own row is in the history by the time the page renders, so an unfiltered query led with the page you were on |
 | 3 | Important Contacts | **Partial** | `contact` + `organization.primary_contact_id`; no "important" flag — **group L** adds one plus the widget |
 | 3 | Recently Updated (this client) | **Exists** | `listRecentlyUpdated()` — `updated_at`/`updated_by` across assets, sites, contacts and documents. **Not `audit_log`:** the gap analysis said it was, and it is not. See the note below |
@@ -1040,6 +1040,139 @@ lesson at the SQL level — an `UPDATE` with no tenant context matches nothing a
 does not raise — next to the four policies' actual behaviour, the https CHECK
 and the interval bounds.
 
+### Group I — what has gone quiet, and a logo somebody can upload (migration 0680)
+
+Two features. The health ring on the client page, and bytes behind
+`organization.logo_url` for the first time since 0010.
+
+**THE DEFECT THIS GROUP TURNED ON, and it would have shipped looking like it
+worked.** The obvious design for "not opened recently" is a `last_viewed_at`
+column on `asset_node`. It was written, applied, and measured:
+
+```
+before view: updated_at age in days | 400
+after  view: updated_at age in days |   0   ← and the view was recorded
+```
+
+`asset_node_touch` is `BEFORE UPDATE ... helm.touch_updated_at()`, which sets
+`updated_at := now()` on **any** write to the row. So recording a view marked
+the documentation as freshly *revised*. `stale_count` would then have counted
+only the records nobody had looked at — which is the other measure wearing this
+one's name, and which gets better the more people browse. A number that
+improves when you read it is worse than no number.
+
+Guarding the trigger was the alternative and is worse. Narrowing it to
+`UPDATE OF <column list>` means a column added later silently stops bumping
+`updated_at`; teaching `helm.touch_updated_at()` about view-only updates puts
+table-specific knowledge in a function eleven tables share. The real lesson is
+about meaning: `asset_node.updated_at` means "last revised", three features
+depend on that, and a read path writing anything to that table leaves the
+meaning one trigger away from false. So `node_view_stat` holds view traffic and
+`asset_node` is not written by reads at all — the mistake is unavailable rather
+than guarded. Two guards hold it from both ends: one fails the migration if
+such a column reappears, one fails it if `asset_node_touch` is ever dropped.
+
+**COUNTS, NEVER A SCORE**, which is decision 20 carried over from G rather than
+re-argued. IT Glue puts a percentage in the middle of this ring; Helm puts the
+number that needs attention there, and the legend holds three sentences that are
+each either true or false:
+
+| segment | what it says |
+| --- | --- |
+| current | revised inside the window |
+| stale | revised, but longer ago than the window |
+| never revised | created before the window and never revised since |
+
+Disjoint and exhaustive over the client's non-archived `asset_node` rows, and
+the card **checks that before it draws**: three independent SQL `FILTER` clauses
+adding up is exactly the kind of property that is true when written and false
+after an edit, so if it ever fails the card shows the counts and hides the
+chart. A ring with a gap in it would be read as a fourth category.
+
+`never revised` is `updated_at = created_at`, which is exact except for a record
+created and edited inside one transaction — `now()` is transaction-scoped. No
+write path does that today, and a row in the wrong segment is the right
+direction for a proxy to fail in.
+
+**The denominator is `asset_node` and nothing else**, deliberately: it is G's
+denominator, so the coverage grid and this ring cannot come to disagree about
+what a client "has". Documents, contacts and sites are real documentation and
+are counted by neither; said here rather than left as a silent omission.
+
+**DECISION 3's DATA SOURCE DID NOT EXIST**, and finding that out was most of the
+design work. It specified "not viewed recently" as tenant-wide from `audit_log`:
+
+- **`audit_log` has no view events, and must not.** It records
+  security-relevant events, and `src/lib/clients/activity.ts` argues at length
+  that it must not record ordinary edits. A fortiori not every page view: it is
+  append-only, hash-chained and anchored hourly, so a read-traffic log makes the
+  chain grow with browsing — and it would record **who read what**, which is the
+  disclosure decisions 5 and 7 exist to prevent.
+- **`user_recent_view` is a recents list, not a history.** `helm.record_view()`
+  trims it to each user's 50 most recent rows, so a node drops off after 50
+  newer views whatever its age. Aggregating it would report "never viewed" for
+  anything a busy technician looked at 51 pages ago.
+
+So the fact is stored, with no actor, by the function that already runs on every
+node page view. **The carve-out:** a client read-only user must be able to cause
+that write and holds no `asset:write`, so `helm.touch_node_view()` is `SECURITY
+DEFINER` — one statement, tenant from the session rather than from its argument.
+`helm_app` has `SELECT` and no write privilege, so the function is the only path
+in and the gate is a missing privilege rather than a policy. Decision 26.
+
+**THE LOGO IS NOT AN ATTACHMENT**, which was the tempting reuse. As an
+attachment a logo would appear in the client's document tree, be deletable by
+anyone holding `asset:write`, and be rendered into an export bundle as a file
+the client never attached — and every query listing documents would have to
+remember to exclude it, which is the filter class of defect this project keeps
+finding. It reuses the document **storage** and crypto, which is what the plan
+asked for: same filesystem store, same tenant DEK, same nonce pairing.
+
+**SVG is refused**, by a byte sniffer and by a CHECK constraint. An SVG served
+from Helm's origin can carry `<script>` and run with the reader's session, and
+"it is only a logo" is how that gets waved through. The stored content type is
+the **sniffed** one rather than the browser's claim, so `nosniff` and the bytes
+always agree.
+
+**Tests: 28 integration (health), 31 integration (logos), 24 unit, §49 of
+`security.sql` at 25 assertions, 3 page value tests and 4 logo-resolution ones.
+13 sabotages, 12 caught — 11 by tests and one by a migration guard — and 1 that
+survived:**
+
+- **Removing `archived_at IS NULL` from `listHealthSegment` broke nothing.** The
+  view excludes archived rows and the list did not, but the test comparing each
+  segment's list against its count never noticed, because the fixture has
+  nothing archived. Three archived nodes now sit in that test, one in each
+  segment's range, so a list that forgets the filter returns more rows than the
+  count.
+
+Three more things were found by writing assertions rather than by sabotaging
+them, which is the pattern this pass keeps repeating:
+
+- **0220's `ALTER DEFAULT PRIVILEGES` had already granted `helm_app` full DML on
+  `node_view_stat`**, so the `SELECT`-only grant restricted nothing and the
+  "only the definer function can write" claim was false. Guard 2b caught it on
+  the migration's first run; an explicit `REVOKE` fixes it.
+- **`open()` read the logo with the ACTIVE data key**, not the one the row
+  names. After a rotation every logo uploaded beforehand would have failed to
+  decrypt — a broken image on every client page, with no error anybody would
+  connect to key management. The type checker caught it (`activeDataKey` takes
+  no key id) and a test now pins it.
+- **`propsOf()` in `pages.test.ts` only descended through `children`**, so a
+  component passed through any other prop — `actions`, `trigger`, `icon` — was
+  invisible to it. It walks every prop now. The failure direction was safe here,
+  but a test asserting a component is *absent* would have passed for entirely
+  the wrong reason.
+
+And two inert Tailwind classes in already-merged code, found by a new guard
+rather than by looking: `text-sev-ok` in H's external-check card (the token is
+`--color-ok`) and `bg-surface-muted` in F2's tasks page. An unknown utility
+generates nothing, so the class sits in the markup looking deliberate while the
+element inherits its parent's colour — invisible to the type checker, the build,
+and a person who assumes a muted icon was a design choice.
+`tests/unit/colour-tokens.test.ts` now fails on any colour utility or inline
+`var(--color-…)` naming a token `globals.css` does not declare.
+
 ## Decisions
 
 The questions this document opened with have been answered. Recorded here
@@ -1502,6 +1635,74 @@ is how the same argument gets had twice.
     'error', the promise never settles, and vitest reports "Test timed out in
     30000ms" against a line that mentions neither a port nor a permission. The
     same resolve-only pattern was in all three fixture servers.
+
+26. **"Not viewed recently" is a column on its own table, written by a
+    SECURITY DEFINER function, and decision 3's stated source was wrong (I).**
+    Decision 3 said tenant-wide from `audit_log`. There are no view events in
+    `audit_log` and there must not be: it is append-only, hash-chained and
+    anchored hourly, so a read-traffic log grows the chain with browsing, and it
+    would record who read what — the disclosure decisions 5 and 7 exist to
+    prevent. `user_recent_view` is no use either: it is trimmed to each user's
+    50 most recent rows, so it is a recents list and not a history.
+
+    So `node_view_stat` holds `last_viewed_at` and `view_count` per node, with
+    **no actor column at all** — the privacy property is structural rather than
+    policed, because there is nowhere to put a name.
+
+    Not on `asset_node`, and that is the measured half rather than a preference:
+    `asset_node_touch` sets `updated_at := now()` on any write to the row, so a
+    view recorded there marked the documentation as revised and a 400-day-old
+    record measured as 0 days old. Keeping read traffic off that table is what
+    lets `updated_at` go on meaning "last revised", which the Recently Updated
+    widget, `activity.ts`'s documented split and the ring all depend on.
+
+    The carve-out is one `SECURITY DEFINER` function doing one statement, taking
+    the tenant from the session rather than its argument, with `helm_app`
+    holding `SELECT` and no write privilege — so the function is the only path
+    in and the gate is a missing privilege rather than a policy somebody could
+    widen. Decision 3's 180 days and its "configurable" intent both survive; its
+    mechanism does not.
+
+27. **Health is three counts and a fourth number beside them, not a ring with a
+    percentage in it (I).** Decision 20's rule applied to the obvious place
+    somebody would break it. The segments are disjoint and exhaustive over a
+    client's non-archived `asset_node` rows, each one a sentence that is true or
+    false, and "nobody has opened it" sits outside the ring because it answers a
+    different question: stale means the documentation may be wrong, unopened
+    means nobody needs it — a correction and a retirement.
+
+    Enforced rather than remembered: a guard in 0680 fails the migration if a
+    `score`, `percent` or `ratio` column appears on `v_documentation_health`, and
+    the card checks the three counts still account for the total before drawing
+    anything.
+
+    The thresholds are two per tenant rather than one, because an MSP may well
+    accept a year without an edit while wanting to know about a quarter without
+    a reader. Both default to decision 3's 180.
+
+28. **A logo gets its own table, and never an `attachment` row (I).** Reusing
+    `attachment` was the tempting path and is wrong three ways: the logo appears
+    in the client's document tree, anybody holding `asset:write` can delete it,
+    and it lands in an export bundle as a file the client never attached. Worse,
+    every query that lists documents would have to remember to exclude it.
+
+    It reuses the document **storage** and crypto — same filesystem store, same
+    tenant DEK — so there is still one place that writes bytes to disk and one
+    that encrypts them. `organization_id` is the primary key, so "one logo per
+    client" is a property of the schema rather than a route that deletes first
+    and hopes.
+
+    **SVG is refused** by a byte sniffer and by a CHECK constraint: served from
+    Helm's own origin an SVG can carry `<script>` and run with the reader's
+    session. The stored content type is the sniffed one, never the browser's
+    claim, so `nosniff` and the bytes agree. A tenant wanting a vector logo
+    converts it, which is a smaller cost than stored XSS.
+
+    `organization.logo_url` is kept rather than migrated: it holds whatever a
+    technician pasted and an install may have it and no upload. An upload wins,
+    and `src/lib/ui/logo.ts` is the single place that decides — three call sites
+    render `ClientAvatar`, and a precedence rule written out three times is a
+    rule that is wrong in one of them.
 
 Two further decisions taken at the same time:
 

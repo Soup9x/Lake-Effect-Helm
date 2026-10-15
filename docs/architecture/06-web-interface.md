@@ -126,7 +126,7 @@ they can verify the file survived whatever channel they hand it over on.
 | `/search` | A plain GET form, not live filtering — a keystroke-per-request design puts a partial hostname on the wire and in the server log on every character. |
 | `/exports` | The ledger and the approval queue. Readable by anyone who may create an export, so "who exported this client's credentials and who approved it" needs no administrator. |
 | `/audit` | The trail, and the chain-integrity panel most audit UIs omit: `chain_seq` minus `anchored_seq` is how much history is currently protected only by the database. |
-| `/settings` | Key custody, integration health, and what each background worker may decrypt. Worker **authorisation** is not editable and never will be — it is fixed by trigger, because a UI that can widen the sync worker's purposes is a UI that can hand it the vault. One thing on this page is editable, and it is the opposite kind of switch: whether Helm may reach **outward** at all — see *Turning on outbound checks*. |
+| `/settings` | Key custody, integration health, and what each background worker may decrypt. Worker **authorisation** is not editable and never will be — it is fixed by trigger, because a UI that can widen the sync worker's purposes is a UI that can hand it the vault. Two things on this page are editable and neither is an authorisation: whether Helm may reach **outward** at all (*Turning on outbound checks*), and where the line falls between current and stale documentation (*What has gone quiet*). |
 | `/settings/asset-types` | The tenant's own documentation types. The flexible-asset engine has been complete and versioned since 0080; this is the screen it never had, so a type no longer arrives only by API call or by SQL. |
 
 ### Defining an asset type
@@ -338,6 +338,79 @@ that fails when the two lists drift. `tenant_sidebar_default` is readable by
 every role in the tenant and writable only with `tenant:write`: the generic
 tenant-scoped read predicate is `is_tenant_wide()`, which would have hidden the
 default from the client-side roles whose drawer renders from it.
+
+### What has gone quiet, and what nobody opens
+
+A ring on the client page, and it holds **counts rather than a score**. IT Glue
+puts a percentage in the middle of this; decision 20 is why Helm does not. Helm
+can see what has been documented and not what EXISTS, so a blended "68% healthy"
+is an invented weighting wearing a judgement's clothes — it starts an argument,
+where "11 of 34 records have not been revised since they were created" starts a
+morning's work. The middle of the ring holds the number that needs attention and
+the legend holds three sentences, each either true or false of this client:
+
+| segment | what it says |
+| --- | --- |
+| revised recently | edited inside the tenant's window |
+| not revised lately | edited, but longer ago than the window |
+| never revised | created before the window and never edited since |
+
+Each count links through to the records behind it, because G's lesson applies
+here too: a number nobody can reach behind is a number people stop believing.
+
+**The card checks the arithmetic before it draws.** The three counts come back
+from three independent SQL `FILTER` clauses, and "they partition the total" is
+exactly the kind of property that is true when written and false after somebody
+edits one. If it ever fails, the card renders the numbers and hides the chart
+and says so — a ring with a gap in it would be read as a fourth category that
+does not exist.
+
+**"Nobody has opened it" sits beside the ring, not in it.** Stale means the
+documentation may be wrong; unopened means nobody needs it. The first is a
+correction and the second a retirement, and averaging them into one arc loses
+both. It is also the newer number — nothing recorded views before 0680 — so on a
+freshly upgraded install the card says that rather than letting "everything is
+unopened" read as neglect.
+
+**Helm records when a record was opened and never by whom**, which the settings
+copy says out loud. `node_view_stat` has no actor column, so the privacy
+property is structural: there is nowhere to write a name. See §9a of the
+data-model document for why that table exists at all rather than a column on
+`asset_node` — the short version is that a `BEFORE UPDATE` trigger made every
+read look like a revision.
+
+The windows live on `/settings` behind `tenant:write`, two of them, and the form
+says that moving either changes what every client reads as at once.
+
+### A logo somebody can upload
+
+`organization.logo_url` has existed since 0010 and nothing could fill it except
+by pasting a URL. Both sources now exist and **an upload wins** —
+`src/lib/ui/logo.ts` is the one place that decides, because the clients list,
+the client page and the recents strip all render `ClientAvatar` and a precedence
+rule written out three times is wrong in one of them.
+
+The control sits in the client page header rather than in a settings panel,
+because that is where somebody notices the logo is missing. A read-only role
+sees the avatar and no buttons: a client should still see their own logo.
+
+**The preview is the stored image, not a local object URL.** A `FileReader`
+preview shows what the browser read, which is not necessarily what the server
+accepted — it sniffs the bytes and may store a different content type than the
+browser claimed, and it refuses anything that is not PNG, JPEG, WebP or GIF. So
+the upload completes, the route revalidates, and what appears is what is being
+served. A `?v=` counter defeats the cache exactly once after a replacement,
+since the URL does not change when the bytes do.
+
+**An SVG is refused, and the form says why** rather than listing four formats
+with no reason: served from this origin an SVG could run script with the
+reader's session.
+
+Served under an **ETag** that is the sha256 of the plaintext, cached `private`
+with `must-revalidate`. The clients list renders one logo per row, so a second
+page load costs one conditional request each and no bytes; `private` because a
+shared cache holding these would serve one tenant's client logo to another
+tenant's reader, which is a cross-tenant disclosure arranged by a header.
 
 ### Turning on outbound checks
 

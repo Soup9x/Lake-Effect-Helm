@@ -142,7 +142,7 @@ export default async function TasksPage({
                   >
                     <Link
                       href={`/runs/${task.runId}`}
-                      className="flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-3 hover:bg-surface-muted"
+                      className="flex flex-wrap items-start gap-x-3 gap-y-1 px-4 py-3 hover:bg-surface-sunken"
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">

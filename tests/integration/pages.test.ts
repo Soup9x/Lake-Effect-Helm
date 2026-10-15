@@ -49,7 +49,7 @@
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { withTenant } from '../../src/lib/db/client';
 import { useSessionResolver } from '../../src/lib/auth/session';
 import {
@@ -544,6 +544,15 @@ describe('every page can cross the client boundary', () => {
  * without a second copy of the query — which is the trap named at the top of
  * this file, and which the obvious version of the test below fell straight
  * into on the first attempt.
+ *
+ * WALKS EVERY PROP, NOT JUST `children`, and that was a defect rather than a
+ * refinement. The first version descended through `props.children` alone, so a
+ * component passed through any OTHER prop was invisible to it — and this
+ * project passes plenty that way: PageHeader takes `actions`, Modal takes
+ * `trigger`, SectionBrowser takes `icon`. Group I found it the hard way, with
+ * a LogoControl rendered in PageHeader's `actions` that the walker could not
+ * see; the test failed, which is the safe direction, but a test asserting a
+ * component is ABSENT would have passed for entirely the wrong reason.
  */
 function propsOf(node: unknown, componentName: string): Record<string, unknown> | null {
   if (!node || typeof node !== 'object') return null;
@@ -560,7 +569,12 @@ function propsOf(node: unknown, componentName: string): Record<string, unknown> 
   if (typeof element.type === 'function' && element.type.name === componentName) {
     return element.props ?? {};
   }
-  return element.props ? propsOf(element.props.children, componentName) : null;
+  if (!element.props) return null;
+  for (const value of Object.values(element.props)) {
+    const found = propsOf(value, componentName);
+    if (found) return found;
+  }
+  return null;
 }
 
 /**
@@ -908,5 +922,191 @@ describe('what the registry said, on the asset page', () => {
       .not.toContain('Observed fingerprint');
     expect(text, 'and the hex itself should not be there under another label')
       .not.toContain('ababab');
+  });
+});
+
+describe('documentation health on the client page', () => {
+  /**
+   * A PAGES row proves the two new EXISTS subqueries and the health aggregate
+   * execute. It cannot see whether the card got real numbers, nor whether the
+   * avatar was pointed at the uploaded logo rather than at a pasted URL — and
+   * those are the two things group I is for.
+   */
+  const clientPage = async () =>
+    (await import('../../src/app/(app)/organizations/[organizationId]/page')).default({
+      params: p({ organizationId: IDS.orgAcme }),
+    });
+
+  /*
+   * node_view_stat is cleared BEFORE each test rather than after, because
+   * earlier tests in this file render the asset page and that records views —
+   * so "nothing has been opened yet" was true of a fresh database and false by
+   * the time this block ran. An afterEach cannot fix that; it is the state on
+   * the way IN that matters.
+   */
+  beforeEach(async () => {
+    const sql = superuserSql();
+    try {
+      await sql`DELETE FROM node_view_stat`;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  afterEach(async () => {
+    const sql = superuserSql();
+    try {
+      await sql`DELETE FROM organization_logo`;
+      await sql`DELETE FROM documentation_health_setting`;
+      await sql`DELETE FROM asset_node WHERE name LIKE 'zz %'`;
+      await sql`UPDATE organization SET logo_url = NULL`;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('hands the card counts that account for every record', async () => {
+    const card = propsOf(await clientPage(), 'DocumentationHealthCard');
+    expect(card, 'the client page should render a DocumentationHealthCard').toBeTruthy();
+
+    const health = card!.health as {
+      total: number; current: number; stale: number; neverRevised: number;
+      staleAfterDays: number;
+    };
+    expect(health.total, 'the fixture documents several nodes for Acme').toBeGreaterThan(0);
+    expect(
+      health.current + health.stale + health.neverRevised,
+      'the three segments did not account for the total, so the ring would be drawn with a gap',
+    ).toBe(health.total);
+    expect(health.staleAfterDays, 'the window should reach the card').toBe(180);
+  });
+
+  it('reports the tenant"s own window, not the shipped one', async () => {
+    const sql = superuserSql();
+    try {
+      await sql`
+        INSERT INTO documentation_health_setting (tenant_id, stale_after_days, unviewed_after_days)
+        VALUES (${IDS.tenant1}::uuid, 45, 45)
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+
+    const card = propsOf(await clientPage(), 'DocumentationHealthCard');
+    expect((card!.health as { staleAfterDays: number }).staleAfterDays).toBe(45);
+  });
+
+  it('tells the card whether anything has been opened at all', async () => {
+    // A freshly upgraded install has recorded no views, and the card says so
+    // rather than letting "everything is unopened" read as neglect.
+    const before = propsOf(await clientPage(), 'DocumentationHealthCard');
+    expect(before!.viewsRecorded, 'nothing has been viewed yet').toBe(false);
+
+    // The client page records a view of the ORGANISATION, not of a node, so
+    // opening it must not flip this — the ring is about documents.
+    await withTenant(ADMIN, (tx) => tx`SELECT helm.record_view(NULL, ${IDS.firewall}::uuid)`);
+
+    const after = propsOf(await clientPage(), 'DocumentationHealthCard');
+    expect(after!.viewsRecorded).toBe(true);
+  });
+});
+
+describe('which logo the pages load', () => {
+  afterEach(async () => {
+    const sql = superuserSql();
+    try {
+      await sql`DELETE FROM organization_logo`;
+      await sql`UPDATE organization SET logo_url = NULL`;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  /** A logo row with no real bytes: these tests are about URL resolution. */
+  async function seedLogoRow(organizationId: string) {
+    const sql = superuserSql();
+    try {
+      await sql`
+        INSERT INTO organization_logo (
+          organization_id, tenant_id, content_type, byte_size, storage_key, content_sha256
+        )
+        VALUES (
+          ${organizationId}::uuid, ${IDS.tenant1}::uuid, 'image/png', 10,
+          ${`zz-${organizationId}`}, decode(repeat('ab', 32), 'hex')
+        )
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  }
+
+  const listPage = async () =>
+    (await import('../../src/app/(app)/organizations/page')).default({
+      searchParams: p({}),
+    });
+
+  it('points the clients table at the upload when there is one', async () => {
+    await seedLogoRow(IDS.orgAcme);
+
+    const table = propsOf(await listPage(), 'ClientsTable');
+    expect(table, 'the clients list should render a ClientsTable').toBeTruthy();
+    const rows = table!.clients as { id: string; logoUrl: string | null }[];
+    const acme = rows.find((row) => row.id === IDS.orgAcme);
+    expect(acme?.logoUrl).toBe(`/api/organizations/${IDS.orgAcme}/logo`);
+  });
+
+  it('prefers the upload over a pasted URL, on the list and the client page', async () => {
+    const sql = superuserSql();
+    try {
+      await sql`
+        UPDATE organization SET logo_url = 'https://acme.test/old.png'
+        WHERE id = ${IDS.orgAcme}::uuid
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+    await seedLogoRow(IDS.orgAcme);
+
+    const rows = (propsOf(await listPage(), 'ClientsTable')!.clients) as
+      { id: string; logoUrl: string | null }[];
+    expect(rows.find((row) => row.id === IDS.orgAcme)?.logoUrl)
+      .toBe(`/api/organizations/${IDS.orgAcme}/logo`);
+
+    const control = propsOf(
+      await (await import('../../src/app/(app)/organizations/[organizationId]/page')).default({
+        params: p({ organizationId: IDS.orgAcme }),
+      }),
+      'LogoControl',
+    );
+    expect(control, 'the client page should render a LogoControl').toBeTruthy();
+    expect(control!.src, 'the two pages disagreed about which logo to load')
+      .toBe(`/api/organizations/${IDS.orgAcme}/logo`);
+  });
+
+  it('falls back to the pasted URL when nothing is uploaded', async () => {
+    const sql = superuserSql();
+    try {
+      await sql`
+        UPDATE organization SET logo_url = 'https://acme.test/only.png'
+        WHERE id = ${IDS.orgAcme}::uuid
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+
+    const rows = (propsOf(await listPage(), 'ClientsTable')!.clients) as
+      { id: string; logoUrl: string | null }[];
+    expect(rows.find((row) => row.id === IDS.orgAcme)?.logoUrl)
+      .toBe('https://acme.test/only.png');
+  });
+
+  it('and the strip resolves it the same way, from the same rows', async () => {
+    // Three call sites, one precedence rule. The strip takes a Map built in the
+    // page, which is the one most likely to be forgotten.
+    await seedLogoRow(IDS.orgAcme);
+    const strip = propsOf(await listPage(), 'ClientStrip');
+    expect(strip, 'the clients list should render a ClientStrip').toBeTruthy();
+    const logos = strip!.logos as Map<string, string | null>;
+    expect(logos.get(IDS.orgAcme)).toBe(`/api/organizations/${IDS.orgAcme}/logo`);
   });
 });

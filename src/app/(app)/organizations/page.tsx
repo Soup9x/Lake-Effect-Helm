@@ -10,6 +10,7 @@ import { ClientStrip } from '@/components/client-strip';
 import { isClientRole } from '@/lib/ui/roles';
 import { favoriteIds, listFavorites, listRecent } from '@/lib/workspace/queries';
 import { ACTIVE_STATUSES, RELATIONSHIP_KEYS, RELATIONSHIPS } from '@/lib/ui/organization-relationship';
+import { logoSrc } from '@/lib/ui/logo';
 
 interface OrganizationQueryRow {
   id: string;
@@ -19,6 +20,8 @@ interface OrganizationQueryRow {
   is_msp_internal: boolean;
   industry: string | null;
   logo_url: string | null;
+  /** Whether 0680's organization_logo holds bytes for this client. */
+  has_logo: boolean;
   tags: string[];
   site_count: string;
   asset_count: string;
@@ -79,6 +82,10 @@ export default async function OrganizationsPage({
       SELECT
         o.id, o.name, o.status::text, o.relationship::text AS relationship,
         o.is_msp_internal, o.industry, o.logo_url, o.tags,
+        -- One bit per row rather than a join: the bytes are served by their own
+        -- route and organization_logo is RLS-scoped in its own right, so a
+        -- client this reader cannot see contributes nothing here either.
+        EXISTS (SELECT 1 FROM organization_logo l WHERE l.organization_id = o.id) AS has_logo,
         (SELECT count(*) FROM site s
           WHERE s.organization_id = o.id AND s.deleted_at IS NULL) AS site_count,
         (SELECT count(*) FROM asset_node n
@@ -147,7 +154,7 @@ export default async function OrganizationsPage({
     relationship: org.relationship,
     isMspInternal: org.is_msp_internal,
     industry: org.industry,
-    logoUrl: org.logo_url,
+    logoUrl: logoSrc(org.id, org.has_logo, org.logo_url),
     tags: org.tags,
     siteCount: Number(org.site_count),
     assetCount: Number(org.asset_count),
@@ -167,8 +174,11 @@ export default async function OrganizationsPage({
 
   // Logos for the strip, from the rows already fetched. The strip shows recents
   // that may be filtered out of the table above, so a miss here is normal and
-  // falls back to initials rather than to nothing.
-  const logos = new Map(organizations.map((o) => [o.id, o.logo_url]));
+  // falls back to initials rather than to nothing. Resolved through the same
+  // helper as the table, so an uploaded logo wins in both places.
+  const logos = new Map(
+    organizations.map((o) => [o.id, logoSrc(o.id, o.has_logo, o.logo_url)]),
+  );
 
   /** A filter chip that keeps every other parameter in the URL. */
   function chip(key: 'type' | 'status', value: string | null, label: string) {

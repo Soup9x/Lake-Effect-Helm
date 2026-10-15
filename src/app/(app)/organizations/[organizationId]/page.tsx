@@ -22,6 +22,10 @@ import {
 } from '@/lib/ui/strength';
 import { FavoriteStar } from '@/components/favorite-star';
 import { NotesCard } from '@/components/notes-card';
+import { DocumentationHealthCard } from '@/components/documentation-health';
+import { LogoControl } from '@/components/logo-control';
+import { readDocumentationHealth } from '@/lib/health/queries';
+import { logoSrc } from '@/lib/ui/logo';
 import { HealthDot } from '@/components/ui/health-dot';
 import { isFavorite, listRecentInOrganization, recordView } from '@/lib/workspace/queries';
 import { listClientActivity, listRecentlyUpdated } from '@/lib/clients/activity';
@@ -41,6 +45,9 @@ interface OrgRow {
   industry: string | null; employee_count: number | null; timezone: string | null;
   website: string | null; onboarded_at: Date | null; notes: string | null;
   tags: string[];
+  logo_url: string | null;
+  /** Whether 0680's organization_logo holds bytes for this client. */
+  has_logo: boolean;
 }
 
 interface SiteRow {
@@ -112,8 +119,14 @@ export default async function OrganizationPage({
   const data = await withTenant(actorOf(identity), async (tx, session) => {
     const [organization] = await tx<OrgRow[]>`
       SELECT id, name, legal_name, status::text, industry, employee_count,
-             timezone, website, onboarded_at, notes, tags
-      FROM organization WHERE id = ${organizationId}::uuid AND deleted_at IS NULL
+             timezone, website, onboarded_at, notes, tags, logo_url,
+             -- EXISTS rather than a join: one bit is wanted, the bytes are
+             -- never read here, and organization_logo is RLS-scoped in its own
+             -- right so an invisible client contributes nothing.
+             EXISTS (
+               SELECT 1 FROM organization_logo l WHERE l.organization_id = o.id
+             ) AS has_logo
+      FROM organization o WHERE o.id = ${organizationId}::uuid AND o.deleted_at IS NULL
     `;
     if (!organization) return null;
 
@@ -124,7 +137,7 @@ export default async function OrganizationPage({
 
     const [
       sites, contacts, assets, credentials, expiries, health, pinned, folders, documents,
-      recentlyUpdated, recentlyViewed, activity, runs,
+      recentlyUpdated, recentlyViewed, activity, runs, documentationHealth,
     ] = await Promise.all([
       tx<SiteRow[]>`
         SELECT id, name, code, is_primary, address_line1, city, region, main_phone, notes
@@ -224,12 +237,20 @@ export default async function OrganizationPage({
        * being recomputed per card.
        */
       listRunsForOrganization(tx, organizationId),
+      /*
+       * The health ring's counts, from v_documentation_health. One aggregate
+       * over this client's nodes, on the same transaction as everything else,
+       * and it returns null for an organisation RLS does not show — which
+       * cannot happen here, because the read above already returned.
+       */
+      readDocumentationHealth(tx, organizationId),
     ]);
 
     return {
       organization, sites, contacts, assets, credentials, expiries,
       health: health[0], pinned, folders, documents,
-      recentlyUpdated, recentlyViewed, activity, runs,
+      recentlyUpdated, recentlyViewed, activity, runs, documentationHealth,
+      canWriteOrganization: session.permissions.includes('organization:write'),
       canDeleteDocuments: session.permissions.includes('asset:delete'),
       canReadAudit: session.permissions.includes('audit:read'),
       /*
@@ -262,7 +283,13 @@ export default async function OrganizationPage({
     organization, sites, contacts, assets, credentials, expiries, health, pinned,
     folders, documents, recentlyUpdated, recentlyViewed, activity, runs,
     canDeleteDocuments, canReadAudit, canSeeAccessCounts,
+    documentationHealth, canWriteOrganization,
   } = data;
+
+  // Which image the avatar loads, and the same rule the clients list and the
+  // recents strip use — see src/lib/ui/logo.ts for why there are two sources
+  // and why an upload wins.
+  const logo = logoSrc(organization.id, organization.has_logo, organization.logo_url);
   const canWrite = !isClientRole(identity.roleKey);
 
   const folderRows: FolderRow[] = folders.map((f) => ({
@@ -334,6 +361,19 @@ export default async function OrganizationPage({
         }
         actions={
           <div className="flex items-center gap-2">
+            {/*
+              The logo sits in the header rather than in a settings panel,
+              because this is the page where somebody notices it is missing.
+              Read-only roles see the avatar with no controls, which is why the
+              component takes canWrite rather than being conditionally
+              rendered: a client user should still see their own logo.
+            */}
+            <LogoControl
+              organizationId={organization.id}
+              name={organization.name}
+              src={logo}
+              canWrite={canWriteOrganization}
+            />
             <HealthDot
               showLabel
               organizationId={organization.id}
@@ -420,6 +460,21 @@ export default async function OrganizationPage({
           <RecentlyUpdatedWidget items={recentlyUpdated} organizationId={organization.id} />
           <ActivityFeedWidget activity={activity} canReadAudit={canReadAudit} />
         </div>
+        {/*
+          The health ring, beside Recently updated on purpose: the two read the
+          same column from opposite ends. Recently updated says what moved;
+          this says what has not. Rendered whenever the view returned a row,
+          including a client with nothing documented — the card says so itself
+          rather than being hidden, because "nothing is documented here" is the
+          most actionable thing it could tell somebody.
+        */}
+        {documentationHealth && (
+          <DocumentationHealthCard
+            health={documentationHealth}
+            organizationId={organization.id}
+            viewsRecorded={documentationHealth.lastViewedAt !== null}
+          />
+        )}
         {/*
           Checklist runs. Rendered only when there are any, rather than as a
           permanent empty card: a client with no runs is the common case while
