@@ -82,6 +82,14 @@ export function TotpPanel({
 
   const startedAt = useRef<number | null>(null);
   const tick = useRef<ReturnType<typeof setInterval> | null>(null);
+  /**
+   * One code request at a time. The ticker keeps counting while a request is
+   * out, so `remaining` goes 0, -1, -2… and the refresh effect re-ran on every
+   * tick: a response slower than a second meant a second audited request, then
+   * a third — and a step-up refusal re-opened the prompt every second, wiping
+   * what was being typed into it.
+   */
+  const inFlight = useRef(false);
 
   const clearTick = () => {
     if (tick.current) clearInterval(tick.current);
@@ -114,6 +122,8 @@ export function TotpPanel({
   }, [nodeId, reason]);
 
   const load = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setState((prev) => (prev.status === 'shown' ? prev : { status: 'loading' }));
     try {
       const result = await withStepUp(attempt, stepUp.prompt);
@@ -143,6 +153,8 @@ export function TotpPanel({
       clearTick();
       startedAt.current = null;
       setState({ status: 'error', message: 'The request failed. Check your connection and retry.' });
+    } finally {
+      inFlight.current = false;
     }
   }, [attempt, stepUp.prompt]);
 

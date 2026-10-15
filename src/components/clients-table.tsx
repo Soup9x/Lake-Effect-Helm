@@ -35,6 +35,7 @@ import { FavoriteStar } from './favorite-star';
 import { ClientAvatar } from './client-avatar';
 import { DeletePermanently } from './delete-permanently';
 import { relationshipOf } from '@/lib/ui/organization-relationship';
+import { matchesBrowse } from '@/lib/ui/browse';
 
 export interface ClientRow extends GridRow {
   id: string;
@@ -223,10 +224,10 @@ export function ClientsTable({
     [clients],
   );
 
+  // The same matcher DataTable filters with, so the count agrees with the rows.
   const shown = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return rows.length;
-    return rows.filter((row) => row.search.includes(needle)).length;
+    if (!query.trim()) return rows.length;
+    return rows.filter((row) => matchesBrowse(row, { text: query })).length;
   }, [rows, query]);
 
   const onSelectionChange = useCallback((ids: string[]) => setSelected(ids), []);

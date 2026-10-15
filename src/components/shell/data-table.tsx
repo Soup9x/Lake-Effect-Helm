@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ChevronsUpDown, Flag, Folder } from 'lucide-react';
 import { cn } from '@/lib/ui/cn';
+import { matchesBrowse, retainVisible } from '@/lib/ui/browse';
 import { RowActionIcons, type RowAction } from './row-action-icons';
 
 export interface Column<T> {
@@ -97,10 +98,11 @@ export function DataTable<T extends GridRow>({
     setSelected(new Set());
   }, [clearSelectionSignal]);
 
+  // The same rule as SectionBrowser: every whitespace-separated term, anywhere.
+  // One contiguous substring meant "acme firewall" matched there and not here.
   const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((row) => (row.search ?? '').includes(needle));
+    if (!query.trim()) return rows;
+    return rows.filter((row) => matchesBrowse({ search: row.search ?? '' }, { text: query }));
   }, [rows, query]);
 
   const sorted = useMemo(() => {
@@ -150,6 +152,19 @@ export function DataTable<T extends GridRow>({
     setSelected(next);
     onSelectionChange?.([...next]);
   };
+
+  /*
+   * A row the filter hides is no longer selected. Without this, ticking A,
+   * filtering A out and ticking B handed the bulk bar [A, B] — an archive or a
+   * tag change applied to a row nobody could see. SelectableTable already
+   * behaved this way; this is the same rule.
+   */
+  useEffect(() => {
+    const kept = retainVisible(selected, filtered.map((row) => row.id));
+    if (kept) setSelection(kept);
+    // Only a change in what is visible can make a selection stale.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered]);
 
   const allVisibleSelected = sorted.length > 0 && sorted.every((r) => selected.has(r.id));
 
