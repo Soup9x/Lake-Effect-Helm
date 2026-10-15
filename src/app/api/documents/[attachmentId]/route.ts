@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { readJson, tenantRoute } from '@/lib/api/handler';
+import { readJson, serviceRoute, tenantRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getDocumentService } from '@/lib/services';
 import { DocumentError } from '@/lib/documents/service';
@@ -110,13 +110,13 @@ export const PATCH = tenantRoute(
  * endpoint or a psql session cannot walk past them. The permission declared
  * below is a clearer error message, not the boundary.
  */
-export const DELETE = tenantRoute(
-  async ({ params, identity }) => {
+export const DELETE = serviceRoute(
+  async ({ params, actor }) => {
     const attachmentId = idOrThrow(params.attachmentId);
 
     try {
       await getDocumentService().remove(
-        { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+        actor,
         attachmentId,
       );
     } catch (cause) {

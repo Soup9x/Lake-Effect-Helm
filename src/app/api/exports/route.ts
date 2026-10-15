@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { tenantRoute, readJson } from '@/lib/api/handler';
+import { serviceRoute, readJson } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getExportService } from '@/lib/exports/service';
 
@@ -51,8 +51,8 @@ const listSchema = z.object({
  * who requested it" is a question the whole team should be able to answer
  * without asking an administrator to run a query.
  */
-export const GET = tenantRoute(
-  async ({ tx: _tx, identity, request }) => {
+export const GET = serviceRoute(
+  async ({ request, actor }) => {
     const url = new URL(request.url);
     const parsed = listSchema.safeParse({
       organizationId: url.searchParams.get('organizationId') ?? undefined,
@@ -63,7 +63,7 @@ export const GET = tenantRoute(
 
     const { organizationId, status, limit } = parsed.data;
     const exports = await getExportService().list(
-      { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+      actor,
       {
         limit,
         ...(organizationId ? { organizationId } : {}),
@@ -85,12 +85,12 @@ export const GET = tenantRoute(
  * The response says what will happen rather than leaving the caller to infer
  * it from a status.
  */
-export const POST = tenantRoute(
-  async ({ identity, request }) => {
+export const POST = serviceRoute(
+  async ({ request, actor }) => {
     const body = await readJson(request, parser(requestSchema, 'invalid export request'));
 
     const result = await getExportService().request(
-      { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+      actor,
       body,
     );
 

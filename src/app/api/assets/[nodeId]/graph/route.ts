@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { tenantRoute } from '@/lib/api/handler';
+import { serviceRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getLinkEngine } from '@/lib/services';
 import { ALL_RELATIONS } from '@/lib/graph/relations';
@@ -19,8 +19,8 @@ const querySchema = z.object({
  * another client's asset exists. That is a property of helm.asset_graph_walk,
  * not of this handler.
  */
-export const GET = tenantRoute(
-  async ({ request, params, identity }) => {
+export const GET = serviceRoute(
+  async ({ request, params, actor }) => {
     const nodeId = params.nodeId;
     if (!nodeId || !z.guid().safeParse(nodeId).success) {
       throw ApiError.invalid('nodeId must be a UUID');
@@ -38,7 +38,6 @@ export const GET = tenantRoute(
     if (!parsed.success) throw ApiError.invalid('invalid graph parameters');
 
     const links = getLinkEngine();
-    const actor = { tenantId: identity.tenantId, actorId: identity.actorId };
     const { view, depth, relation } = parsed.data;
 
     switch (view) {

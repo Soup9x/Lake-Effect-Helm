@@ -10,10 +10,11 @@
  * sealed, and helm.unifi_mappings() reports only whether one exists.
  */
 import { z } from 'zod';
-import { tenantRoute, readJson } from '@/lib/api/handler';
+import { readJson, serviceRoute, tenantRoute } from '@/lib/api/handler';
+import { withTenant } from '@/lib/db/client';
 import { ApiError } from '@/lib/api/errors';
 import { generateWebhookSecret, sealWebhookSecret } from '@/lib/unifi/webhook-secret';
-import { registerWebhook } from '@/lib/unifi/client';
+import { UnifiError, registerWebhook } from '@/lib/unifi/client';
 import { getSecretService } from '@/lib/services';
 
 const idSchema = z.guid();
@@ -41,8 +42,8 @@ interface MappingRow {
   tls_pinned_sha256: string | null;
 }
 
-export const PUT = tenantRoute(
-  async ({ tx, request, params, session }) => {
+export const PUT = serviceRoute(
+  async ({ request, params, actor }) => {
     const mappingId = idSchema.safeParse(params.mappingId);
     if (!mappingId.success) throw ApiError.invalid('invalid mapping id');
 
@@ -52,24 +53,34 @@ export const PUT = tenantRoute(
       return result.data;
     });
 
-    const rows = await tx<MappingRow[]>`SELECT * FROM helm.unifi_mappings()`;
-    const mapping = rows.find((m) => m.id === mappingId.data);
-    if (!mapping) throw ApiError.notFound('there is no such controller mapping');
-
-    // Generated, never chosen. A signing secret somebody invented is one
-    // somebody can guess, and there is no reason for a human to pick this value.
+    // Store the secret and COMMIT before talking to the controller. Registration
+    // is up to 15 seconds of network I/O, which must not hold a connection idle
+    // in a transaction; and when it failed inside the old single transaction,
+    // the UnifiError escaped as a 500 and rolled the new secret back with it.
     const secret = generateWebhookSecret();
-    const sealed = await sealWebhookSecret(session.tenantId, mappingId.data, secret);
+    const { mapping, apiKeySecretId } = await withTenant(actor, async (tx) => {
+      const rows = await tx<MappingRow[]>`SELECT * FROM helm.unifi_mappings()`;
+      const found = rows.find((m) => m.id === mappingId.data);
+      if (!found) throw ApiError.notFound('there is no such controller mapping');
 
-    const [saved] = await tx<{ set_unifi_webhook_secret: boolean }[]>`
-      SELECT helm.set_unifi_webhook_secret(
-        ${mappingId.data}::uuid,
-        ${sealed.wrapProvider}, ${sealed.kekId}, ${sealed.wrappedDek},
-        ${sealed.ciphertext}, ${sealed.nonce}, ${sealed.tag}, ${sealed.aad})
-    `;
-    if (!saved?.set_unifi_webhook_secret) {
-      throw ApiError.invalid('the webhook secret could not be stored');
-    }
+      // Generated, never chosen. A signing secret somebody invented is one
+      // somebody can guess, and there is no reason for a human to pick this value.
+      const sealed = await sealWebhookSecret(actor.tenantId, mappingId.data, secret);
+      const [saved] = await tx<{ set_unifi_webhook_secret: boolean }[]>`
+        SELECT helm.set_unifi_webhook_secret(
+          ${mappingId.data}::uuid,
+          ${sealed.wrapProvider}, ${sealed.kekId}, ${sealed.wrappedDek},
+          ${sealed.ciphertext}, ${sealed.nonce}, ${sealed.tag}, ${sealed.aad})
+      `;
+      if (!saved?.set_unifi_webhook_secret) {
+        throw ApiError.invalid('the webhook secret could not be stored');
+      }
+
+      const [keyRow] = await tx<{ api_key_secret_id: string | null }[]>`
+        SELECT api_key_secret_id FROM unifi_site_mapping WHERE id = ${mappingId.data}::uuid
+      `;
+      return { mapping: found, apiKeySecretId: keyRow?.api_key_secret_id ?? null };
+    });
 
     /*
      * Optionally ask the controller to register the endpoint.
@@ -88,11 +99,11 @@ export const PUT = tenantRoute(
     };
 
     if (body.attemptRegistration && body.callbackUrl && mapping.api_key_set) {
-      const revealed = await getSecretService().reveal(
-        { tenantId: session.tenantId, actorId: session.actorId, actorType: session.actorType },
-        await apiKeySecretId(tx, mappingId.data),
-        { purpose: 'integration', reason: `webhook registration for ${mapping.name}` },
-      );
+      if (!apiKeySecretId) throw ApiError.invalid('the mapping has no stored API key');
+      const revealed = await getSecretService().reveal(actor, apiKeySecretId, {
+        purpose: 'integration',
+        reason: `webhook registration for ${mapping.name}`,
+      });
       try {
         const result = await registerWebhook({
           controllerUrl: mapping.controller_url,
@@ -108,41 +119,37 @@ export const PUT = tenantRoute(
           state: result.supported ? 'pending' : 'unsupported',
           message: result.message,
         };
+      } catch (error) {
+        if (!(error instanceof UnifiError)) throw error;
+        // Unreachable, refused or timed out: the secret is stored and the
+        // endpoint can still be added in the console by hand, so this is a
+        // result to show, not a failed request.
+        registration = {
+          attempted: true,
+          ok: false,
+          state: 'pending',
+          message: error.remedy ? `${error.message} ${error.remedy}` : error.message,
+        };
       } finally {
         revealed.value.dispose();
       }
-
-      await tx`
-        SELECT helm.set_unifi_webhook_state(
-          ${mappingId.data}::uuid, ${registration.state}, ${registration.message})
-      `;
     }
 
-    return {
-      // The one and only time this is returned. Paste it into the console now.
-      secret,
-      registration,
-      mappings: await tx`SELECT * FROM helm.unifi_mappings()`,
-    };
+    const mappings = await withTenant(actor, async (tx) => {
+      if (registration.attempted) {
+        await tx`
+          SELECT helm.set_unifi_webhook_state(
+            ${mappingId.data}::uuid, ${registration.state}, ${registration.message})
+        `;
+      }
+      return tx`SELECT * FROM helm.unifi_mappings()`;
+    });
+
+    return { secret, registration, mappings };
   },
   { permissions: ['integration:network:manage'] },
 );
 
-/** The mapping's API key, read inside the caller's transaction. */
-async function apiKeySecretId(
-  tx: Parameters<Parameters<typeof tenantRoute>[0]>[0]['tx'],
-  mappingId: string,
-): Promise<string> {
-  const [row] = await tx<{ api_key_secret_id: string | null }[]>`
-    SELECT api_key_secret_id FROM unifi_site_mapping WHERE id = ${mappingId}::uuid
-  `;
-  if (!row?.api_key_secret_id) {
-    throw ApiError.invalid('the mapping has no stored API key');
-  }
-  return row.api_key_secret_id;
-}
-
-/** Stop listening. The stored secret goes with it. */
 export const DELETE = tenantRoute(
   async ({ tx, params }) => {
     const mappingId = idSchema.safeParse(params.mappingId);

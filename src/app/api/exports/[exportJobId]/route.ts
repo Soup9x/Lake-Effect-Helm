@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { tenantRoute, readJson } from '@/lib/api/handler';
+import { serviceRoute, readJson } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getExportService } from '@/lib/exports/service';
 
@@ -21,13 +21,13 @@ const parser = <T>(schema: { safeParse: (raw: unknown) => { success: true; data:
     return result.data;
   };
 
-export const GET = tenantRoute(
-  async ({ identity, params }) => {
+export const GET = serviceRoute(
+  async ({ params, actor }) => {
     const exportJobId = idSchema.safeParse(params.exportJobId);
     if (!exportJobId.success) throw ApiError.invalid('invalid export id');
 
     const job = await getExportService().get(
-      { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+      actor,
       exportJobId.data,
     );
     return { export: job };
@@ -42,14 +42,14 @@ export const GET = tenantRoute(
  * the person who realises they asked for the wrong thing should be able to stop
  * it without first finding a second person. The database enforces the same rule.
  */
-export const DELETE = tenantRoute(
-  async ({ identity, params, request }) => {
+export const DELETE = serviceRoute(
+  async ({ params, request, actor }) => {
     const exportJobId = idSchema.safeParse(params.exportJobId);
     if (!exportJobId.success) throw ApiError.invalid('invalid export id');
 
     const { reason } = await readJson(request, parser(revokeSchema, 'a revocation needs a reason'));
     const revoked = await getExportService().revoke(
-      { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+      actor,
       exportJobId.data,
       reason,
     );

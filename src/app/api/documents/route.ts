@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { tenantRoute } from '@/lib/api/handler';
+import { serviceRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getDocumentService } from '@/lib/services';
 import { DocumentError } from '@/lib/documents/service';
@@ -29,8 +29,8 @@ const uploadSchema = z.object({
   isInternalOnly: z.boolean().default(false),
 });
 
-export const POST = tenantRoute(
-  async ({ request, identity }) => {
+export const POST = serviceRoute(
+  async ({ request, actor }) => {
     const limit = maxUploadBytes();
 
     // Before the body is read at all.
@@ -87,7 +87,7 @@ export const POST = tenantRoute(
 
     try {
       const stored = await getDocumentService().upload(
-        { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+        actor,
         {
           organizationId: parsed.data.organizationId,
           folderId: parsed.data.folderId,

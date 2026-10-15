@@ -17,7 +17,7 @@
 import { randomUUID } from 'node:crypto';
 import type { NextRequest } from 'next/server';
 import { withTenant, type DbRole, type HelmTx } from '../db/client';
-import type { ResolvedSessionContext } from '../db/context';
+import type { ResolvedSessionContext, SessionContextRequest } from '../db/context';
 import { SecretAccessDeniedError, StaleSecretVersionError } from '../secrets/errors';
 import { HelmCryptoError } from '../crypto/errors';
 import { ApiError, toErrorBody, type ErrorCode } from './errors';
@@ -85,15 +85,7 @@ export function tenantRoute<T>(
       const params = args?.params ? await args.params : {};
 
       const result = await withTenant(
-        {
-          tenantId: identity.tenantId,
-          actorId: identity.actorId,
-          actorType: identity.actorType,
-          requestId,
-          ...(identity.ip ? { ip: identity.ip } : {}),
-          ...(identity.userAgent ? { userAgent: identity.userAgent } : {}),
-          ...(identity.apiTokenId ? { apiTokenId: identity.apiTokenId } : {}),
-        },
+        actorFor(identity, requestId),
         async (tx, session) => {
           assertPermitted(session, options);
           return handler({ tx, session, identity, request, requestId, params });
@@ -115,6 +107,85 @@ export function tenantRoute<T>(
     } catch (error) {
       return errorResponse(error, requestId);
     }
+  };
+}
+
+export interface ServiceRouteContext {
+  /**
+   * The caller's full session-context request — tenant, actor, request id, IP,
+   * user agent and API token. Pass it to a service, which opens its own
+   * transaction with it, so the audit row that transaction writes carries the
+   * request it came from and an API token's scopes still narrow it.
+   */
+  actor: SessionContextRequest;
+  /** Role, rank, scope and permissions as the DATABASE resolved them. */
+  session: ResolvedSessionContext;
+  identity: RequestIdentity;
+  request: NextRequest;
+  requestId: string;
+  params: Record<string, string>;
+}
+
+/**
+ * Wrap a handler whose work happens in services that manage their own
+ * transaction — SecretService, ExportService, DocumentService, LogoService,
+ * the link engine.
+ *
+ * WHY NOT tenantRoute. tenantRoute holds a transaction for the whole handler.
+ * A handler that ignored it and called such a service held that connection
+ * idle while the service checked out a SECOND one: at pool size N, N concurrent
+ * requests could each hold one and wait forever for another, taking
+ * /api/health down with them. The service's transaction was also opened with
+ * only {tenantId, actorId}, so reveal, rotate, copy and download audit rows
+ * lost the request id, IP and user agent, and an API token's scopes — which
+ * only narrow a session when the token id is passed — did not apply.
+ *
+ * Here the declared permissions are checked in a short transaction that is
+ * committed before the handler runs, and the handler gets no transaction at
+ * all, only `actor` to hand on. Same failure ordering as tenantRoute: an
+ * unauthenticated caller never reaches the database. A handler that needs its
+ * own reads opens them with `withTenant(actor, ...)`.
+ */
+export function serviceRoute<T>(
+  handler: (ctx: ServiceRouteContext) => Promise<T>,
+  options: Omit<TenantRouteOptions, 'role'> = {},
+): (request: NextRequest, args?: RouteArgs) => Promise<Response> {
+  return async (request: NextRequest, args?: RouteArgs) => {
+    const requestId = request.headers.get('x-request-id') ?? randomUUID();
+
+    try {
+      await installSessionResolver();
+      const identity = await resolveIdentity(request);
+      const params = args?.params ? await args.params : {};
+      const actor = actorFor(identity, requestId);
+
+      const session = await withTenant(actor, async (_tx, resolved) => {
+        assertPermitted(resolved, options);
+        return resolved;
+      });
+
+      const result = await handler({ actor, session, identity, request, requestId, params });
+      if (result instanceof Response) {
+        result.headers.set('x-request-id', requestId);
+        return result;
+      }
+      return json(result, 200, requestId);
+    } catch (error) {
+      return errorResponse(error, requestId);
+    }
+  };
+}
+
+/** Everything withTenant() can record about who is asking and from where. */
+function actorFor(identity: RequestIdentity, requestId: string): SessionContextRequest {
+  return {
+    tenantId: identity.tenantId,
+    actorId: identity.actorId,
+    actorType: identity.actorType,
+    requestId,
+    ...(identity.ip ? { ip: identity.ip } : {}),
+    ...(identity.userAgent ? { userAgent: identity.userAgent } : {}),
+    ...(identity.apiTokenId ? { apiTokenId: identity.apiTokenId } : {}),
   };
 }
 

@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { tenantRoute } from '@/lib/api/handler';
+import { serviceRoute } from '@/lib/api/handler';
+import { withTenant } from '@/lib/db/client';
 import { ApiError } from '@/lib/api/errors';
 import { getSecretService } from '@/lib/services';
 import { UnifiError, inspectCertificate, listSites } from '@/lib/unifi/client';
@@ -38,13 +39,23 @@ interface MappingRow {
  * the sync uses — /sites answering does not guarantee /devices will. The
  * response says so rather than showing a tick that means more than it does.
  */
-export const POST = tenantRoute(
-  async ({ tx, params, session }) => {
+export const POST = serviceRoute(
+  async ({ params, actor }) => {
     const mappingId = idSchema.safeParse(params.mappingId);
     if (!mappingId.success) throw ApiError.invalid('invalid mapping id');
 
-    const rows = await tx<MappingRow[]>`SELECT * FROM helm.unifi_mappings()`;
-    const mapping = rows.find((m) => m.id === mappingId.data);
+    // Both reads in one short transaction, committed before any network I/O:
+    // the TLS probe and the API call below can take 25 seconds between them,
+    // and none of it should hold a pooled connection idle in a transaction.
+    const { mapping, apiKeySecretId } = await withTenant(actor, async (tx) => {
+      const rows = await tx<MappingRow[]>`SELECT * FROM helm.unifi_mappings()`;
+      const found = rows.find((m) => m.id === mappingId.data);
+      if (!found) return { mapping: undefined, apiKeySecretId: undefined };
+      const [secretRow] = await tx<{ api_key_secret_id: string | null }[]>`
+        SELECT api_key_secret_id FROM unifi_site_mapping WHERE id = ${mappingId.data}::uuid
+      `;
+      return { mapping: found, apiKeySecretId: secretRow?.api_key_secret_id ?? undefined };
+    });
     if (!mapping) throw ApiError.notFound('there is no such controller mapping');
 
     // Stage 1.
@@ -98,16 +109,13 @@ export const POST = tenantRoute(
     // Stage 3. The key is revealed through the audited path, as a reveal with a
     // stated reason, so a connection test leaves the same trail an actual poll
     // would — testing a credential is using it.
-    const [secretRow] = await tx<{ api_key_secret_id: string }[]>`
-      SELECT api_key_secret_id FROM unifi_site_mapping WHERE id = ${mappingId.data}::uuid
-    `;
-    if (!secretRow?.api_key_secret_id) {
+    if (!apiKeySecretId) {
       throw ApiError.invalid('the mapping has no stored API key');
     }
 
     const revealed = await getSecretService().reveal(
-      { tenantId: session.tenantId, actorId: session.actorId, actorType: session.actorType },
-      secretRow.api_key_secret_id,
+      actor,
+      apiKeySecretId,
       { purpose: 'integration', reason: `connection test for ${mapping.name}` },
     );
 

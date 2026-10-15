@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { readJson, tenantRoute } from '@/lib/api/handler';
+import { readJson, serviceRoute } from '@/lib/api/handler';
+import { withTenant } from '@/lib/db/client';
 import { ApiError } from '@/lib/api/errors';
 import { getSecretService } from '@/lib/services';
 
@@ -41,8 +42,8 @@ interface TotpRow {
   totp_period_seconds: number;
 }
 
-export const POST = tenantRoute(
-  async ({ tx, request, params, identity }) => {
+export const POST = serviceRoute(
+  async ({ request, params, actor }) => {
     const nodeId = params.nodeId;
     if (!nodeId || !z.guid().safeParse(nodeId).success) {
       throw ApiError.invalid('nodeId must be a UUID');
@@ -61,21 +62,17 @@ export const POST = tenantRoute(
      * seed, and there is no legitimate reason for a browser to override what the
      * vendor's enrolment said.
      */
-    const [row] = await tx<TotpRow[]>`
+    const [row] = await withTenant(actor, (tx) => tx<TotpRow[]>`
       SELECT c.totp_secret_id, c.totp_algorithm, c.totp_digits, c.totp_period_seconds
       FROM credential c
       JOIN asset_node n ON n.id = c.id
       WHERE c.id = ${nodeId}::uuid AND n.archived_at IS NULL
-    `;
+    `);
     if (!row) throw ApiError.notFound('no such credential');
     if (!row.totp_secret_id) throw ApiError.notFound('this credential has no TOTP seed');
 
     const generated = await getSecretService().generateTotpCode(
-      {
-        tenantId: identity.tenantId,
-        actorId: identity.actorId,
-        actorType: identity.actorType,
-      },
+      actor,
       row.totp_secret_id,
       {
         algorithm: row.totp_algorithm as 'SHA1' | 'SHA256' | 'SHA512',
