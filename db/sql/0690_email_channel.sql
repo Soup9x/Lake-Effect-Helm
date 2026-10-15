@@ -658,10 +658,14 @@ BEGIN
       -- And still be a member, because the reminder's foreign key says so and
       -- because work assigned to somebody who left is not a reminder, it is a
       -- reassignment somebody has to do.
+      -- `status = 'active'` AND an unexpired membership, which is the same
+      -- pair listAssignableUsers() uses (0650). membership has no is_active
+      -- column; the first version of this assumed one and failed on every row.
       AND EXISTS (
         SELECT 1 FROM membership mb
         WHERE mb.tenant_id = s.tenant_id AND mb.user_id = s.assigned_to
-          AND mb.is_active AND (mb.expires_at IS NULL OR mb.expires_at > now())
+          AND mb.status = 'active'
+          AND (mb.expires_at IS NULL OR mb.expires_at > now())
       )
     ORDER BY s.due_at
     LIMIT greatest(p_limit, 1)

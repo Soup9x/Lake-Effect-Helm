@@ -402,8 +402,43 @@ export function subjectOf(mail: ReceivedMail): string {
   );
 }
 
-/** The body, after the header block. */
+/**
+ * The body, after the header block, with its transfer encoding undone.
+ *
+ * DECODING IS NOT OPTIONAL HERE. A body containing any non-ASCII character —
+ * the arrow in "Account → Notifications", say — is sent quoted-printable, so a
+ * naive reader compares its assertion against `=E2=86=92` and fails for a
+ * reason that has nothing to do with the sender. That is what happened on the
+ * first run, and the temptation at that moment is to take the arrow out of the
+ * product to make the test pass.
+ */
 export function bodyOf(mail: ReceivedMail): string {
   const blank = mail.raw.indexOf('\n\n');
-  return blank === -1 ? '' : mail.raw.slice(blank + 2);
+  if (blank === -1) return '';
+  const body = mail.raw.slice(blank + 2);
+
+  const header = mail.raw.slice(0, blank).toLowerCase();
+  const encoding = header.match(/content-transfer-encoding:\s*([a-z0-9-]+)/)?.[1] ?? '7bit';
+
+  if (encoding === 'base64') {
+    return Buffer.from(body.replace(/\s+/g, ''), 'base64').toString('utf8');
+  }
+  if (encoding === 'quoted-printable') {
+    // Soft line breaks first (a trailing '=' continues the line), then the
+    // escapes — collected as BYTES and decoded as UTF-8 together, because one
+    // character can be several escapes.
+    const joined = body.replace(/=\r?\n/g, '');
+    const bytes: number[] = [];
+    for (let i = 0; i < joined.length; i += 1) {
+      if (joined[i] === '=' && /[0-9A-F]{2}/i.test(joined.slice(i + 1, i + 3))) {
+        bytes.push(parseInt(joined.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else {
+        // Already UTF-8 text at this point for anything unescaped.
+        bytes.push(...Buffer.from(joined[i]!, 'utf8'));
+      }
+    }
+    return Buffer.from(bytes).toString('utf8');
+  }
+  return body;
 }

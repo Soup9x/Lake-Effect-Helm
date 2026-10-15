@@ -27,6 +27,13 @@ import {
   EmailTransportError, type RelayConfig,
 } from './transport';
 
+/** What withTenant needs to put the sender inside one tenant. */
+export interface WorkerActor {
+  tenantId: string;
+  actorId: string;
+  actorType: 'service_account';
+}
+
 export interface OutgoingMail {
   to: string;
   subject: string;
@@ -86,12 +93,33 @@ export async function loadRelay(tenantId: string): Promise<RelayConfig | null> {
  * In SQL rather than by re-implementing the domain comparison here, because the
  * configuration route asks the same question and two copies of a disclosure
  * rule is one copy too many.
+ *
+ * ASKED INSIDE THE TENANT, and that is not decoration. The function reads
+ * smtp_setting, which carries FORCED row-level security — so called with no
+ * tenant context the policy matches nothing, EXISTS is false, and EVERY address
+ * is refused. That is exactly what the first version did: it went through
+ * db('worker') with no context, and the integration test watched a reminder to
+ * the tenant's own domain be rejected as "outside the allowed domains".
+ *
+ * The alternative was making the function SECURITY DEFINER, which would also
+ * have worked and would have let any role ask about any tenant's domain policy
+ * for no gain. Keeping it under RLS means the route's call and the worker's
+ * call are scoped the same way.
  */
-export async function recipientAllowed(tenantId: string, address: string): Promise<boolean> {
-  const [row] = await db('worker')<{ allowed: boolean }[]>`
-    SELECT helm.email_recipient_allowed(${tenantId}::uuid, ${address}) AS allowed
-  `;
-  return row?.allowed === true;
+export async function recipientAllowed(
+  actor: WorkerActor,
+  address: string,
+): Promise<boolean> {
+  return withTenant(
+    actor,
+    async (tx) => {
+      const [row] = await tx<{ allowed: boolean }[]>`
+        SELECT helm.email_recipient_allowed(${actor.tenantId}::uuid, ${address}) AS allowed
+      `;
+      return row?.allowed === true;
+    },
+    { role: 'worker' },
+  );
 }
 
 /**
@@ -106,16 +134,20 @@ export class EmailBatch {
   private readonly transport;
 
   private constructor(
-    private readonly tenantId: string,
+    private readonly actor: WorkerActor,
     private readonly config: RelayConfig,
   ) {
     this.transport = buildTransport(config);
   }
 
-  static async open(tenantId: string): Promise<EmailBatch | null> {
-    const config = await loadRelay(tenantId);
+  /**
+   * Takes the ACTOR rather than a bare tenant id, because the recipient gate
+   * below has to be asked inside a tenant context — see recipientAllowed().
+   */
+  static async open(actor: WorkerActor): Promise<EmailBatch | null> {
+    const config = await loadRelay(actor.tenantId);
     if (!config) return null;
-    return new EmailBatch(tenantId, config);
+    return new EmailBatch(actor, config);
   }
 
   /** The address messages will appear to come from, for a log line. */
@@ -124,7 +156,7 @@ export class EmailBatch {
   }
 
   async send(mail: OutgoingMail): Promise<void> {
-    if (!(await recipientAllowed(this.tenantId, mail.to))) {
+    if (!(await recipientAllowed(this.actor, mail.to))) {
       // Refused rather than dropped quietly: the caller records it against the
       // row so somebody can see WHY nothing arrived. The message names the
       // setting rather than the address, because the address is in the row.
@@ -180,8 +212,8 @@ export async function recordRelayResult(
  * of a test is to exercise the path a real message takes, which is §7's rule
  * about the webhook test queueing rather than POSTing.
  */
-export async function sendOne(tenantId: string, mail: OutgoingMail): Promise<void> {
-  const batch = await EmailBatch.open(tenantId);
+export async function sendOne(actor: WorkerActor, mail: OutgoingMail): Promise<void> {
+  const batch = await EmailBatch.open(actor);
   if (!batch) {
     throw new EmailTransportError(
       'outbound email is not configured for this tenant', 'misconfigured',
@@ -189,10 +221,10 @@ export async function sendOne(tenantId: string, mail: OutgoingMail): Promise<voi
   }
   try {
     await batch.send(mail);
-    await recordRelayResult(tenantId, true);
+    await recordRelayResult(actor.tenantId, true);
   } catch (error) {
     const described = describeTransportError(error);
-    await recordRelayResult(tenantId, false, described.message);
+    await recordRelayResult(actor.tenantId, false, described.message);
     throw described;
   } finally {
     batch.close();

@@ -130,7 +130,7 @@ async function deliverReminders(ctx: JobContext): Promise<JobResult> {
     // tenant B's relay read as broken on its settings page.
     let tenantFailures = 0;
     try {
-      batch = await EmailBatch.open(tenant.tenant_id);
+      batch = await EmailBatch.open(actor);
       if (!batch) {
         // The relay was turned off between the backlog query and here.
         skipped += 1;
