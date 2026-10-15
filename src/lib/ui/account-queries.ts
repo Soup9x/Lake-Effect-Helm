@@ -14,6 +14,7 @@
  */
 import { withTenant } from '../db/client';
 import { actorOf, type ServerIdentity } from '../auth/server-identity';
+import { unreadCount } from '../notifications/inbox';
 import { readTheme, type AccountPreferences } from './preferences';
 
 interface Row {
@@ -44,4 +45,45 @@ export async function readMyPreferences(identity: ServerIdentity): Promise<Accou
     timezone: row?.timezone ?? null,
     theme: readTheme(row?.theme),
   };
+}
+
+/**
+ * Everything the shell needs about the acting user, in ONE transaction.
+ *
+ * The layout under (app) renders on every navigation, so each query it makes is
+ * a cost paid continuously. The theme has to be read there — it is applied
+ * before the page below paints — and 0700's unread count has to be read there
+ * too, because the bell is in the header on every page. Two reads, one
+ * transaction, one session context: a second withTenant() would open a second
+ * connection and set the context again for a count.
+ *
+ * The count is NOT fetched by the bell on open, unlike the list. A badge that
+ * only appears once somebody clicks the thing it is meant to draw them to is
+ * not a badge.
+ */
+export interface ShellState {
+  preferences: AccountPreferences;
+  unreadNotifications: number;
+}
+
+export async function readShellState(identity: ServerIdentity): Promise<ShellState> {
+  return withTenant(actorOf(identity), async (tx) => {
+    const [row] = await tx<Row[]>`
+      SELECT name, first_name, last_name, timezone, theme
+      FROM app_user WHERE id = ${identity.actorId}::uuid
+    `;
+    return {
+      // Same fallback as readMyPreferences, and for the reason stated there: a
+      // session that resolved against an account deactivated a moment ago
+      // should still render a shell rather than 500 on every page.
+      preferences: {
+        name: row?.name ?? null,
+        firstName: row?.first_name ?? null,
+        lastName: row?.last_name ?? null,
+        timezone: row?.timezone ?? null,
+        theme: readTheme(row?.theme),
+      },
+      unreadNotifications: await unreadCount(tx),
+    };
+  });
 }

@@ -202,27 +202,69 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 describe('with no relay configured', () => {
-  it('raises nothing and sends nothing', async () => {
-    // The air-gapped default: a tenant that has not set up mail contributes no
-    // rows at all, so there is nothing for the delivery job to find either.
+  /*
+   * WHAT 0700 CHANGED HERE, AND WHY THESE TESTS WERE REWRITTEN RATHER THAN
+   * DELETED.
+   *
+   * 0690 raised NOTHING without a relay: both raising functions carried
+   * `JOIN smtp_setting m ON ... AND m.enabled`, so an install with no mail
+   * created no task_reminder rows at all. That was right while email was the
+   * only output. It is wrong with two channels — 0700's in-app bell has no
+   * relay to depend on, and gating the ROWS on mail meant an air-gapped MSP
+   * had a bell that could never show the one thing it is most for.
+   *
+   * So the rule is now split, which is what 0690's own delivery design already
+   * assumed: raising is about whether somebody should be told, delivery is
+   * about whether mail can carry it. helm.email_backlog() still requires an
+   * enabled relay, so a reminder raised without one sits `pending` — "left
+   * pending so it goes out when somebody sets the relay up", in 0690's words.
+   *
+   * These tests therefore assert the stronger pair: the rows ARE created, and
+   * nothing is SENT.
+   */
+  it('raises the reminders anyway, and sends nothing', async () => {
     await startAssignedRun({ dueInDays: 1 });
 
     const raised = await raise();
-    expect(raised.counts?.raised).toBe(0);
-    expect(raised.idle).toBe(true);
+    expect(
+      raised.counts?.raised,
+      'a reminder must be raised without a relay, or the in-app bell is empty',
+    ).toBe(STEPS_PER_RUN);
 
     const sent = await deliver();
-    expect(sent.idle).toBe(true);
+    expect(sent.idle, 'the delivery job found work with no relay').toBe(true);
     expect(theRelay().received, 'something was sent with no relay configured').toHaveLength(0);
+
+    // Still pending, not failed: nothing has burned an attempt, so turning the
+    // relay on delivers what came due rather than finding it dead.
+    const pending = await su((sql) => sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM task_reminder
+      WHERE status = 'pending' AND attempts = 0
+    `);
+    expect(pending[0]!.n).toBe(STEPS_PER_RUN);
   });
 
-  it('raises nothing when the relay exists but is switched off', async () => {
-    await configureRelay({ enabled: false });
+  it('and sends them once the relay is switched on', async () => {
     await startAssignedRun({ dueInDays: 1 });
-
-    expect((await raise()).counts?.raised).toBe(0);
+    expect((await raise()).counts?.raised).toBe(STEPS_PER_RUN);
     expect(theRelay().received).toHaveLength(0);
+
+    // The sequence an MSP actually follows: assign work, then set up mail.
+    await configureRelay();
+    const sent = await deliver();
+    expect(sent.counts?.sent, 'the queue did not wait for the relay').toBe(STEPS_PER_RUN);
+    expect(theRelay().received).toHaveLength(STEPS_PER_RUN);
   });
+
+  it('raises them with the relay present but switched off, and still sends nothing',
+    async () => {
+      await configureRelay({ enabled: false });
+      await startAssignedRun({ dueInDays: 1 });
+
+      expect((await raise()).counts?.raised).toBe(STEPS_PER_RUN);
+      expect((await deliver()).idle).toBe(true);
+      expect(theRelay().received).toHaveLength(0);
+    });
 });
 
 describe('a step that is due', () => {
@@ -658,11 +700,26 @@ describe('being given a step', () => {
     expect(await su((sql) => sql`SELECT 1 FROM task_reminder`)).toEqual([]);
   });
 
-  it('sends nothing when mail is not configured', async () => {
-    // The route calls the same function whether or not a relay exists, so the
-    // no-op has to be inside it rather than at the call site.
+  it('is still raised when mail is not configured, and still not sent', async () => {
+    /*
+     * 0700 split this, as the "with no relay configured" block above explains:
+     * the row is about whether somebody should be told, and the relay is about
+     * whether mail can carry it. The assignment reminder is also what fills the
+     * in-app bell, so gating the ROW on a relay left an air-gapped install with
+     * no notification of assigned work at all.
+     */
     await startAssignedRun({ assignTo: IDS.tech1 });
-    expect(await su((sql) => sql`SELECT 1 FROM task_reminder`)).toEqual([]);
+    const rows = await su((sql) => sql<{ status: string; kind: string }[]>`
+      SELECT status, kind::text FROM task_reminder
+    `);
+    expect(rows.length, 'an assignment raised no reminder without a relay').toBe(STEPS_PER_RUN);
+    for (const row of rows) {
+      expect(row.kind).toBe('assigned');
+      expect(row.status).toBe('pending');
+    }
+
+    expect((await deliver()).idle).toBe(true);
+    expect(theRelay().received).toHaveLength(0);
   });
 
   it('does not send a second message when the step is reassigned back', async () => {

@@ -29,7 +29,9 @@ import { GET as getSmtp, PUT as putSmtp } from '../../src/app/api/tenant/smtp/ro
 import {
   GET as getKinds, PUT as putKinds,
 } from '../../src/app/api/account/notifications/route';
-import { NOTIFICATION_KINDS } from '../../src/lib/notifications/kinds';
+import {
+  DEFAULT_NOTIFICATION_KINDS, NOTIFICATION_KINDS, OVERSIGHT_KINDS,
+} from '../../src/lib/notifications/kinds';
 import { FakeSmtp } from '../support/fake-smtp';
 
 vi.mock('next/headers', () => ({
@@ -378,14 +380,74 @@ describe('my notification kinds', () => {
       SELECT helm.notification_kinds_valid('["not_a_kind"]'::jsonb) AS ok
     `);
     expect(invalid!.ok, 'the validator accepts a kind TypeScript has never heard of').toBe(false);
+
+    /*
+     * AND THE OTHER DIRECTION, which the first half cannot see. Every assertion
+     * above passes if SQL knows a kind TypeScript does not: the validator would
+     * accept it, the CHECK would store it, and the account screen would render
+     * no checkbox for it — a preference somebody holds and cannot change. 0700
+     * made the SQL catalogue a function, so this is one query.
+     */
+    const [sqlSide] = await withTenant(ADMIN, (tx) => tx<{ kinds: string[] }[]>`
+      SELECT helm.notification_kinds() AS kinds
+    `);
+    expect(
+      [...sqlSide!.kinds].sort(),
+      'SQL and TypeScript disagree about which kinds exist',
+    ).toEqual([...NOTIFICATION_KINDS].sort());
+
+    // The default set too, and that it is a subset — a default naming a kind
+    // the CHECK refuses makes every preference row unwritable. 0700 guards it
+    // at migration time; this is the behavioural half.
+    const [defaults] = await withTenant(ADMIN, (tx) => tx<{ kinds: string[] }[]>`
+      SELECT helm.default_notification_kinds() AS kinds
+    `);
+    expect([...defaults!.kinds].sort()).toEqual([...DEFAULT_NOTIFICATION_KINDS].sort());
+    for (const kind of defaults!.kinds) {
+      expect(NOTIFICATION_KINDS as readonly string[]).toContain(kind);
+    }
+
+    // And the oversight half agrees, because the account screen hides those
+    // checkboxes from a seat that could never receive them.
+    const [oversight] = await withTenant(ADMIN, (tx) => tx<{ kinds: string[] }[]>`
+      SELECT array_agg(k ORDER BY k) AS kinds
+      FROM unnest(helm.notification_kinds()) k
+      WHERE k <> ALL (helm.default_notification_kinds())
+    `);
+    expect([...oversight!.kinds].sort()).toEqual([...OVERSIGHT_KINDS].sort());
   });
 
-  it('default to everything on, and say nobody has chosen', async () => {
+  it('default to my own work on and the oversight feeds off', async () => {
     currentUser = USERS.tech;
     const { status, payload } = await read(await getKinds(request('/api/account/notifications')));
     expect(status).toBe(200);
-    expect(payload.kinds).toEqual([...NOTIFICATION_KINDS]);
+    // 0700 split the default. Being given work and a deadline is told without
+    // being asked; a feed of every export in the business is opted into. This
+    // asserts the SPLIT rather than the list, so adding a seventh kind does not
+    // silently join somebody's defaults.
+    expect(payload.kinds).toEqual([...DEFAULT_NOTIFICATION_KINDS]);
+    expect(payload.kinds).toEqual(['task_assigned', 'task_due']);
+    for (const kind of OVERSIGHT_KINDS) {
+      expect(
+        payload.kinds as string[],
+        `${kind} is a feed of the whole tenant and must be opted into`,
+      ).not.toContain(kind);
+    }
     expect(payload.configured).toBe(false);
+  });
+
+  it('...and an oversight kind can be turned on, which is the point of it', async () => {
+    currentUser = USERS.tech;
+    const { status, payload } = await read(await putKinds(
+      request('/api/account/notifications', 'PUT', {
+        kinds: ['task_due', 'export_activity'],
+      }),
+    ));
+    expect(status).toBe(200);
+    // Stored in the catalogue's order, not the caller's, so two saves of the
+    // same set produce the same array.
+    expect(payload.kinds).toEqual(['task_due', 'export_activity']);
+    expect(payload.configured).toBe(true);
   });
 
   it('say whether mail is configured at all', async () => {
@@ -450,7 +512,7 @@ describe('my notification kinds', () => {
     // list — the policy admits only rows belonging to the current actor.
     currentUser = USERS.admin;
     const { payload } = await read(await getKinds(request('/api/account/notifications')));
-    expect(payload.kinds).toEqual([...NOTIFICATION_KINDS]);
+    expect(payload.kinds).toEqual([...DEFAULT_NOTIFICATION_KINDS]);
     expect(payload.configured).toBe(false);
 
     // And the row the technician wrote is invisible, not merely unreturned.

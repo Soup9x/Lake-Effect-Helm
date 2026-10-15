@@ -22,16 +22,25 @@ import type { ReactNode } from 'react';
 import { ShellProvider } from './shell-context';
 import { TopNav } from './top-nav';
 import { SupportBadge } from './support-badge';
+import { NotificationBell } from './notification-bell';
 import { AccountMenu } from '../account-menu';
+import { RecentlyViewed } from '../recently-viewed';
 import { TenantSwitcher } from '../tenant-switcher';
 import type { ServerIdentity } from '@/lib/auth/server-identity';
 import { isClientRole } from '@/lib/ui/roles';
 
 export function AppChrome({
   identity,
+  unreadNotifications,
   children,
 }: {
   identity: ServerIdentity;
+  /**
+   * 0700's unread count, read in the layout's own transaction alongside the
+   * theme. A prop rather than a fetch: the badge is what draws somebody to the
+   * bell, so it has to be there on first paint.
+   */
+  unreadNotifications: number;
   children: ReactNode;
 }) {
   const isClient = isClientRole(identity.roleKey);
@@ -43,6 +52,15 @@ export function AppChrome({
         <TopNav
           utilities={
             <>
+              {/*
+                The per-user controls, in the order somebody reaches for them:
+                where was I, what happened, who am I. Composed here rather than
+                inside TopNav because each one needs something only the server
+                has — the recents list its own fetch, the bell a count read with
+                the identity, the switcher the membership list.
+              */}
+              <RecentlyViewed />
+              <NotificationBell unread={unreadNotifications} />
               {/* Only when there is somewhere to switch TO. One tenant plus a
                   switcher is a control that exists to say "no". */}
               {identity.memberships.length > 1 && (

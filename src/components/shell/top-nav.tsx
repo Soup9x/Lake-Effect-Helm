@@ -20,9 +20,7 @@
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  ChevronLeft, ChevronRight, GraduationCap, History, LifeBuoy, Search, Sparkles,
-} from 'lucide-react';
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { useShell } from './shell-context';
 import { cn } from '@/lib/ui/cn';
 import { HelmMark } from '../ui/helm-mark';
@@ -37,11 +35,26 @@ export interface TopNavTab {
 export const TOP_NAV_TABS: readonly TopNavTab[] = [
   { href: '/dashboard', label: 'Dashboard', owns: ['/dashboard'] },
   { href: '/organizations', label: 'Organizations', owns: ['/organizations', '/assets'] },
-  { href: '/account', label: 'Personal', owns: ['/account'] },
+  /*
+   * PERSONAL AND GLOBAL POINT AT PAGES NOW, not at aliases. Until group L,
+   * Personal was /account and Global was /search — which is why both read as
+   * parity on the summary table and were not: a scope whose tab opens one of
+   * its own sub-pages has no landing page, so there is nowhere for the things
+   * that scope collects to appear together.
+   *
+   * `owns` still lists every route the scope covers, so the tab lights up when
+   * somebody is deep inside it. /tasks belongs to Personal and /coverage to
+   * Global, which is also the answer to "where did My Tasks go" — it is still
+   * at /tasks and now has a scope that claims it.
+   */
+  { href: '/personal', label: 'Personal', owns: ['/personal', '/account', '/tasks'] },
   {
-    href: '/search',
+    href: '/global',
     label: 'Global',
-    owns: ['/search', '/expirations', '/exports', '/audit', '/people', '/settings'],
+    owns: [
+      '/global', '/search', '/coverage', '/expirations', '/exports', '/audit',
+      '/people', '/settings', '/runs',
+    ],
   },
 ];
 
@@ -139,11 +152,25 @@ export function TopNav({
       </nav>
 
       <div className="ml-auto flex items-center gap-0.5">
-        <Utility label="Documentation" icon={GraduationCap} href="/settings" />
+        {/*
+          ONE ICON, AND IT GOES WHERE IT SAYS. Four of the five that used to be
+          here did not: Documentation and Help both opened /settings, Assistant
+          opened /search, and Recently viewed opened /dashboard. An icon that
+          lies is worse than an absent one — somebody clicks it, lands
+          somewhere unrelated, and learns to distrust the row.
+
+          Documentation and Assistant are gone rather than wired, because
+          neither exists to wire: there is no documentation site in this
+          deployment and no assistant, and an icon promising a feature nobody
+          is building is the same problem with an extra step. Help is gone
+          because it was a second copy of the floating Support badge —
+          same icon, same destination — and the badge is the one that says in
+          its own comment that it is the route to a human.
+
+          What remains is Search, plus the per-user controls the shell passes
+          in: Recently viewed (a real popover now) and the notification bell.
+        */}
         <Utility label="Search" icon={Search} href="/search" />
-        <Utility label="Recently viewed" icon={History} href="/dashboard" />
-        <Utility label="Assistant" icon={Sparkles} href="/search" />
-        <Utility label="Help" icon={LifeBuoy} href="/settings" />
         {utilities}
         {/*
           Only rendered inside an organization: there is no drawer to collapse

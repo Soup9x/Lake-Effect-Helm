@@ -30,10 +30,10 @@ Decision 14 has the reasoning; nothing is being built for it now.
 
 | # | Feature | Status | Where it lives / what's missing |
 | --- | --- | --- | --- |
-| 1 | Four top-nav scopes | **Partial** | `src/components/shell/top-nav.tsx` has all four. `Personal`→`/account` and `Global`→`/search` are aliases, not sections — **group L** makes them real pages |
+| 1 | Four top-nav scopes | **Exists** | L. All four, and Personal and Global are real landing pages now (`/personal`, `/global`) rather than aliases for one of their own sub-pages. Each `owns` every route in its scope, so the tab lights up from anywhere inside it |
 | 1 | Global search in header | **Exists** | `/search`, `src/app/api/search/route.ts` |
-| 1 | Recent-items dropdown | **Partial** | Data and API exist (`user_recent_view`, `/api/workspace/recent`); no header dropdown, no per-type icons — **group L** |
-| 1 | Notifications + help icons | **Missing** | `webhook_endpoint` is outbound-only and K's channel is email, so there is still no *in-app* notification surface — **group L**. K's `NOTIFICATION_KINDS` is the jsonb set L adds an in-app kind to, which is why it is a set and not a column per kind |
+| 1 | Recent-items dropdown | **Exists** | L. And the component already existed — `src/components/recently-viewed.tsx`, popover, fetch-on-open, per-type icons — with nothing rendering it; the header carried a History icon linking to `/dashboard` instead. The third thing in this codebase found built and unwired |
+| 1 | Notifications + help icons | **Exists**, bell only | L (0700). `user_notification` is the first notification table pointing INWARDS: 0110, 0420 and 0690 built three outbound queues and none can express "this person has not seen this". Filled by the audit fan-out (addressed by decision 31's rule) and by a trigger on `task_reminder`. **The help icon was removed rather than wired** — it was a second copy of the floating Support badge, same icon and same destination; see decision 38 |
 | 1 | User menu | **Exists** | Top-right account menu |
 | 2 | Recents + Favorites strip | **Exists** | `components/client-strip.tsx` — two avatar rows above the table, clients only; the mixed-type dropdown is #1 |
 | 2 | Clients table, star, Name, Status | **Exists** | `components/clients-table.tsx`; status shows the real six-stage value, grouped by the filter |
@@ -49,7 +49,7 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 3 | Credential Strength + buckets | **Exists** | `components/client-widgets.tsx` — four buckets from `v_secret_metadata.strength_score`, bucketed by `lib/ui/strength.ts`. A `Strength` filter on the Credentials section reaches the rows behind each count |
 | 3 | Documentation Health ring | **Exists** | I (0680). `v_documentation_health` — three disjoint counts over a client's non-archived `asset_node` rows (revised recently / revised long ago / never revised) plus how many nobody has opened lately, beside the ring rather than in it. **Counts, never a score**, and a migration guard fails if a `score` or `percent` column ever appears on the view — decision 20. Windows per tenant, 180 days by default |
 | 3 | Recently Viewed By You (this client) | **Exists** | `listRecentInOrganization()`. Assets only — the client's own row is in the history by the time the page renders, so an unfiltered query led with the page you were on |
-| 3 | Important Contacts | **Partial** | `contact` + `organization.primary_contact_id`; no "important" flag — **group L** adds one plus the widget |
+| 3 | Important Contacts | **Exists**, derived | L. No sixth boolean: `contact` already carries `is_primary`, `is_technical`, `is_billing`, `is_emergency` and `is_authorised`, plus `organization.primary_contact_id` — six ways to say "this one matters". The widget ranks the flags that exist instead, so it is right the moment somebody fills in what they already had. Decision 35 |
 | 3 | Recently Updated (this client) | **Exists** | `listRecentlyUpdated()` — `updated_at`/`updated_by` across assets, sites, contacts and documents. **Not `audit_log`:** the gap analysis said it was, and it is not. See the note below |
 | 3 | Popular Credentials | **Exists** | `secret.access_count` + `last_accessed_at`, both incremented inside `helm.reveal_secret()` straight after its `secret.revealed` audit write. A test asserts the count equals the audited reveals |
 | 3 | Upcoming Expirations + due tag | **Exists** | "Expiring" section, `expiration` table, `criticality` |
@@ -60,7 +60,7 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 6 | Assets completion grid + % badges | **Exists** | G. `/coverage` — every client against every kind of documentation, counts per cell, gaps as a dash. No migration: measured instead, see the landed section |
 | 6 | Per-client completion scores | **Exists** | G, as **coverage** rather than completeness — "7 of 11 kinds documented", carrying its own denominator. Decision 20 says why a single "% documented" would be a number people learn to ignore |
 | 6 | Cross-client expirations, filterable | **Exists** | `/expirations` page + `/api/expirations`, filters by severity and org |
-| 7 | My Tasks | **Exists** | F2. `/tasks`, defaulting to incomplete and mine, over `sop_run_step.assigned_to`/`due_at` (0650). The open count is in the dashboard's fixed strip. L collects the page under Personal |
+| 7 | My Tasks | **Exists** | F2. `/tasks`, defaulting to incomplete and mine, over `sop_run_step.assigned_to`/`due_at` (0650). The open count is in the dashboard's fixed strip, and L's `/personal` leads with the five most urgent and links to the filtered page |
 | 7 | Personal Credentials (private vault) | **Dropped** | Not built natively. Personal credentials will come from a Bitwarden/Vaultwarden integration — decision 14. The vault design that was drafted for it is kept below as background for that work |
 | 8 | Reusable checklist templates → per client | **Exists** | F1. `sop`/`sop_step` authored on `/assets/{id}`, published into an immutable `sop_version`, and `sop_run`/`sop_run_step` started against a client with the step copy 0090 describes. F2 added `assigned_to` and `due_at` to runs and their steps. Reminders are K |
 | 8 | Assignable tasks + due dates | **Exists** | F2 (0650). `assigned_to` + `due_at` on `sop_run` and `sop_run_step`, the assignee a composite key to `membership` so work cannot be given to somebody who cannot see it |
@@ -177,7 +177,7 @@ and PR.
 | **I** | Documentation Health ring; client logo upload — **landed** | 0680 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
 | ~~**J**~~ | ~~Personal Credentials vault~~ — **dropped**, see decision 14 | — | Superseded by a future Bitwarden/Vaultwarden integration, which is not in this plan |
 | **K** | Email channel + notification toggles — **landed** | 0690 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles. It also gave 0420's notification destinations a second transport, because a `transport` column nothing can create is the scaffolding §1 of the notifications doc warns about |
-| **L** | Header and navigation parity: recent-items dropdown, notifications and help icons, Personal and Global as real landing pages, Important Contacts | 0700 | Last because three of its four parts are *assembly* — the dropdown, My Tasks, profile/preferences and the completion grid all have to exist before a page can collect them |
+| **L** | Header and navigation parity — **landed** | 0700 | Last because three of its four parts are *assembly*. The assumption that held: the dropdown and both landing pages were composition over finished work. The assumption that did not: "notifications are conditional on K" — K's channel is email and all three of its queues point outwards, so L had to build the inbox itself |
 
 **On the migration numbers.** Two shifts have happened and both are recorded
 here so nobody reuses a number:
@@ -1272,6 +1272,76 @@ the assertions rather than from breaking them:
   not secret, but a wall of base64 is something people scroll past and a
   fingerprint is what an operator can compare.
 
+### Group L — the header tells the truth, and the bell has something to ring (migration 0700)
+
+The last group, and the one that found the most in code that was already
+merged. Three of its four parts were assembly, as the plan said. The fourth was
+not, and two things it depended on turned out not to work at all.
+
+**THE AUDIT FAN-OUT HAD NEVER RUN.** `fanOutNotifications` enumerated its
+tenants with a raw `SELECT ... FROM tenant` on the bare worker pool. `tenant` is
+behind RLS — `tenant_rls_select: id = helm.current_tenant_id()` — and a worker
+connection sets no tenant context, so that query returned **zero rows on every
+tick**. 0400 removed two-person approval from credential exports on the stated
+understanding that these notifications replace it; the control it traded for was
+not running.
+
+Nothing caught it because every test calls `helm.fan_out_notifications()`
+directly inside `withTenant()`, which is the right way to test the function and
+skips the enumeration entirely. The deliver half beside it always used
+`helm.notification_backlog()` — a `SECURITY DEFINER` function — which is why
+only the fan-out was affected, and why the fix is just the house pattern every
+other backlog already follows. This is the project's third zero-rows-under-RLS
+defect (H's refresh worker, §49 and §50 of `security.sql` hold the other two)
+and the first in a **read**, where there is no write to come back empty and
+nothing at all to notice.
+
+**AND RAISING A REMINDER REQUIRED A MAIL RELAY.** Both of 0690's reminder-raising
+functions carried `JOIN smtp_setting m ON ... AND m.enabled`, so an install with
+no mail created no `task_reminder` rows — and the trigger that lights the bell
+never fired. Correct when email was the only output; wrong the moment there are
+two channels, because an air-gapped MSP would have had a bell that could not
+show the one thing it is most for. Removing it is safe because 0690 already
+separated raising from sending: `helm.email_backlog()` still requires an enabled
+relay, so a reminder raised without one sits `pending` until somebody configures
+mail — which is what 0690's own comment describes.
+
+Three of K's tests asserted the old rule and were rewritten rather than deleted,
+to the stronger pair: the rows ARE created, and nothing is sent.
+
+**The inbox is the first notification table pointing inwards.** 0110, 0420 and
+0690 built three outbound queues; a `webhook_delivery` row belongs to a
+destination and a `task_reminder` row is a message about to be sent, so not one
+of them can express "this person has not seen this". That is what `read_at` is
+for, and why the plan's line — *a bell that cannot be distinguished from an
+empty inbox is worse than no bell* — could not be honoured until 0700.
+
+**And the recent-items dropdown already existed.** `recently-viewed.tsx` — the
+popover, the fetch-on-open, the dismiss handling, the per-type icons — with
+nothing rendering it; the header carried a `History` icon linking to
+`/dashboard`. The third thing found built and unwired, after 0110's webhook
+tables and 0690's `transport` column. Hence the rule this pass keeps earning:
+**before building a control, grep for it.**
+
+**Tests: 16 integration (the inbox end to end), 2 page value tests, and 3 of
+K's rewritten. 9 sabotages, 8 caught — 5 by migration guards, 3 by tests — and
+1 that survived:**
+
+- **Removing the lead day from the reminder's dedupe key broke nothing.** The
+  assertion meant to hold it inserted ONE `due` row and checked the count went
+  up by one — which passes with the lead removed entirely, because the row it
+  compared against was a `task_assigned` row and the KIND already
+  distinguished them. Two rows of the same kind differing only in lead is the
+  only shape that tests what the key is for, and that is what the test does
+  now.
+
+Two more things fell out of writing the page tests rather than of sabotage: the
+Global page named `export_request`, a table that does not exist (it is
+`export_job`, with a different status vocabulary), and a comment inside a SQL
+template literal quoted enum values in **backticks**, which ended the template
+mid-comment. Both were caught before they left the branch, by the coverage guard
+that insists every page under `(app)` has a line in `PAGES`.
+
 ## Decisions
 
 The questions this document opened with have been answered. Recorded here
@@ -1889,6 +1959,92 @@ is how the same argument gets had twice.
     card, because every send records `last_send_ok`/`last_send_error` against
     `smtp_setting` whoever triggered it. The card says so rather than leaving
     the absence looking like an omission.
+
+35. **Important Contacts is derived, not a sixth flag (L).** The plan said "a
+    flag on `contact`". `contact` already carries `is_primary`,
+    `is_technical`, `is_billing`, `is_emergency` and `is_authorised`, and
+    `organization.primary_contact_id` is a sixth way to say it — so a seventh
+    boolean called `is_important` would have had nothing to say about what
+    distinguishes it from `is_primary`, and two people would have filled them
+    in differently within a month.
+
+    The widget ranks the flags that exist (emergency, then primary, then
+    authorised) and caps the list. No migration, and it is correct the moment
+    somebody fills in what they already had rather than on the day they learn
+    a new checkbox exists. The client page's full contacts table is unchanged
+    and still carries its Primary and Emergency badges.
+
+36. **The in-app inbox is a table, and it points inwards (L).** 0110, 0420 and
+    0690 built three notification queues and every one of them points
+    outwards: a `webhook_delivery` row belongs to a destination, a
+    `task_reminder` row is a message about to be sent. None can express "this
+    person has not seen this", which is the whole of what a bell is — so
+    `user_notification` exists, with `read_at`, and is the one notification
+    table addressed to a person.
+
+    Two sources, mirroring the outbound queue's two: the audit fan-out for
+    oversight events, and a trigger on `task_reminder` for assigned work. A
+    trigger rather than two call sites, so a third writer added later cannot
+    forget. Written only by `SECURITY DEFINER` functions; `helm_app` holds
+    `SELECT`, `DELETE`, and `UPDATE` on **`read_at` alone** — a column grant,
+    because RLS cannot restrict a column and rewriting the subject of a
+    notification about an export would be putting words in Helm's mouth.
+
+    **No `audit:read` carve-out at all**, unlike `task_reminder`, which has one
+    for a tenant-wide seat. What somebody has and has not read is a record of
+    their attention; the oversight material itself is in the audit log, where
+    anybody holding the permission can read it without reading somebody's
+    unread count.
+
+37. **The oversight kinds default off, and the task kinds stay on (L).** 0690
+    shipped two kinds, both on when no preference row exists. 0700 adds four —
+    `export_activity`, `credential_access`, `expiring_soon`, `operations` — and
+    they default OFF, so `DEFAULT_NOTIFICATION_KINDS` is no longer "all of
+    them".
+
+    Being given work and a deadline is something to tell somebody without being
+    asked. A feed of every export in the business is a subscription. And the
+    practical half: defaulting them on would have meant **emailing every
+    administrator about every export the moment 0700 applied**, because one
+    preference set governs both channels — which is itself the decision, since
+    honouring a preference in one channel and not the other is a half-measure
+    somebody has to discover for themselves.
+
+    One consequence worth stating: the bell is quiet on a fresh install until
+    somebody opts in, so both empty states say *which* empty it is rather than
+    letting "nothing here" read as neglect.
+
+38. **Four of the header's five icons were removed rather than wired (L).**
+    Documentation and Help both opened `/settings`, Assistant opened `/search`,
+    and Recently viewed opened `/dashboard`. An icon that lies is worse than an
+    absent one: somebody clicks it, lands somewhere unrelated, and learns to
+    distrust the row.
+
+    Recently viewed became the real popover — the component already existed.
+    Documentation and Assistant are **gone**, because neither exists to wire and
+    an icon promising a feature nobody is building is the same problem with an
+    extra step.
+
+    Help is gone too, and that one is a narrowing of what was asked for, so the
+    reasoning is here rather than in a commit message. It was a second copy of
+    the floating Support badge — same `LifeBuoy` icon, same `/settings`
+    destination — and the badge's own comment calls itself the route to a human.
+    A panel in its place would have had to carry either the deployment's version
+    or a keyboard-shortcut list: there are no keyboard shortcuts beyond
+    Escape-to-dismiss, and `src/app/api/health/route.ts` says in as many words
+    that version numbers are reconnaissance and deliberately withholds one. So
+    the panel would have been inventing content or quietly reversing a stated
+    decision. The Support badge stays, so no route to help was lost.
+
+39. **Global collects what exists and does not invent a cross-client asset list
+    (L).** The plan's wording mentioned "an assets view"; there is no such page
+    — `/assets/[nodeId]` is a single record. A filterable table over every asset
+    in the tenant is a group of its own, with its own RLS and scope surface, not
+    assembly. The Documentation coverage card answers "what do we have", which
+    is what that wording was reaching for, and each card carries the one number
+    that tells somebody whether to open it — **counts, never a score**, which is
+    decision 20 applied to a menu.
+
 
 Two further decisions taken at the same time:
 

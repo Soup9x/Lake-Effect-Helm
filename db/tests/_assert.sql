@@ -231,6 +231,35 @@ BEGIN
 END;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- helm_test.plant_notification — a real user_notification row.
+--
+-- 0700's inbox is written only by SECURITY DEFINER functions and a trigger:
+-- helm_app holds no INSERT at all, which is the point of the table. A test
+-- that wants to READ one therefore cannot create it the ordinary way.
+--
+-- SECURITY DEFINER AND OWNED BY A SUPERUSER, so this bypasses RLS and the
+-- grant. That is deliberate — it is a fixture, standing in for the fan-out,
+-- not an assertion. Everything being tested is what happens AFTERWARDS, from
+-- a seat established with helm_test.ctx().
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION helm_test.plant_notification(
+  p_tenant uuid,
+  p_user   uuid,
+  p_kind   text,
+  p_key    text
+) RETURNS uuid
+  LANGUAGE sql VOLATILE SECURITY DEFINER
+  SET search_path = public, helm, extensions, pg_catalog, pg_temp
+AS $$
+  INSERT INTO user_notification (
+    tenant_id, user_id, kind, dedupe_key, subject, href, occurred_at)
+  VALUES (
+    p_tenant, p_user, p_kind, p_key,
+    'zz planted ' || p_key, '/audit', now())
+  RETURNING id;
+$$;
+
 GRANT USAGE ON SCHEMA helm_test TO PUBLIC;
 GRANT EXECUTE ON FUNCTION helm_test.check(text, boolean) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION helm_test.check_raises(text, text) TO PUBLIC;
@@ -239,3 +268,4 @@ GRANT EXECUTE ON FUNCTION helm_test.rls_catalogue_gaps() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION helm_test.check_rls_catalogue() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION helm_test.plant_reminder(uuid, uuid, text, text) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION helm_test.reminder_visible(uuid, uuid, uuid) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION helm_test.plant_notification(uuid, uuid, text, text) TO PUBLIC;

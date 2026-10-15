@@ -512,7 +512,38 @@ now asserts it column by column across all five runtime roles.
 | `tests/unit/rdap.test.ts`, `tests/unit/certificate-probe.test.ts` | 21 — parsing, redirect refusal, timeouts, fingerprint form |
 | `tests/integration/reminders.test.ts` | 26 — one message per threshold, suppression of the later leads, completion cancelling the rest, the air-gapped hold, the recipient gate at send time, a real SMTP dialogue over STARTTLS |
 | `tests/unit/email-transport.test.ts` | 28 — the transport's shape per security mode, and that a pinned certificate pins: a different one is refused |
-| `db/tests/security.sql` | §15 (export behaviour), §35 (what `0400` removed, and what it kept), §48 (external checks), §49 (health, view recording and logos) and §50 (the mail relay, preferences and the reminder queue) |
+| `tests/integration/inapp-notifications.test.ts` | 16 — including the one that found the fan-out job had never enumerated a tenant; see §10 below |
+| `db/tests/security.sql` | §15 (export behaviour), §35 (what `0400` removed, and what it kept), §48 (external checks), §49 (health, view recording and logos), §50 (the mail relay, preferences and the reminder queue) and §51 (the in-app inbox) |
 
 The PDF output was additionally parsed with an independent reader (`pypdf`) to
 confirm page count, extracted text, repeated table headers and the UTF-16 title.
+
+---
+
+## 10. A job that enumerated nothing
+
+`fanOutNotifications` found its tenants with a raw `SELECT ... FROM tenant` on
+the bare worker pool. `tenant` is behind RLS keyed on
+`helm.current_tenant_id()`, which a worker connection does not set — so the
+query returned **zero rows on every tick** and the audit fan-out never queued
+anything. `0400` traded two-person approval on credential exports for these
+notifications, so the control was not running.
+
+**The rule this file should have stated from the start, and now does:** a worker
+holds no tenant context, so anything it needs to know BEFORE entering a tenant
+comes from a `SECURITY DEFINER` function. Every other backlog already followed
+it — `helm.alert_backlog()`, `helm.notification_backlog()`,
+`helm.email_backlog()`, `helm.external_check_backlog()` — and the one raw query
+among them was the one that silently did nothing. §1's note that `helm_worker`
+is subject to RLS like every other role is exactly why; §5a records the same
+lesson for a WRITE, where H's refresh worker reported a tidy count of recorded
+failures while recording none.
+
+Reads and writes fail differently and that is the whole difficulty. A write that
+matches no rows reports success, which is bad enough. A read that matches no
+rows returns an empty list, which is indistinguishable from "there was nothing
+to do" — so the job logged `idle: true` once a minute, correctly, forever.
+
+`helm.notification_fanout_backlog()` replaces it, and 0700's guard asserts
+`prosecdef` rather than existence: a non-definer function of the same name
+would have the identical defect.

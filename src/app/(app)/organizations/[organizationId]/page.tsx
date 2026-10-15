@@ -33,6 +33,7 @@ import { listRunsForOrganization } from '@/lib/sops/queries';
 import { ChecklistRunsCard } from '@/components/checklist-runs-card';
 import {
   ActivityFeedWidget, ClientRecentlyViewedWidget, CredentialStrengthWidget,
+  ImportantContactsWidget,
   PopularCredentialsWidget, RecentlyUpdatedWidget, type PopularCredential,
 } from '@/components/client-widgets';
 import { Badge, severityTone } from '@/components/ui/badge';
@@ -59,6 +60,9 @@ interface SiteRow {
 interface ContactRow {
   id: string; first_name: string; last_name: string | null; title: string | null;
   email: string | null; phone: string | null; is_primary: boolean; is_emergency: boolean;
+  // Group L. The other three flags, for the "who to call" widget — which ranks
+  // the flags that already existed rather than adding a sixth (decision 35).
+  is_technical: boolean; is_billing: boolean; is_authorised: boolean;
 }
 
 interface AssetRow {
@@ -145,7 +149,8 @@ export default async function OrganizationPage({
         ORDER BY is_primary DESC, name
       `,
       tx<ContactRow[]>`
-        SELECT id, first_name, last_name, title, email::text, phone, is_primary, is_emergency
+        SELECT id, first_name, last_name, title, email::text, phone,
+               is_primary, is_emergency, is_technical, is_billing, is_authorised
         FROM contact WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
         ORDER BY is_primary DESC, last_name NULLS LAST, first_name
       `,
@@ -455,6 +460,28 @@ export default async function OrganizationPage({
             canSeeAccessCounts={canSeeAccessCounts}
           />
           <ClientRecentlyViewedWidget items={recentlyViewed} />
+          {/*
+            Group L. Near the top, which is the whole difference it makes: the
+            full contacts table has always been further down and already badges
+            Primary and Emergency, but somebody on a call should not have to
+            scroll past every asset to find a phone number.
+          */}
+          <ImportantContactsWidget
+            organizationId={organization.id}
+            totalContacts={contacts.length}
+            contacts={contacts.map((contact) => ({
+              id: contact.id,
+              name: [contact.first_name, contact.last_name].filter(Boolean).join(' '),
+              title: contact.title,
+              email: contact.email,
+              phone: contact.phone,
+              isPrimary: contact.is_primary,
+              isTechnical: contact.is_technical,
+              isBilling: contact.is_billing,
+              isEmergency: contact.is_emergency,
+              isAuthorised: contact.is_authorised,
+            }))}
+          />
         </div>
         <div className="grid gap-4 lg:grid-cols-2">
           <RecentlyUpdatedWidget items={recentlyUpdated} organizationId={organization.id} />
