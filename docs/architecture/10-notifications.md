@@ -19,6 +19,11 @@ them. That would have left two webhook systems in the schema, one live and one
 dead, which is exactly the stale-configuration problem this project has had to
 clean up twice. So the existing tables were brought up to the job instead.
 
+`0690` added a second **transport** to the same tables rather than a second
+mechanism, for the same reason: a `transport` column with a delivery branch and
+no way to create such a row would be this section's mistake with a better
+comment. §10 has it.
+
 Three things about them were wrong, and are corrected rather than worked around:
 
 | Was | Now | Why it mattered |
@@ -184,6 +189,9 @@ captured request cannot be replayed. Discord, Teams and Slack ignore it; a
 receiver somebody wrote themselves can tell a real notification from anyone who
 found the URL.
 
+An **email** destination takes the same claim, the same backoff and the same
+`record_notification_delivery()`, and differs only at the wire — see §10.
+
 ---
 
 ## 7. The test button queues, it does not send
@@ -197,6 +205,13 @@ KEK opening the envelope, the format the platform actually accepts. So the test
 goes through the same path a real notification takes, and the result appears in
 the delivery log a moment later, including the platform's own error text.
 
+This is also why the mail relay has no test button of its own: the same
+reasoning applies one layer down. Testing a relay from the request process would
+need the worker's role to reach the password and would be a second sending path
+that can disagree with the one that delivers. A test send to an email
+destination exercises the real one, and its outcome is recorded against
+`smtp_setting` — so the relay card reports it.
+
 ---
 
 ## 8. Configuration
@@ -207,6 +222,68 @@ Two existing values matter: `DATABASE_URL_WORKER`, because the worker role is
 the only one that can read a destination URL, and `NODE_EXTRA_CA_CERTS` if a
 destination sits behind a private CA.
 
+The **mail relay is configuration too, and also not an environment variable**:
+`smtp_setting`, one row per tenant, under Settings. A relay with a private
+certificate does not need `NODE_EXTRA_CA_CERTS` — the certificate is pasted
+into the tenant's own row and becomes the only acceptable CA for that
+connection, which is per-tenant where the env var is per-deployment. The one
+place that still uses an env-var relay is the password-reset mail in
+`src/lib/auth/reset-delivery.ts`, and it has to: a reset happens before sign-in,
+so there is no tenant context and `helm_auth` cannot read `smtp_setting`.
+
+---
+
+## 10. The second transport (0690)
+
+`webhook_endpoint.transport` is `'webhook'` or `'email'`. Everything before
+this section is shared: the fan-out, the allow-list, the queue, the backoff, the
+dedupe key, the test button, and `helm.record_notification_delivery()`. What
+differs is four lines in `deliverOne` and which columns the row carries.
+
+| | `webhook` | `email` |
+| --- | --- | --- |
+| target | enveloped URL, shown as host + 12-hex digest | `email_address`, **shown in full** |
+| authentication of the target | the URL *is* the credential for Discord and Teams | none — an address is a destination |
+| `format` | the payload shape the platform requires | forced to `generic`; an email has no payload shape |
+| `signing_secret_set` | optional HMAC for a bespoke receiver | always false; a mailbox has the envelope sender |
+| envelope columns | all seven, or the row is refused | **none** of the seven, or the row is refused |
+| relay | — | the tenant's `smtp_setting`, which must exist and be enabled |
+
+**Why the address is not treated as a credential.** It is the one asymmetry
+somebody will query. A Discord webhook URL authorises posting to that channel —
+anyone holding it can be Helm. An email address authorises nothing; it is where
+the message goes. An administrator has to be able to read it to answer "where
+are these alerts going", and every member's address is already on the users
+screen.
+
+**Both envelope constraints are conditional on the transport**, and that is
+worth stating because only one of them ever mattered.
+`webhook_secret_present` is `octet_length(secret_ciphertext) > 0`, which a NULL
+ciphertext satisfies — a CHECK passes on NULL. `webhook_envelope_complete`
+spells out `IS NOT NULL` seven times and refused every email destination
+outright. `0690` guard 5b asserts the constraint's *text* mentions `transport`,
+so a later migration cannot reissue `0420`'s version and silently make email
+destinations unsaveable.
+
+**A transport cannot be changed once the destination exists.** The route
+refuses it. The reason is not purity: an email destination saved as a webhook
+carries no URL, so the save takes the `update_webhook_endpoint()` path, and that
+function does not touch `transport` — the screen would report a change that
+never happened.
+
+**An undeliverable email delivery stays pending rather than failing.**
+`helm.claim_notifications()` will not claim an email row for a tenant with no
+enabled relay. Claiming it would mean burning an attempt once a minute until it
+is `dead`, so instead it waits, and turning the relay on delivers what has come
+due.
+
+**Reminders are a different queue on purpose.** `task_reminder` (also `0690`)
+belongs to a *person* and names a step, where every `webhook_delivery` row
+belongs to a destination. Sharing the table would have meant a nullable
+`endpoint_id` and a dedupe key meaning two things. They share the sender
+(`src/lib/email/sender.ts`) and nothing else — see
+`docs/architecture/05-workers-and-exports.md` for the two jobs that drive it.
+
 ---
 
 ## 9. Where it is tested
@@ -216,3 +293,6 @@ destination sits behind a private CA.
 | `tests/unit/notification-format.test.ts` | the shape each platform requires — that Discord never gets a bare `text`, that Teams is not the retired MessageCard, that the embed limits hold |
 | `tests/integration/notifications.test.ts` | the whole pipeline to a real socket: audit row → fan-out → envelope → POST, exactly once; the allow-list dropping `scope`; the AAD refusing a copied row |
 | `db/tests/security.sql` §37 | the grant boundary per column, that `helm_app` cannot insert a delivery, and that the payload check walks nested objects |
+| `tests/integration/notifications.test.ts`, `an email destination` | the second transport end to end — an export audit row reaching a real mailbox through the same fan-out, queue and worker; the relay and recipient-domain gates at configuration time; that a transport cannot be switched; that a rename keeps the delivery history and a readdress does not; that a delivery waits while the relay is off |
+| `db/tests/security.sql` §50 | the relay password unreachable from `helm_app` by any path including `SELECT *`, the recipient gate's answers, a preference readable only by its owner, and a reminder readable only by its owner or a tenant-wide seat |
+| `tests/unit/email-transport.test.ts` | that the pin is a certificate and that it pins — a different certificate is refused, over STARTTLS and implicit TLS alike |

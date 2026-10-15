@@ -160,3 +160,17 @@ export const networkAssetStatus = pgEnum('network_asset_status', ['active', 'mai
 export const topologyDeviceType = pgEnum('topology_device_type', [
   'switch', 'router', 'firewall', 'server', 'access_point', 'generic',
 ]);
+
+/** 0690 — the mail relay's transport security. */
+export const smtpSecurity = pgEnum('smtp_security', ['starttls', 'tls', 'plaintext']);
+
+/**
+ * 0690 — how a notification destination is reached.
+ *
+ * Email is a transport on the destinations that already exist rather than a
+ * second system; see §1 of docs/architecture/10-notifications.md.
+ */
+export const notificationTransport = pgEnum('notification_transport', ['webhook', 'email']);
+
+/** 0690 — why somebody is being reminded about a checklist step. */
+export const taskReminderKind = pgEnum('task_reminder_kind', ['assigned', 'due']);

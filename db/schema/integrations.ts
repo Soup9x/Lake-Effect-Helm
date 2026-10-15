@@ -7,10 +7,11 @@
  * exactly like a technician's.
  */
 import { bigint, boolean, index, integer, jsonb, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { bytea, textArray, tstz } from './_types';
+import { bytea, citext, textArray, tstz } from './_types';
 import {
   integrationProvider, integrationStatus, syncDirection,
-  syncRunStatus, webhookDeliveryStatus, webhookFormat,
+  notificationTransport, smtpSecurity, syncRunStatus, taskReminderKind,
+  webhookDeliveryStatus, webhookFormat,
 } from './enums';
 import { appUser } from './identity';
 import { tenant } from './tenancy';
@@ -102,12 +103,21 @@ export const webhookEndpoint = pgTable('webhook_endpoint', {
   name: text('name').notNull(),
   /** Which payload shape: generic, slack, discord or teams. */
   format: webhookFormat('format').notNull().default('generic'),
+  /** 0690. Email is a transport here, not a second notification system. */
+  transport: notificationTransport('transport').notNull().default('webhook'),
+  /**
+   * 0690. Plaintext on purpose, unlike the URL: a webhook URL IS the
+   * credential, while an address is a destination an administrator has to be
+   * able to read. Null for a webhook destination; a CHECK ties each to its
+   * transport.
+   */
+  emailAddress: citext('email_address'),
   events: textArray('events').notNull().default([]),
   isActive: boolean('is_active').notNull().default(true),
 
   /** Display only. Enough to tell two Discord webhooks apart, showing neither. */
-  urlHost: text('url_host').notNull(),
-  urlDigest: text('url_digest').notNull(),
+  urlHost: text('url_host'),
+  urlDigest: text('url_digest'),
   signingSecretSet: boolean('signing_secret_set').notNull().default(false),
 
   /** One envelope over {"url": ..., "signingSecret": ...}. */
@@ -178,3 +188,87 @@ export const notificationCursor = pgTable('notification_cursor', {
 });
 
 export type NotificationCursor = typeof notificationCursor.$inferSelect;
+
+
+/**
+ * 0690 — the mail relay. One per tenant, off until enabled.
+ *
+ * The six envelope columns are present here because drift compares against the
+ * live catalogue, but helm_app cannot SELECT them: 0690 revokes the table
+ * privilege and grants only the display columns back, which is the same
+ * construction 0420 uses for the webhook URL.
+ */
+export const smtpSetting = pgTable('smtp_setting', {
+  tenantId: uuid('tenant_id').primaryKey().references(() => tenant.id, { onDelete: 'cascade' }),
+  enabled: boolean('enabled').notNull().default(false),
+  host: text('host').notNull(),
+  port: integer('port').notNull().default(587),
+  security: smtpSecurity('security').notNull().default('starttls'),
+  tlsVerify: boolean('tls_verify').notNull().default(true),
+  /**
+   * The relay's certificate in PEM when one is pinned — not a fingerprint. A
+   * fingerprint cannot be enforced: Node skips checkServerIdentity entirely
+   * when rejectUnauthorized is false, and refuses a self-signed chain before
+   * reaching it when true. 0690's header has the measurement.
+   */
+  tlsPinnedCertificate: text('tls_pinned_certificate'),
+  plaintextAcknowledgedAt: tstz('plaintext_acknowledged_at'),
+  plaintextAcknowledgedBy: uuid('plaintext_acknowledged_by'),
+  username: text('username'),
+  passwordSet: boolean('password_set').notNull().default(false),
+  wrapProvider: text('wrap_provider'),
+  kekId: text('kek_id'),
+  wrappedDek: bytea('wrapped_dek'),
+  secretCiphertext: bytea('secret_ciphertext'),
+  secretNonce: bytea('secret_nonce'),
+  secretTag: bytea('secret_tag'),
+  secretAad: text('secret_aad'),
+  fromAddress: citext('from_address').notNull(),
+  fromName: text('from_name'),
+  allowedRecipientDomains: textArray('allowed_recipient_domains').notNull().default([]),
+  lastSendAt: tstz('last_send_at'),
+  lastSendOk: boolean('last_send_ok'),
+  lastSendError: text('last_send_error'),
+  consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by'),
+});
+
+/**
+ * 0690 — what a person wants to be emailed about.
+ *
+ * Keyed to the MEMBERSHIP rather than the user, so somebody belonging to two
+ * tenants decides separately for each. A jsonb set with a SQL validator and
+ * NOTIFICATION_KINDS as the TypeScript mirror, which is the construction
+ * user_dashboard.widgets and user_sidebar both use.
+ */
+export const userNotificationPreference = pgTable('user_notification_preference', {
+  tenantId: uuid('tenant_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  kinds: jsonb('kinds').notNull(),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+});
+
+/**
+ * 0690 — personal reminders about assigned checklist steps.
+ *
+ * Its own queue rather than webhook_delivery: that table keys on
+ * (endpoint, event) and every row belongs to a destination, while these belong
+ * to a person. Keyed (step, kind, lead_day), which is 0100's alert_event
+ * construction — a job that runs hourly must not remind somebody hourly.
+ */
+export const taskReminder = pgTable('task_reminder', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  stepId: uuid('step_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  kind: taskReminderKind('kind').notNull(),
+  leadDay: integer('lead_day').notNull(),
+  status: text('status').notNull().default('pending'),
+  attempts: smallint('attempts').notNull().default(0),
+  nextAttemptAt: tstz('next_attempt_at').notNull().defaultNow(),
+  lastAttemptAt: tstz('last_attempt_at'),
+  error: text('error'),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  sentAt: tstz('sent_at'),
+});

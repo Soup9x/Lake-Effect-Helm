@@ -249,6 +249,49 @@ the bare worker because it is SECURITY DEFINER; nothing else does.
 
 ---
 
+## 5b. Reminders: the two jobs that use the mail relay
+
+The twelfth and thirteenth jobs (`reminders.raise`, lock key `0x48_45_4c_4d_0c`,
+hourly; and `reminders.deliver`, `0x…0d`, every minute). Split the same way the
+expiry alerts are, for the same reason — raising is set-based SQL over
+`sop_run_step`, delivery talks to an SMTP server and is therefore the part that
+fails.
+
+**One message per threshold crossed, not per sweep.** `task_reminder` is unique
+on `(step_id, kind, lead_day)`, which is `0100`'s lead-day construction: leads
+are 3, 1 and 0 days, a lead is "crossed" when `due_at <= now() + lead days`, and
+an hourly sweep that finds three crossed at once raises the **earliest** as
+pending and the rest as `suppressed`. So a step entered the day before its
+deadline produces one message rather than three, and a step completed before any
+of them produces none.
+
+**Off until a relay exists, and the queue waits rather than failing.**
+`helm.email_backlog()` only returns tenants with an enabled `smtp_setting`, so
+the air-gapped default (§5a) holds here too: with no relay, reminders are raised
+and sit `pending`. Turning the relay on delivers what has come due. The
+alternative — claiming them and failing once a minute — reaches `max_attempts`
+and marks a week of reminders `dead` before anybody notices the relay was never
+configured.
+
+**One connection per tenant per batch.** `EmailBatch` is opened lazily, on the
+first message that needs it, and closed in a `finally`. A tenant with twenty due
+reminders opens one connection, not twenty, which is how a relay's rate limiter
+decides Helm is a spam source. The relay password is opened from the envelope
+once for that batch and the buffer is wiped when it closes.
+
+**And the queue is written only by its functions.** `helm_app` and `helm_worker`
+hold no INSERT, UPDATE or DELETE on `task_reminder`: the five writers
+(`raise_assignment_reminder`, `suppress_reminders_for_step`,
+`raise_task_reminders`, `claim_task_reminders`, `record_task_reminder`) are all
+`SECURITY DEFINER`, and its INSERT and UPDATE policies check the *tenant* rather
+than the person, because the writers act for other people. Without the revoke,
+any signed-in member could have raised a reminder in somebody else's name or
+marked one sent. `0220`'s `ALTER DEFAULT PRIVILEGES` grants that DML to
+`helm_app` on every table a later migration creates, which is the third time
+this project has had to go back and take it away.
+
+---
+
 ## 6. Audit chain anchoring
 
 The per-tenant hash chain proves nobody edited a historical row without also
@@ -467,7 +510,9 @@ now asserts it column by column across all five runtime roles.
 | `tests/unit/exports.test.ts` | 21 — PDF structure and xref resolution, bundle round-trip, passphrase distribution |
 | `tests/integration/external-checks.test.ts` | 21 — off-by-default, write-beside, failure recording, the claim, the route's gate and bounds |
 | `tests/unit/rdap.test.ts`, `tests/unit/certificate-probe.test.ts` | 21 — parsing, redirect refusal, timeouts, fingerprint form |
-| `db/tests/security.sql` | §15 (export behaviour), §35 (what `0400` removed, and what it kept), §48 (external checks) and §49 (health, view recording and logos) |
+| `tests/integration/reminders.test.ts` | 26 — one message per threshold, suppression of the later leads, completion cancelling the rest, the air-gapped hold, the recipient gate at send time, a real SMTP dialogue over STARTTLS |
+| `tests/unit/email-transport.test.ts` | 28 — the transport's shape per security mode, and that a pinned certificate pins: a different one is refused |
+| `db/tests/security.sql` | §15 (export behaviour), §35 (what `0400` removed, and what it kept), §48 (external checks), §49 (health, view recording and logos) and §50 (the mail relay, preferences and the reminder queue) |
 
 The PDF output was additionally parsed with an independent reader (`pypdf`) to
 confirm page count, extracted text, repeated table headers and the UTF-16 title.

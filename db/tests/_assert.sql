@@ -149,9 +149,93 @@ BEGIN
 END;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- helm_test.plant_reminder — a real task_reminder row, for the RLS assertions.
+--
+-- 0690's reminder queue is written only by SECURITY DEFINER functions (helm_app
+-- and helm_worker both hold no INSERT on it), and its step_id references a
+-- sop_run_step — so a test that wants to READ one has to build the chain
+-- asset_node → sop → sop_version → sop_run → sop_run_step first. Done here
+-- rather than inline so the five assertions that use it read as assertions.
+--
+-- SECURITY DEFINER AND OWNED BY A SUPERUSER, so this bypasses RLS. That is the
+-- point: it is a fixture, not an assertion. What is being tested is who can
+-- READ the row afterwards, from a seat established with helm_test.ctx().
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION helm_test.plant_reminder(
+  p_tenant uuid,
+  p_user   uuid,
+  p_kind   text DEFAULT 'assigned',
+  p_suffix text DEFAULT ''
+) RETURNS uuid
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+  SET search_path = public, helm, extensions, pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_org     uuid;
+  v_sop     uuid := gen_random_uuid();
+  v_version uuid := gen_random_uuid();
+  v_run     uuid := gen_random_uuid();
+  v_step    uuid := gen_random_uuid();
+  v_id      uuid;
+BEGIN
+  SELECT id INTO v_org FROM organization WHERE tenant_id = p_tenant ORDER BY name LIMIT 1;
+
+  INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name)
+  VALUES (v_sop, p_tenant, v_org, 'sop', 'zz planted procedure ' || p_suffix || v_sop::text);
+  INSERT INTO sop (id, tenant_id, summary, current_version)
+  VALUES (v_sop, p_tenant, 'planted for the reminder RLS assertions', 1);
+  INSERT INTO sop_version (id, tenant_id, sop_id, version, snapshot, snapshot_sha256)
+  VALUES (v_version, p_tenant, v_sop, 1, '{"steps":[]}'::jsonb,
+          digest('planted'::text, 'sha256'));
+  INSERT INTO sop_run (id, tenant_id, organization_id, sop_id, sop_version_id, title,
+                       assigned_to, status)
+  VALUES (v_run, p_tenant, v_org, v_sop, v_version, 'zz planted run', p_user, 'in_progress');
+  INSERT INTO sop_run_step (id, tenant_id, run_id, position, title, kind, assigned_to,
+                            due_at)
+  VALUES (v_step, p_tenant, v_run, 1, 'zz planted step', 'manual', p_user,
+          now() + interval '1 day');
+
+  INSERT INTO task_reminder (tenant_id, step_id, user_id, kind, lead_day, next_attempt_at)
+  VALUES (p_tenant, v_step, p_user, p_kind::task_reminder_kind, 0, now())
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+END;
+$$;
+
+/**
+ * Whether `p_reader` can see a reminder addressed to `p_owner`.
+ *
+ * Plants the row, re-establishes the session as the reader, and asks. The
+ * context is left pointing at the reader, so a caller that wants another seat
+ * afterwards calls helm_test.ctx() again — the assertions below do.
+ */
+CREATE OR REPLACE FUNCTION helm_test.reminder_visible(
+  p_tenant uuid,
+  p_owner  uuid,
+  p_reader uuid
+) RETURNS boolean
+  LANGUAGE plpgsql VOLATILE
+  SET search_path = public, helm, helm_test, extensions, pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_id      uuid := helm_test.plant_reminder(p_tenant, p_owner);
+  v_visible boolean;
+BEGIN
+  -- INVOKER rights, deliberately: the read below has to happen as the role
+  -- running the suite, under the policy, or this proves nothing.
+  PERFORM helm_test.ctx(p_tenant, p_reader);
+  SELECT EXISTS (SELECT 1 FROM task_reminder WHERE id = v_id) INTO v_visible;
+  RETURN v_visible;
+END;
+$$;
+
 GRANT USAGE ON SCHEMA helm_test TO PUBLIC;
 GRANT EXECUTE ON FUNCTION helm_test.check(text, boolean) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION helm_test.check_raises(text, text) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION helm_test.ctx(uuid, uuid) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION helm_test.rls_catalogue_gaps() TO PUBLIC;
 GRANT EXECUTE ON FUNCTION helm_test.check_rls_catalogue() TO PUBLIC;
+GRANT EXECUTE ON FUNCTION helm_test.plant_reminder(uuid, uuid, text, text) TO PUBLIC;
+GRANT EXECUTE ON FUNCTION helm_test.reminder_visible(uuid, uuid, uuid) TO PUBLIC;

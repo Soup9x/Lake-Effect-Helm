@@ -57,6 +57,8 @@ import {
 } from './harness';
 import { clientComponentNames, describeViolations, findBoundaryViolations } from '../support/rsc-boundary';
 import { datesDisagree, type ExternalCheckState } from '../../src/components/external-check-note';
+import { NOTIFICATION_KINDS } from '../../src/lib/notifications/kinds';
+import { FakeSmtp } from '../support/fake-smtp';
 
 /**
  * next/headers reaches into a request scope that does not exist here.
@@ -1108,5 +1110,128 @@ describe('which logo the pages load', () => {
     expect(strip, 'the clients list should render a ClientStrip').toBeTruthy();
     const logos = strip!.logos as Map<string, string | null>;
     expect(logos.get(IDS.orgAcme)).toBe(`/api/organizations/${IDS.orgAcme}/logo`);
+  });
+});
+
+describe('the mail relay on the settings page, and the toggles on the account page', () => {
+  /**
+   * A PAGES row proves the new reads execute. It cannot see whether the pinned
+   * certificate stayed out of the props, nor whether the destinations card was
+   * told that mail is off — and those are the two things that matter about K's
+   * settings surface.
+   */
+  const settingsPage = async () =>
+    (await import('../../src/app/(app)/settings/page')).default();
+  const accountPage = async () =>
+    (await import('../../src/app/(app)/account/page')).default();
+
+  afterEach(async () => {
+    const sql = superuserSql();
+    try {
+      await sql`DELETE FROM smtp_setting`;
+      await sql`DELETE FROM user_notification_preference`;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  async function seedRelay(enabled: boolean, pem: string | null = null) {
+    const sql = superuserSql();
+    try {
+      await sql`
+        INSERT INTO smtp_setting (
+          tenant_id, enabled, host, port, security, tls_verify,
+          tls_pinned_certificate, from_address, allowed_recipient_domains)
+        VALUES (
+          ${IDS.tenant1}::uuid, ${enabled}, 'mail.northwind.test', 587,
+          'starttls', true, ${pem}, 'helm@northwind.test', ARRAY['northwind.test'])
+        ON CONFLICT (tenant_id) DO UPDATE SET
+          enabled = EXCLUDED.enabled,
+          tls_pinned_certificate = EXCLUDED.tls_pinned_certificate
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  }
+
+  it('says the relay is unconfigured before anybody has been near it', async () => {
+    const card = propsOf(await settingsPage(), 'SmtpSettingsCard');
+    expect(card, 'the settings page should render a SmtpSettingsCard').toBeTruthy();
+    const initial = card!.initial as { configured: boolean; enabled: boolean; port: number };
+    expect(initial.configured).toBe(false);
+    // Off with no configuration at all, which is the air-gapped default 0670
+    // established and 0690 follows.
+    expect(initial.enabled).toBe(false);
+    expect(initial.port).toBe(587);
+  });
+
+  it('sends a fingerprint to the browser and never the certificate', async () => {
+    // A real certificate, because what is being tested is that a PEM in the
+    // database does not become a PEM in the props.
+    const relay = await FakeSmtp.start();
+    try {
+      await seedRelay(true, relay.certificatePem);
+      const card = propsOf(await settingsPage(), 'SmtpSettingsCard');
+      const initial = card!.initial as Record<string, unknown>;
+      // Lower-case hex, no colons — the shape fingerprintOfPem() produces, and
+      // the shape an operator pastes into a comparison.
+      expect(initial.pinnedFingerprint, 'the fingerprint should be derived and sent')
+        .toMatch(/^[0-9a-f]{64}$/);
+      // Derived rather than stored, so the two cannot disagree.
+      expect(initial.pinnedFingerprint).toBe(relay.sha256);
+      expect(
+        JSON.stringify(initial),
+        'the pinned certificate itself must not reach the page',
+      ).not.toContain('BEGIN CERTIFICATE');
+      expect(initial).not.toHaveProperty('tlsPinnedCertificate');
+    } finally {
+      await relay.stop();
+    }
+  });
+
+  it('tells the destinations card whether mail can be sent at all', async () => {
+    const off = propsOf(await settingsPage(), 'NotificationSettingsCard');
+    expect(off, 'the settings page should render a NotificationSettingsCard').toBeTruthy();
+    // A toggle with no relay behind it is a control that does nothing, and the
+    // card has to be able to say so rather than failing at save time.
+    expect(off!.emailConfigured).toBe(false);
+
+    await seedRelay(true);
+    expect(propsOf(await settingsPage(), 'NotificationSettingsCard')!.emailConfigured).toBe(true);
+
+    // Configured but switched off is still "cannot send".
+    await seedRelay(false);
+    expect(propsOf(await settingsPage(), 'NotificationSettingsCard')!.emailConfigured).toBe(false);
+  });
+
+  it('hands the account page the shipped defaults when nobody has chosen', async () => {
+    const card = propsOf(await accountPage(), 'NotificationPreferencesCard');
+    expect(card, 'the account page should render a NotificationPreferencesCard').toBeTruthy();
+    const initial = card!.initial as {
+      kinds: string[]; configured: boolean; emailConfigured: boolean;
+    };
+    // Both on by default, and `configured` false — the distinction the card
+    // needs in order not to read an unticked pair as a decision.
+    expect(initial.kinds).toEqual([...NOTIFICATION_KINDS]);
+    expect(initial.configured).toBe(false);
+    expect(initial.emailConfigured).toBe(false);
+  });
+
+  it('...and an empty choice as a choice, not as the default', async () => {
+    const sql = superuserSql();
+    try {
+      await sql`
+        INSERT INTO user_notification_preference (tenant_id, user_id, kinds)
+        VALUES (${IDS.tenant1}::uuid, ${IDS.admin1}::uuid, '[]'::jsonb)
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+
+    const initial = propsOf(await accountPage(), 'NotificationPreferencesCard')!.initial as {
+      kinds: string[]; configured: boolean;
+    };
+    expect(initial.kinds).toEqual([]);
+    expect(initial.configured, 'an empty array is a decision somebody made').toBe(true);
   });
 });

@@ -1807,9 +1807,14 @@ SELECT helm_test.check('the envelope is all-or-nothing',
             AND conname = 'webhook_envelope_complete'));
 
 \echo '-- ...but the application can still configure one --'
+-- Named by its FULL signature, which 0690 lengthened by two parameters
+-- (p_transport, p_email_address). Worth saying that this assertion is what
+-- caught the change: has_function_privilege raises on a signature that does
+-- not exist rather than returning false, so a reissued function cannot quietly
+-- leave this grant behind.
 SELECT helm_test.check('helm_app may write a destination and its sealed URL',
   has_function_privilege('helm_app',
-    'helm.set_webhook_endpoint(uuid, text, webhook_format, boolean, uuid, text[], text, text, boolean, smallint, integer, text, text, bytea, bytea, bytea, bytea, text)',
+    'helm.set_webhook_endpoint(uuid, text, webhook_format, boolean, uuid, text[], text, text, boolean, smallint, integer, text, text, bytea, bytea, bytea, bytea, text, notification_transport, text)',
     'EXECUTE'));
 SELECT helm_test.check('...and read back everything EXCEPT the envelope',
   (SELECT pg_get_function_result(p.oid) FROM pg_proc p
@@ -3756,6 +3761,181 @@ SELECT helm_test.check('...and cannot replace it',
 SELECT helm_test.ctx(:t2, :u_admin2);
 SELECT helm_test.check('another tenant sees no logo of ours',
   NOT EXISTS (SELECT 1 FROM organization_logo));
+ROLLBACK;
+
+\echo '== 50. The mail relay, and what a notification destination may be =='
+-- 0690. The guards in that migration assert the SHAPE — helm_app holds no
+-- privilege on the envelope columns and cannot write smtp_setting or
+-- task_reminder at all, the transport and envelope CHECKs are conditional, the
+-- preference policy names the current actor. These assert what that shape DOES,
+-- from the seat the request path actually runs in: this file runs as helm_app.
+
+-- (a) THE RELAY PASSWORD IS UNREACHABLE FROM HERE, by any path this role has.
+--     The row is written through the definer function, because helm_app has no
+--     INSERT on the table — which is itself the first assertion.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('helm_app cannot insert a relay by hand',
+  $$INSERT INTO smtp_setting (tenant_id, host, port, security, from_address)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'mail.test', 587,
+            'starttls', 'helm@northwind.test')$$);
+SELECT helm.set_smtp_setting(
+  true, 'mail.northwind.test', 587, 'starttls', true, NULL, 'helm',
+  'helm@northwind.test', 'Helm', ARRAY['northwind.test'],
+  'test-kek', 'kek-1', '\x00'::bytea, '\x01'::bytea,
+  decode(repeat('00', 12), 'hex'), decode(repeat('00', 16), 'hex'), 'aad');
+SELECT helm_test.check('the relay is stored and readable through its function',
+  (SELECT host = 'mail.northwind.test' FROM helm.smtp_settings()));
+SELECT helm_test.check('...reporting that a password is set, as a boolean',
+  (SELECT password_set FROM helm.smtp_settings()));
+SELECT helm_test.check_raises('...while the ciphertext column itself is refused',
+  $$SELECT secret_ciphertext FROM smtp_setting$$);
+SELECT helm_test.check_raises('...and so is the wrapped key',
+  $$SELECT wrapped_dek FROM smtp_setting$$);
+SELECT helm_test.check_raises('...and the row cannot be updated by hand either',
+  $$UPDATE smtp_setting SET host = 'elsewhere.test'$$);
+-- SELECT * is the one somebody writes without thinking, and it has to fail for
+-- the same reason: the envelope columns are in the table whether or not they
+-- were named.
+SELECT helm_test.check_raises('...nor read with a wildcard',
+  $$SELECT * FROM smtp_setting$$);
+ROLLBACK;
+
+-- (b) AND CONFIGURING IT NEEDS tenant:write, CHECKED BY THE FUNCTION. The
+--     route's gate produces a tidy 403; this is what happens to a caller that
+--     never passed one.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check_raises('a client administrator cannot configure the relay',
+  format($$SELECT helm.set_smtp_setting(
+    true, 'mail.evil.test', 25, 'plaintext', false, NULL, NULL,
+    'helm@northwind.test', NULL, ARRAY[]::text[],
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL)$$));
+ROLLBACK;
+
+-- (c) THE RECIPIENT GATE IS A DISCLOSURE BOUNDARY, so both answers matter.
+--     Empty means the sending domain and nothing else, which is the useful
+--     default rather than "anywhere".
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm.set_smtp_setting(
+  true, 'mail.northwind.test', 587, 'starttls', true, NULL, NULL,
+  'helm@northwind.test', NULL, ARRAY[]::text[],
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+SELECT helm_test.check('an empty domain list allows the sending domain',
+  helm.email_recipient_allowed(:t1, 'someone@northwind.test'));
+SELECT helm_test.check('...and nothing else',
+  NOT helm.email_recipient_allowed(:t1, 'someone@elsewhere.test'));
+-- Case is not a way round it: the column is normalised on the way in and the
+-- comparison lowercases the address.
+SELECT helm_test.check('...however the address is capitalised',
+  helm.email_recipient_allowed(:t1, 'Someone@NORTHWIND.test'));
+SELECT helm.set_smtp_setting(
+  true, 'mail.northwind.test', 587, 'starttls', true, NULL, NULL,
+  'helm@northwind.test', NULL, ARRAY['Partner.Example'],
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+SELECT helm_test.check('a named domain is allowed, folded to lower case',
+  helm.email_recipient_allowed(:t1, 'ops@partner.example'));
+SELECT helm_test.check('...and naming one replaces the sending-domain default',
+  NOT helm.email_recipient_allowed(:t1, 'someone@northwind.test'));
+-- A tenant with no relay at all sends nowhere, which is the air-gapped default
+-- rather than "no list, no restriction".
+SELECT helm_test.check('a tenant with no relay allows no recipient at all',
+  NOT helm.email_recipient_allowed(:t2, 'admin@northwind.test'));
+ROLLBACK;
+
+-- (d) AN EMAIL DESTINATION IS GATED ON THE RELAY AND ON THE DOMAIN LIST, at the
+--     moment somebody types the address rather than only at send time.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('an email destination needs a relay first',
+  $$SELECT helm.set_webhook_endpoint(
+      NULL, 'zz mailbox', 'generic', true, NULL, ARRAY['export.requested'],
+      NULL, NULL, false, 3::smallint, 2000,
+      NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      'email', 'oncall@northwind.test')$$);
+SELECT helm.set_smtp_setting(
+  true, 'mail.northwind.test', 587, 'starttls', true, NULL, NULL,
+  'helm@northwind.test', NULL, ARRAY['northwind.test'],
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+SELECT helm_test.check_raises('...and an address inside the allowed domains',
+  $$SELECT helm.set_webhook_endpoint(
+      NULL, 'zz mailbox', 'generic', true, NULL, ARRAY['export.requested'],
+      NULL, NULL, false, 3::smallint, 2000,
+      NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      'email', 'oncall@elsewhere.test')$$);
+SELECT helm.set_webhook_endpoint(
+  NULL, 'zz mailbox', 'discord', true, NULL, ARRAY['export.requested'],
+  NULL, NULL, true, 3::smallint, 2000,
+  NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  'email', 'OnCall@Northwind.test');
+-- The address is readable in full, unlike the URL beside it, because for
+-- Discord and Teams the URL IS the credential and an address is a destination.
+SELECT helm_test.check('an email destination stores its address, folded, and no URL',
+  (SELECT email_address = 'oncall@northwind.test' AND url_host IS NULL
+     FROM helm.webhook_endpoints() WHERE name = 'zz mailbox'));
+-- 'discord' and a signing secret were both asked for above and both dropped:
+-- a payload shape and an HMAC belong to a POST, not to a mailbox.
+SELECT helm_test.check('...with the webhook-only fields normalised away',
+  (SELECT format = 'generic' AND NOT signing_secret_set
+     FROM helm.webhook_endpoints() WHERE name = 'zz mailbox'));
+ROLLBACK;
+
+-- (e) A PREFERENCE IS PRIVATE, and the policy IS the authorisation — there is
+--     no permission gating this route, so this is the whole of the control.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO user_notification_preference (tenant_id, user_id, kinds)
+VALUES (:t1, :u_admin1, '["task_due"]'::jsonb);
+SELECT helm_test.check('I can read my own notification choices',
+  EXISTS (SELECT 1 FROM user_notification_preference WHERE user_id = :u_admin1));
+SELECT helm_test.check_raises('...and cannot write one in somebody else''s name',
+  $$INSERT INTO user_notification_preference (tenant_id, user_id, kinds)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '1b000000-0000-0000-0000-000000000002', '[]'::jsonb)$$);
+
+SELECT helm_test.ctx(:t1, :u_tech1);
+SELECT helm_test.check('a colleague cannot see what I chose',
+  NOT EXISTS (SELECT 1 FROM user_notification_preference));
+-- The quiet refusal again, which this file has now recorded three times: an
+-- UPDATE whose USING clause excludes every row matches nothing and returns
+-- cleanly. The assertion reads the value back rather than waiting for an error.
+UPDATE user_notification_preference SET kinds = '[]'::jsonb;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check('...and silently changes nothing by trying',
+  (SELECT kinds = '["task_due"]'::jsonb FROM user_notification_preference
+    WHERE user_id = :u_admin1));
+ROLLBACK;
+
+-- (f) A REMINDER NAMES WHO IS BEHIND ON WHAT, so it is private, and the
+--     tenant-wide test is the boundary between one client and another's work.
+--     client_admin holds audit:read in the shipped catalogue and this table has
+--     no organisation to scope on, which is how the first draft of the policy
+--     leaked.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('helm_app cannot raise a reminder by hand',
+  $$INSERT INTO task_reminder (tenant_id, user_id, step_id, kind, lead_day,
+                               next_attempt_at)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '1b000000-0000-0000-0000-000000000002',
+            '1d000000-0000-0000-0000-000000000001', 'assigned', 0, now())$$);
+ROLLBACK;
+
+-- The behavioural half needs a row, and the only writers are definer
+-- functions — so it is inserted with the owner's rights through one of them.
+-- helm.raise_assignment_reminder() takes a step, so the fixture's procedure run
+-- is started first and the reminder lands against a real step.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check('a reminder for me is visible to me',
+  helm_test.reminder_visible(:t1, :u_admin1, :u_admin1));
+SELECT helm_test.check('a reminder for a colleague is visible to a tenant-wide seat',
+  helm_test.reminder_visible(:t1, :u_tech1, :u_admin1));
+SELECT helm_test.check('...and not to a client administrator, audit:read or not',
+  NOT helm_test.reminder_visible(:t1, :u_tech1, :u_acme));
+SELECT helm_test.check('...who can still see one addressed to themselves',
+  helm_test.reminder_visible(:t1, :u_acme, :u_acme));
 ROLLBACK;
 
 \echo '== All security assertions passed =='
