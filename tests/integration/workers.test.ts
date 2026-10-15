@@ -237,6 +237,12 @@ describe('background workers', () => {
                   'wildcard.acme.test', 'Lets Encrypt', now() + interval '5 days')
         `;
 
+        // Every tenant has a default rule since 0730. These tests are about the
+        // evaluator's semantics for one rule they define themselves, so the
+        // default is switched off; tests/integration/expiry-alerts.test.ts
+        // covers the default rule end to end.
+        await tx`UPDATE alert_rule SET is_active = false WHERE is_default`;
+
         const [rule] = await tx<{ id: string }[]>`
           INSERT INTO alert_rule (tenant_id, name, channel, target, lead_days)
           VALUES (${IDS.tenant1}::uuid, 'All expiries', 'webhook',

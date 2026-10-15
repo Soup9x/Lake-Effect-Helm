@@ -157,10 +157,14 @@ The cursor is a `chain_seq`, not a timestamp. The audit chain is contiguous from
 **Expiry warnings are the other source.** They do not pass through the audit
 log; they come from the projection in `0100` via `alert_event`, which already
 has the lead-day idempotency that stops a nightly job re-alerting until the team
-filters the channel. `deliverExpiryAlerts` now enqueues onto this queue instead
-of POSTing directly — and falls back to the original `alert_rule.target` path
-when no destination is subscribed, so a deployment configured before `0420`
-keeps working.
+filters the channel. `deliverExpiryAlerts` enqueues onto this queue and does
+nothing else. A warning no destination subscribes to is recorded as
+`suppressed` with that reason rather than left pending, so it is not re-examined
+forever and does not arrive weeks late once somebody subscribes. The original
+`alert_rule.target` notifier was removed: no rule ever used it, and its "email"
+channel only wrote a log line while recording the alert as sent. Every tenant
+has a default rule since `0730`, edited under Settings → Expiry warnings;
+before that nothing created a rule and no warning was ever raised.
 
 Everything is idempotent through `UNIQUE (endpoint_id, event_uid)`. A cursor
 that rewinds, a crash between the insert and the cursor update, or two workers

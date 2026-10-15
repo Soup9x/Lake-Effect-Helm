@@ -114,6 +114,13 @@ quietly exited at 3am.
 
 ## 4. Expiry alerts
 
+Every tenant has one default rule — every kind of expiry, every organisation,
+at 30, 14, 7 and 1 days — created by `0730` for existing tenants and by a
+trigger for new ones, and edited under Settings → Expiry warnings. Until `0730`
+nothing created a rule, so both jobs below were idle everywhere. Delivery is the
+shared notification queue only (`10-notifications.md` §5): a warning goes to
+every destination subscribed to "Expiring soon".
+
 Two jobs, deliberately split. **Evaluation** decides what should fire and is
 set-based SQL. **Delivery** sends it, and is separate because delivery is the
 part that talks to the outside world and therefore the part that fails: an SMTP

@@ -294,6 +294,8 @@ export const alertRule = pgTable('alert_rule', {
   channel: text('channel').notNull(),
   target: text('target').notNull(),
   isActive: boolean('is_active').notNull().default(true),
+  /** The tenant's built-in rule, edited from Settings; at most one (0730). */
+  isDefault: boolean('is_default').notNull().default(false),
   createdAt: tstz('created_at').notNull().defaultNow(),
   createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
   updatedAt: tstz('updated_at').notNull().defaultNow(),

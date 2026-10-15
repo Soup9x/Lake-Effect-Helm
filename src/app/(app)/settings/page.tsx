@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import {
-  Activity, Boxes, Globe, KeyRound, PanelLeft, ShieldCheck, Bot, Building,
+  Activity, Boxes, Bot, Building, CalendarClock, Globe, KeyRound, PanelLeft, ShieldCheck,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -11,6 +11,8 @@ import { RenameTenant } from '@/components/rename-tenant';
 import { SidebarCustomise } from '@/components/sidebar-customise';
 import { ExternalChecksForm } from '@/components/external-checks-form';
 import { HealthWindowForm } from '@/components/health-window-form';
+import { ExpiryAlertForm } from '@/components/expiry-alert-form';
+import { readExpiryAlertSetting } from '@/lib/alerts/queries';
 import { readHealthSetting } from '@/lib/health/queries';
 import { readSmtpSetting } from '@/lib/email/settings';
 import { SmtpSettingsCard } from '@/components/smtp-settings';
@@ -300,11 +302,12 @@ export default async function SettingsPage() {
     keys, workers, tenant, radius, oidc, destinations, deliveries,
     unifi, organizations, canManageNetwork, flexibleTypeCount,
     sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow, smtp,
+    expiryAlerts, canManageAlerts,
   } = await withTenant(actorOf(identity), async (tx) => {
     const [keyRows, workerRows, tenantRows, radiusRows, oidcRows,
            destinationRows, deliveryRows, unifiRows, organizationRows, networkRows,
            flexibleTypeRows, sidebarDefaultRow, externalCheckRow,
-           healthWindowRow, smtpRow] = await Promise.all([
+           healthWindowRow, smtpRow, expiryAlertRow, alertPermissionRows] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<WorkerRow[]>`
         SELECT id, name, role_key, allowed_reveal_purposes, disabled_at
@@ -365,6 +368,8 @@ export default async function SettingsPage() {
       // The mail relay, without its password: helm_app has no privilege on the
       // envelope columns, so `passwordSet` is a boolean the database computed.
       readSmtpSetting(tx),
+      readExpiryAlertSetting(tx),
+      tx<{ allowed: boolean }[]>`SELECT helm.has_permission('alert:manage') AS allowed`,
     ]);
     return {
       keys: keyRows,
@@ -383,6 +388,8 @@ export default async function SettingsPage() {
       externalChecks: externalCheckRow,
       healthWindow: healthWindowRow,
       smtp: smtpRow,
+      expiryAlerts: expiryAlertRow,
+      canManageAlerts: alertPermissionRows[0]?.allowed ?? false,
     };
   });
 
@@ -672,6 +679,40 @@ export default async function SettingsPage() {
               />
             ) : (
               <p className="text-xs text-ink-faint">Requires tenant settings access.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CalendarClock className="size-4 text-ink-faint" aria-hidden /> Expiry warnings
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div className="max-w-xl space-y-1">
+              <p className="text-ink-muted">
+                When the team hears that a certificate, domain, warranty or contract is about
+                to expire. Sent to every notification destination subscribed to
+                &ldquo;Expiring soon&rdquo;.
+              </p>
+              <p className="text-ink-faint">
+                {expiryAlerts.enabled
+                  ? `On: ${expiryAlerts.leadDays.join(', ')} days before expiry.`
+                  : 'Off: nothing is raised, whatever is subscribed.'}
+              </p>
+            </div>
+            {canManageAlerts ? (
+              <ExpiryAlertForm
+                setting={expiryAlerts}
+                trigger={
+                  <Button variant="secondary" size="sm">
+                    Edit
+                  </Button>
+                }
+              />
+            ) : (
+              <p className="text-xs text-ink-faint">Requires alert management access.</p>
             )}
           </CardContent>
         </Card>
