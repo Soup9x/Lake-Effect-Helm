@@ -9,10 +9,11 @@ caught the bug in front of you, and which parts of Helm still need tests.
 
 | Suite | Command | Needs | Last counted (2026-10-15) |
 | --- | --- | --- | --- |
-| Unit | `pnpm test:unit` | Nothing | 49 files, 791 tests |
-| Integration | `pnpm test:integration` | A throwaway PostgreSQL 16 cluster | 56 files, 1,240 tests |
+| Unit | `pnpm test:unit` | Nothing | 51 files, 809 tests |
+| Integration | `pnpm test:integration` | A throwaway PostgreSQL 16 cluster | 57 files, 1,249 tests |
 | SQL security | `pnpm test:sql` | The same cluster, superuser access | 625 assertions, plus tamper detection |
 | Type check | `pnpm typecheck` | Nothing | |
+| Lint | `pnpm lint` | Nothing | Biome; see `biome.json` for what is on and why |
 | Migration manifest | `pnpm db:check-migrations` | Nothing | |
 | Schema drift | `pnpm db:drift` | A freshly migrated database | |
 | Everything above | `pnpm verify` and `pnpm test:sql` | | |
@@ -59,6 +60,11 @@ checks that read the source**:
   `'use client'` module. This would have caught the theme script that never ran.
 - `worker-jobs`: no two jobs share an advisory lock key.
 - `check-migrations`: the manifest logic itself.
+- `pg-errors`: what a database refusal becomes on the way out — a `helm:`
+  raise is a 400 with its sentence, Postgres's own wording never reaches a
+  client, an unlisted SQLSTATE stays a 500.
+- `api`: the browser-side result contract (`apiFetch`): envelope parsing, the
+  network failure, a 204, a proxy's HTML.
 
 **Integration** (`tests/integration/`): everything that touches PostgreSQL,
 connecting as the real non-superuser roles (`helm_app`, `helm_auth`,
@@ -66,7 +72,7 @@ connecting as the real non-superuser roles (`helm_app`, `helm_auth`,
 `NextRequest`, pages are rendered as server components, and worker jobs are run
 through their real `run()`. The areas each file covers are in its name: `api`,
 `secrets`, `exports`, `local-auth-routes`, `notifications`, `expiry-alerts`,
-`runtime`, `pages`, `write-surface` and so on.
+`runtime`, `pages`, `write-surface`, `api-tokens` and so on.
 
 **SQL** (`db/tests/security.sql`, `tamper.sql`): the guarantees that live in
 the database, asserted from inside it with `helm_test.check(name, condition)`.
@@ -196,12 +202,37 @@ fast-check would explore inputs the example-based tests do not, starting with
 round-trips (CSV), monotonicity (adding a term never widens a match) and
 bounds (no schema the guard accepts takes over a second to match).
 
+### 4.9 The SQL-error contract, from the schema's side
+
+`tests/unit/pg-errors.test.ts` pins what the handler does with a code. What
+nothing asserts yet is the other half: that every `RAISE EXCEPTION` in `db/sql`
+that is meant for a person carries the `helm:` prefix, and that one meant as a
+fault does not. A unit test that greps `db/sql/*.sql` for `RAISE EXCEPTION`
+and fails on a message without the prefix, with an allowlist for the handful
+that are genuinely internal, keeps a new migration from quietly adding a 500.
+
+### 4.10 Token scope, as a matrix
+
+`api-tokens.test.ts` proves a narrowed token is refused where its scope does
+not reach and that a wildcard token cannot exceed its role. Extend it the way
+4.4 extends the authority tests: `{tier1, client_admin} × {'*', one scope,
+two scopes} × {a route needing each}`, asserting 200 or 403 from the table,
+so the next route that forgets `permissions:` in its wrapper is caught by the
+token path even if the session path lets it through.
+
+### 4.11 Component behaviour without a browser
+
+Every form now calls `apiFetch`, so a component's error path is reachable
+with a stubbed `fetch` and no server. Start with the three that carry the most
+logic — `reveal-button` (step-up retry, auto-hide), `api-tokens-card` (the
+token shown once and cleared on close), `import-dialog` (preview from
+`details`) — rendered with React Testing Library under vitest's jsdom
+environment, asserting what the person sees after a 403, a 400 with details,
+and a network failure. This is the cheap half of 4.1; the browser suite stays
+for what only a browser shows.
+
 ### Also worth adding
 
-- **A linter.** There is none. `typescript-eslint` with the `react-hooks`
-  rules would have flagged the stale-closure and effect-dependency issues found
-  by hand. Add it to CI as a separate job so its first findings do not block
-  unrelated work.
 - **Session-token hashing tests**, alongside that change. Session tokens are
   stored as issued today, unlike API and reset tokens, which are hashed. Once
   they are hashed too, assert that `auth_session` never contains a cookie's
