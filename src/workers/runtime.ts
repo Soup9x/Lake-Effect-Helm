@@ -27,7 +27,7 @@
  *    3am.
  */
 import type { HelmSql } from '../lib/db/client';
-import { db } from '../lib/db/client';
+import { db, poolMax } from '../lib/db/client';
 
 export interface JobContext {
   /** Structured logging. Never receives secret material. */
@@ -160,6 +160,14 @@ export interface RuntimeOptions {
   readonly logger?: JobLogger;
   /** Run every job once, then stop. For a cron-driven deployment, and for tests. */
   readonly once?: boolean;
+  /**
+   * Most jobs running at the same time. Each running job holds one pooled
+   * connection for its advisory lock for its whole run and needs at least one
+   * more to do any work, so the default is half the worker pool. Without a cap,
+   * all thirteen jobs start together on the first tick: at DATABASE_POOL_MAX=13
+   * every connection was a held lock and every job waited forever for another.
+   */
+  readonly maxConcurrent?: number;
 }
 
 interface JobState {
@@ -173,9 +181,16 @@ export class WorkerRuntime {
   readonly #state = new Map<string, JobState>();
   readonly #log: JobLogger;
   readonly #tickMs: number;
+  readonly #maxConcurrent: number;
   #timer: NodeJS.Timeout | null = null;
   #stopping = false;
-  #idle: Promise<void> = Promise.resolve();
+  /**
+   * Every job run still in progress, whichever tick started it. stop() used to
+   * wait only on the latest tick's promise, and a job a later tick skipped
+   * (because it was still running) was not in it — so SIGTERM closed the pools
+   * under a long export render or sync, leaving it `running` forever.
+   */
+  readonly #inFlight = new Set<Promise<boolean>>();
 
   constructor(jobs: Job[], options: RuntimeOptions = {}) {
     const duplicateLock = jobs.find((j, i) => jobs.findIndex((o) => o.lockKey === j.lockKey) !== i);
@@ -189,14 +204,27 @@ export class WorkerRuntime {
     this.#jobs = jobs;
     this.#log = options.logger ?? createLogger('worker');
     this.#tickMs = options.tickMs ?? 15_000;
+    this.#maxConcurrent = Math.max(1, options.maxConcurrent ?? Math.floor(poolMax() / 2));
     for (const job of jobs) {
       this.#state.set(job.name, { lastRunAt: 0, running: false, consecutiveFailures: 0 });
     }
   }
 
-  /** Run every job once, regardless of schedule. Returns when all have settled. */
-  async runOnce(): Promise<void> {
-    await Promise.all(this.#jobs.map((job) => this.#runJob(job, true)));
+  /**
+   * Run every job once, regardless of schedule, at most maxConcurrent at a
+   * time. Resolves to how many failed, so `--once` can exit non-zero: a
+   * CronJob that always exits 0 never reports a failure to anybody.
+   */
+  async runOnce(): Promise<{ failed: number }> {
+    let failed = 0;
+    const queue = [...this.#jobs];
+    const lane = async (): Promise<void> => {
+      for (let job = queue.shift(); job; job = queue.shift()) {
+        if (!(await this.#track(this.#runJob(job, true)))) failed += 1;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(this.#maxConcurrent, queue.length) }, lane));
+    return { failed };
   }
 
   start(): void {
@@ -208,7 +236,13 @@ export class WorkerRuntime {
 
     const tick = (): void => {
       if (this.#stopping) return;
-      this.#idle = Promise.all(this.#jobs.map((job) => this.#runJob(job, false))).then(() => undefined);
+      for (const job of this.#jobs) {
+        // Full: the rest wait for a later tick. lastRunAt is untouched, so a
+        // job skipped here is still due and starts as soon as a slot frees.
+        if (!this.#due(job)) continue;
+        if (this.#inFlight.size >= this.#maxConcurrent) break;
+        void this.#track(this.#runJob(job, false));
+      }
     };
 
     tick();
@@ -224,19 +258,26 @@ export class WorkerRuntime {
       clearInterval(this.#timer);
       this.#timer = null;
     }
-    await this.#idle;
+    await Promise.all([...this.#inFlight]);
     this.#log.info('worker runtime stopped');
   }
 
-  async #runJob(job: Job, force: boolean): Promise<void> {
+  #track(run: Promise<boolean>): Promise<boolean> {
+    this.#inFlight.add(run);
+    void run.finally(() => this.#inFlight.delete(run));
+    return run;
+  }
+
+  /** True unless the job ran and threw. A skip is not a failure. */
+  async #runJob(job: Job, force: boolean): Promise<boolean> {
     const state = this.#state.get(job.name);
-    if (!state) return;
+    if (!state) return true;
 
     // A job still running from a previous tick is not started again. This is
     // the in-process half of the guarantee; the advisory lock is the
     // cross-process half.
-    if (state.running) return;
-    if (!force && Date.now() - state.lastRunAt < job.everyMs) return;
+    if (state.running) return true;
+    if (!force && Date.now() - state.lastRunAt < job.everyMs) return true;
 
     state.running = true;
     const log = this.#log.child({ job: job.name });
@@ -257,6 +298,7 @@ export class WorkerRuntime {
       } else {
         log.debug('nothing to do', { ms: Date.now() - startedAt });
       }
+      return true;
     } catch (error) {
       state.lastRunAt = Date.now();
       state.consecutiveFailures += 1;
@@ -265,8 +307,15 @@ export class WorkerRuntime {
         consecutiveFailures: state.consecutiveFailures,
         ...describeError(error),
       });
+      return false;
     } finally {
       state.running = false;
     }
+  }
+
+  /** Whether a scheduled tick should start this job now. */
+  #due(job: Job): boolean {
+    const state = this.#state.get(job.name);
+    return state !== undefined && !state.running && Date.now() - state.lastRunAt >= job.everyMs;
   }
 }

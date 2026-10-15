@@ -30,6 +30,7 @@ import {
   authVerificationToken,
 } from '@db/schema/identity';
 import { useSessionResolver } from './session';
+import { clientIp } from './identity';
 import {
   oidcBySlug,
   oidcEnabledProviders,
@@ -235,7 +236,9 @@ function stampingAdapter(base: Adapter, method: 'sso' | 'oidc', request: Request
         await stampSessionMethod(
           created.sessionToken,
           method,
-          request?.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
+          // The same right-to-left reading every other path uses. The leftmost
+          // entry is whatever the client sent, and a non-address failed the cast.
+          (request ? clientIp(request) : undefined) ?? null,
           request?.headers.get('user-agent') ?? null,
         );
       } catch (error) {

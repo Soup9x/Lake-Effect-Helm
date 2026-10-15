@@ -18,6 +18,7 @@
  * making key material unrecoverable.
  */
 import type { EncryptionContext, KekProvider } from './kek';
+import { envInt } from '../env';
 
 /** Callers get their own bytes, so evicting the cached ones cannot reach them. */
 const copyOf = (dek: Buffer): Buffer => Buffer.from(dek);
@@ -56,7 +57,12 @@ export class DekCache {
 
   constructor(provider: KekProvider, options: DekCacheOptions = {}) {
     this.#provider = provider;
-    this.#ttlMs = options.ttlMs ?? Number(process.env.HELM_DEK_CACHE_TTL_SECONDS ?? 300) * 1000;
+    this.#ttlMs =
+      options.ttlMs ??
+      envInt('HELM_DEK_CACHE_TTL_SECONDS', process.env.HELM_DEK_CACHE_TTL_SECONDS, 300, {
+        min: 1,
+        max: 3600,
+      }) * 1000;
     this.#maxEntries = options.maxEntries ?? 256;
     this.#now = options.now ?? Date.now;
   }

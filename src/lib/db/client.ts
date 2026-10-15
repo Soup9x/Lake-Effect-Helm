@@ -16,6 +16,7 @@ import {
   type ResolvedSessionContext,
   type SessionContextRequest,
 } from './context';
+import { envInt } from '../env';
 
 /**
  * postgres.js parameterises Sql by a map of custom type parsers. Helm registers
@@ -47,16 +48,28 @@ const ROLE_ENV: Record<DbRole, string> = {
 
 const pools = new Map<DbRole, HelmSql>();
 
+/**
+ * Connections per role pool. Exported for the worker runtime, which sizes its
+ * job concurrency from it: each running job holds one connection for its
+ * advisory lock and needs at least one more to do anything.
+ */
+export function poolMax(): number {
+  return envInt('DATABASE_POOL_MAX', process.env.DATABASE_POOL_MAX, 20, { min: 2, max: 500 });
+}
+
 function baseOptions(): postgres.Options<NoCustomTypes> {
   return {
-    max: Number(process.env.DATABASE_POOL_MAX ?? 20),
+    max: poolMax(),
     idle_timeout: 30,
     connect_timeout: 10,
     connection: {
       // Every request holds a connection for the duration of its transaction
       // (SET LOCAL requires it), so one runaway query starves the pool.
       // Delivered as a startup parameter so it applies to every session.
-      statement_timeout: Number(process.env.DATABASE_STATEMENT_TIMEOUT_MS ?? 15_000),
+      statement_timeout: envInt(
+        'DATABASE_STATEMENT_TIMEOUT_MS', process.env.DATABASE_STATEMENT_TIMEOUT_MS, 15_000,
+        { min: 1_000, max: 3_600_000 },
+      ),
       // Shows up in pg_stat_activity and the server log; worth having when
       // four roles connect to the same database.
       application_name: 'lake-effect-helm',

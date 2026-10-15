@@ -48,6 +48,7 @@ import {
   type RewrappedDek,
   type RewrappingKekProvider,
 } from './kek';
+import { envInt } from '../env';
 
 /**
  * The slice of `fetch` this provider uses.
@@ -245,7 +246,10 @@ export class VaultTransitKekProvider implements RewrappingKekProvider {
     }
 
     const namespace = env.VAULT_NAMESPACE?.trim();
-    const timeoutMs = Number(env.HELM_VAULT_TIMEOUT_MS ?? 5000);
+    const timeoutMs = envInt('HELM_VAULT_TIMEOUT_MS', env.HELM_VAULT_TIMEOUT_MS, 5000, {
+      min: 100,
+      max: 120_000,
+    });
 
     return new VaultTransitKekProvider({
       addr,
