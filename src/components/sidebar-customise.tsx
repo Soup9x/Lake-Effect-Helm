@@ -44,6 +44,7 @@ import { reorder } from '@/lib/workspace/widgets';
 import { ORG_CATEGORIES } from '@/lib/nav/org-categories';
 import { SIDEBAR_MAX } from '@/lib/nav/sidebar-layout';
 import { cn } from '@/lib/ui/cn';
+import { apiFetch } from '@/lib/ui/api';
 
 const LABELS = new Map(ORG_CATEGORIES.map((c) => [c.slug, c.label]));
 const label = (slug: string): string => LABELS.get(slug) ?? slug;
@@ -103,32 +104,22 @@ export function SidebarCustomise({
     const previous = categories;
     if (next) setCategories(next);
     setFailed(false);
-    try {
-      const response = await fetch(endpoint, {
-        method,
-        ...(next
-          ? {
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ categories: next }),
-            }
-          : {}),
-      });
-      if (!response.ok) {
-        setCategories(previous);
-        setFailed(true);
-        return;
-      }
-      if (!next) {
-        // A reset answers with the layout now in force — the tenant default —
-        // which is not something this component could have computed.
-        const body = (await response.json().catch(() => null)) as { categories?: string[] } | null;
-        if (Array.isArray(body?.categories)) setCategories(body.categories);
-      }
-      router.refresh();
-    } catch {
+    const result = await apiFetch<{ categories?: string[] } | undefined>(endpoint, {
+      method,
+      ...(next ? { json: { categories: next } } : {}),
+    });
+    if (!result.ok) {
       setCategories(previous);
       setFailed(true);
+      return;
     }
+    if (!next) {
+      // A reset answers with the layout now in force — the tenant default —
+      // which is not something this component could have computed.
+      const body = result.value;
+      if (Array.isArray(body?.categories)) setCategories(body.categories);
+    }
+    router.refresh();
   }
 
   const save = (next: string[]) => void send('PUT', next);

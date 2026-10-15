@@ -19,6 +19,8 @@ import { CheckCircle2, Loader2, ShieldAlert } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Input, Label } from './ui/field';
+import { apiFetch } from '@/lib/ui/api';
+import { policyProblems } from '@/lib/ui/password-problems';
 
 interface Props {
   /** True when the current password was issued by somebody else. */
@@ -65,23 +67,12 @@ export function ChangePasswordCard({ mustChange, passwordChangedAt }: Props) {
 
     setPending(true);
     try {
-      const response = await fetch('/api/auth/local/change-password', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ currentPassword: current, newPassword: next }),
+      const result = await apiFetch('/api/auth/local/change-password', {
+        json: { currentPassword: current, newPassword: next },
       });
 
-      const payload = (await response.json()) as {
-        ok?: boolean;
-        error?: { message?: string; problems?: string[] };
-      };
-
-      if (!response.ok) {
-        setProblems(
-          payload.error?.problems?.map((p) => `Your new password ${p}.`) ?? [
-            payload.error?.message ?? 'Could not change your password.',
-          ],
-        );
+      if (!result.ok) {
+        setProblems(policyProblems(result.details)?.map((p) => `Your new password ${p}.`) ?? [result.message]);
         return;
       }
 
@@ -90,8 +81,6 @@ export function ChangePasswordCard({ mustChange, passwordChangedAt }: Props) {
       setNext('');
       setConfirm('');
       router.refresh();
-    } catch {
-      setProblems(['Could not reach the server. Check your connection and try again.']);
     } finally {
       setPending(false);
     }

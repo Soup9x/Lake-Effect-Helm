@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Download, Loader2, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
+import { apiFetch, toApiResult } from '@/lib/ui/api';
 
 /**
  * Revoking and downloading an export.
@@ -29,14 +30,12 @@ export function RevokeExportButton({ exportJobId }: { exportJobId: string }) {
   const revoke = () => {
     setError(null);
     startTransition(async () => {
-      const response = await fetch(`/api/exports/${exportJobId}`, {
+      const result = await apiFetch(`/api/exports/${exportJobId}`, {
         method: 'DELETE',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reason: reason.trim() }),
+        json: { reason: reason.trim() },
       });
-      if (!response.ok) {
-        const body = (await response.json()) as { error?: { message?: string } };
-        setError(body.error?.message ?? 'The revocation was refused.');
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setOpen(false);
@@ -106,10 +105,12 @@ export function DownloadExportButton({
     setPending(true);
     setError(null);
     try {
+      // Raw fetch rather than apiFetch: the success body is the bundle itself,
+      // a blob, and only a refusal comes back as the JSON envelope.
       const response = await fetch(`/api/exports/${exportJobId}/download`);
       if (!response.ok) {
-        const body = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
-        setError(body.error?.message ?? 'The download was refused.');
+        const refusal = toApiResult(false, response.status, await response.json().catch(() => null));
+        setError(refusal.ok ? 'The download was refused.' : refusal.message);
         return;
       }
 

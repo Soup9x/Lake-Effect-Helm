@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Input, Label } from './ui/field';
 import { Badge } from './ui/badge';
 import { formatDateTime } from '@/lib/ui/format';
+import { apiFetch } from '@/lib/ui/api';
 
 export interface RadiusSettings {
   configured: boolean;
@@ -71,10 +72,9 @@ export function RadiusSettingsCard({ initial }: { initial: RadiusSettings | null
     setSaving(true);
     setFeedback(null);
     try {
-      const response = await fetch('/api/auth/radius', {
+      const result = await apiFetch<{ radius?: RadiusSettings }>('/api/auth/radius', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           enabled: form.enabled,
           host: form.host.trim(),
           port: form.port,
@@ -82,24 +82,18 @@ export function RadiusSettingsCard({ initial }: { initial: RadiusSettings | null
           retries: form.retries,
           nasIdentifier: form.nasIdentifier.trim(),
           ...(secret ? { secret } : {}),
-        }),
+        },
       });
-      const payload = (await response.json().catch(() => null)) as {
-        radius?: RadiusSettings;
-        error?: { message?: string };
-      } | null;
 
-      if (!response.ok) {
-        setFeedback({ ok: false, message: payload?.error?.message ?? `Save failed (${response.status}).` });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
 
       setSecret('');
-      if (payload?.radius) setForm(payload.radius);
+      if (result.value.radius) setForm(result.value.radius);
       setFeedback({ ok: true, message: 'Saved.' });
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'The request did not reach the server.' });
     } finally {
       setSaving(false);
     }
@@ -109,36 +103,29 @@ export function RadiusSettingsCard({ initial }: { initial: RadiusSettings | null
     setTesting(mode);
     setFeedback(null);
     try {
-      const response = await fetch('/api/auth/radius/test', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(
-          mode === 'connection'
-            ? { mode }
-            : { mode, username: probe.username.trim(), password: probe.password },
-        ),
-      });
-      const payload = (await response.json().catch(() => null)) as {
+      const result = await apiFetch<{
         ok?: boolean;
         message?: string;
         replyMessage?: string | null;
-        error?: { message?: string };
-      } | null;
+      }>('/api/auth/radius/test', {
+        json:
+          mode === 'connection'
+            ? { mode }
+            : { mode, username: probe.username.trim(), password: probe.password },
+      });
 
-      if (!response.ok) {
-        setFeedback({ ok: false, message: payload?.error?.message ?? `Test failed (${response.status}).` });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
 
       setFeedback({
-        ok: payload?.ok ?? false,
-        message: payload?.message ?? '',
-        detail: payload?.replyMessage ?? null,
+        ok: result.value.ok ?? false,
+        message: result.value.message ?? '',
+        detail: result.value.replyMessage ?? null,
       });
       // The test result is stored, so the card shows it after a reload too.
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'The request did not reach the server.' });
     } finally {
       setTesting(null);
       setProbe({ username: '', password: '' });
@@ -156,17 +143,15 @@ export function RadiusSettingsCard({ initial }: { initial: RadiusSettings | null
     setSaving(true);
     setFeedback(null);
     try {
-      const response = await fetch('/api/auth/radius', { method: 'DELETE' });
-      if (!response.ok) {
-        setFeedback({ ok: false, message: `Could not remove the configuration (${response.status}).` });
+      const result = await apiFetch('/api/auth/radius', { method: 'DELETE' });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
       setForm(BLANK);
       setSecret('');
       setFeedback({ ok: true, message: 'RADIUS configuration removed.' });
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'The request did not reach the server. Nothing was changed.' });
     } finally {
       setSaving(false);
     }

@@ -25,7 +25,8 @@ import { KeyRound, Loader2, ShieldAlert, Timer } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 import { useStepUp } from './step-up-dialog';
-import { STEP_UP_CODE, toAttemptResult, withStepUp } from '@/lib/ui/step-up';
+import { STEP_UP_CODE, withStepUp } from '@/lib/ui/step-up';
+import { apiFetch } from '@/lib/ui/api';
 import { cn } from '@/lib/ui/cn';
 
 interface CodeOk {
@@ -111,15 +112,10 @@ export function TotpPanel({
    * `reason` is read at call time rather than captured, so the step-up retry
    * sends whatever is in the box by then — the same reasoning as RevealButton.
    */
-  const attempt = useCallback(async () => {
-    const response = await fetch(`/api/assets/${nodeId}/totp/code`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...(reason ? { reason } : {}) }),
-    });
-    const body = await response.json().catch(() => null);
-    return toAttemptResult<CodeOk>(response.ok, response.status, body, (b) => b as CodeOk);
-  }, [nodeId, reason]);
+  const attempt = useCallback(
+    () => apiFetch<CodeOk>(`/api/assets/${nodeId}/totp/code`, { json: { ...(reason ? { reason } : {}) } }),
+    [nodeId, reason],
+  );
 
   const load = useCallback(async () => {
     if (inFlight.current) return;

@@ -19,6 +19,7 @@ import { Button } from './ui/button';
 import { FieldHint, Input, Label, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
 import { changedFields, hasChanges, type FieldValue } from '@/lib/ui/form-diff';
+import { apiFetch } from '@/lib/ui/api';
 
 export interface SiteValues extends Record<string, FieldValue> {
   name: string;
@@ -113,26 +114,17 @@ export function SiteForm({
             ...(values.notes.trim() ? { notes: values.notes.trim() } : {}),
           };
 
-      const response = await fetch(editing ? `/api/sites/${site.id}` : '/api/sites', {
+      const result = await apiFetch(editing ? `/api/sites/${site.id}` : '/api/sites', {
         method: editing ? 'PATCH' : 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        json: payload,
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(
-          body?.error?.message ??
-            `The site could not be ${editing ? 'saved' : 'added'} (${response.status}).`,
-        );
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setOpen(false);
       setError(null);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

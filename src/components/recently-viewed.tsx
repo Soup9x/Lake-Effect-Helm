@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Building2, Clock, Network } from 'lucide-react';
 import { useDismissable } from '@/lib/ui/use-dismissable';
+import { apiFetch } from '@/lib/ui/api';
 
 interface RecentItem {
   kind: 'client' | 'asset';
@@ -53,17 +54,14 @@ export function RecentlyViewed() {
     // Re-fetched on every open, not cached. The whole value of the list is that
     // it reflects where you have just been.
     setFailed(false);
-    try {
-      const response = await fetch('/api/workspace/recent', { headers: { accept: 'application/json' } });
-      if (!response.ok) {
-        setFailed(true);
-        return;
-      }
-      const body = (await response.json()) as { recent?: RecentItem[] };
-      setItems(body.recent ?? []);
-    } catch {
+    const result = await apiFetch<{ recent?: RecentItem[] } | undefined>('/api/workspace/recent', {
+      headers: { accept: 'application/json' },
+    });
+    if (!result.ok) {
       setFailed(true);
+      return;
     }
+    setItems(result.value?.recent ?? []);
   }
 
   return (

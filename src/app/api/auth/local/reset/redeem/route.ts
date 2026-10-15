@@ -38,7 +38,13 @@ export const POST = publicRoute(async (request) => {
 
   if (!result.ok) {
     return NextResponse.json(
-      { error: { code: 'reset_refused', message: result.problems.join('; '), problems: result.problems } },
+      {
+        error: {
+          code: 'reset_refused',
+          message: result.problems.join('; '),
+          details: { problems: result.problems },
+        },
+      },
       { status: 400 },
     );
   }

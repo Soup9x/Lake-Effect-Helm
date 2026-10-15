@@ -25,6 +25,7 @@ import { Button } from './ui/button';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
 import { changedFields, hasChanges, type FieldValue } from '@/lib/ui/form-diff';
+import { apiFetch } from '@/lib/ui/api';
 
 const STATUSES = ['active', 'inactive', 'retired', 'planned', 'maintenance'] as const;
 
@@ -91,22 +92,16 @@ export function AssetForm({
       const payload: Record<string, unknown> = { ...changes };
       if ('siteId' in changes) payload.siteId = values.siteId === '' ? null : values.siteId;
 
-      const response = await fetch(`/api/assets/${nodeId}`, {
+      const result = await apiFetch(`/api/assets/${nodeId}`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        json: payload,
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(body?.error?.message ?? `The changes could not be saved (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setOpen(false);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

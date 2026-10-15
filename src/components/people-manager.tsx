@@ -9,6 +9,7 @@ import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { FieldHint, Input, Label, Select } from './ui/field';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
+import { apiFetch, type ApiRequest } from '@/lib/ui/api';
 
 /**
  * Who has access to this tenant.
@@ -76,23 +77,15 @@ export function PeopleManager({
   const [busyRow, setBusyRow] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function call(url: string, init: RequestInit): Promise<boolean> {
+  async function call(url: string, init: ApiRequest): Promise<boolean> {
     setError(null);
-    try {
-      const response = await fetch(url, init);
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(payload?.error?.message ?? `That did not work (${response.status}).`);
-        return false;
-      }
-      router.refresh();
-      return true;
-    } catch {
-      setError('The request did not reach the server.');
+    const result = await apiFetch(url, init);
+    if (!result.ok) {
+      setError(result.message);
       return false;
     }
+    router.refresh();
+    return true;
   }
 
   async function changeRole(userId: string, roleKey: string) {
@@ -107,8 +100,7 @@ export function PeopleManager({
       : { orgScopeAll: false, orgScope: organizations[0] ? [organizations[0].id] : [] };
     await call(`/api/users/${userId}`, {
       method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ roleKey, ...scope }),
+      json: { roleKey, ...scope },
     });
     setBusyRow(null);
   }
@@ -286,26 +278,19 @@ function InviteForm({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const result = await apiFetch('/api/users', {
+        json: {
           email: email.trim(),
           roleKey,
           ...(name.trim() ? { name: name.trim() } : {}),
           ...(needsPinning ? { orgScopeAll: false, orgScope: [orgId] } : { orgScopeAll: true }),
-        }),
+        },
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(payload?.error?.message ?? `The invitation failed (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       onDone();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

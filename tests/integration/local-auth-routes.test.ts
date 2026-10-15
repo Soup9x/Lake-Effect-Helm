@@ -572,7 +572,7 @@ describe('POST /api/auth/local/reset/redeem', () => {
       post('/api/auth/local/reset/redeem', { token, password: 'short' }),
     );
     expect(rejected.status).toBe(400);
-    expect((await json(rejected)).error.problems.join(' ')).toMatch(/at least 12/);
+    expect((await json(rejected)).error.details.problems.join(' ')).toMatch(/at least 12/);
 
     // Still usable — otherwise one typo leaves somebody locked out holding a
     // spent code, during the outage this feature exists for.
@@ -629,7 +629,7 @@ describe('POST /api/auth/local/change-password', () => {
     );
     expect(response.status).toBe(422);
 
-    const problems = (await json(response)).error.problems as string[];
+    const problems = (await json(response)).error.details.problems as string[];
     expect(problems.length).toBeGreaterThan(1);
   });
 

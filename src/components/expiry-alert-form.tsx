@@ -19,6 +19,7 @@ import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
 import { Modal } from './ui/modal';
 import { LEAD_DAY_MAX, MAX_LEAD_DAYS, parseLeadDays, type ExpiryAlertSetting } from '@/lib/alerts/expiry';
+import { apiFetch } from '@/lib/ui/api';
 
 export function ExpiryAlertForm({
   setting,
@@ -53,21 +54,16 @@ export function ExpiryAlertForm({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/tenant/expiry-alerts', {
+      const result = await apiFetch('/api/tenant/expiry-alerts', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled, leadDays: parsed.leadDays }),
+        json: { enabled, leadDays: parsed.leadDays },
       });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        const message = (payload as { error?: { message?: string } } | null)?.error?.message;
-        setError(message ?? 'That could not be saved.');
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setOpen(false);
       router.refresh();
-    } catch {
-      setError('That could not be saved.');
     } finally {
       setBusy(false);
     }

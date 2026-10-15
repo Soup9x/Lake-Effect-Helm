@@ -95,7 +95,9 @@ export const POST = publicRoute(async (request) => {
         error: {
           code: 'policy_violation',
           message: `That password ${result.problems.join('; ')}.`,
-          problems: result.problems,
+          // Under `details`, where the envelope keeps structured data; the
+          // form lists them one per line.
+          details: { problems: result.problems },
         },
       },
       { status: 422 },

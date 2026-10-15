@@ -46,6 +46,7 @@ import {
   formatDateTime, fromDateTimeLocalInput, toDateTimeLocalInput,
 } from '@/lib/ui/format';
 import { cn } from '@/lib/ui/cn';
+import { apiFetch } from '@/lib/ui/api';
 
 const STATUS_TONE: Record<string, 'ok' | 'neutral' | 'warning' | 'critical' | 'brand'> = {
   completed: 'ok',
@@ -89,23 +90,16 @@ export function ChecklistRun({
     setBusy(key);
     setError(null);
     try {
-      const response = await fetch(url, {
+      const result = await apiFetch(url, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        json: payload,
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(body?.error?.message ?? `That did not work (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return false;
       }
       router.refresh();
       return true;
-    } catch {
-      setError('The request did not reach the server.');
-      return false;
     } finally {
       setBusy(null);
     }

@@ -6,7 +6,8 @@ import { KeyRound, Loader2, Plus } from 'lucide-react';
 import { Button } from './ui/button';
 import { Modal } from './ui/modal';
 import { useStepUp } from './step-up-dialog';
-import { toAttemptResult, withStepUp } from '@/lib/ui/step-up';
+import { withStepUp } from '@/lib/ui/step-up';
+import { apiFetch } from '@/lib/ui/api';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { parseTagDraft } from '@/lib/ui/tags';
 
@@ -157,11 +158,9 @@ export function NewSecretForm({
    * anywhere new. The `finally` below still clears it once, after both attempts
    * — the retry happens inside the try, which is why it can.
    */
-  async function attemptCreate() {
-    const response = await fetch('/api/secrets', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
+  function attemptCreate() {
+    return apiFetch('/api/secrets', {
+      json: {
         organizationId,
         label: label.trim(),
         value,
@@ -177,10 +176,8 @@ export function NewSecretForm({
         // so a mistyped seed refuses the whole request rather than leaving a
         // credential that claims a second factor it cannot compute.
         ...(totpSeed.trim() ? { totpSeed: totpSeed.trim() } : {}),
-      }),
+      },
     });
-    const payload = await response.json().catch(() => null);
-    return toAttemptResult<unknown>(response.ok, response.status, payload, (b) => b);
   }
 
   async function submit(event: React.FormEvent) {

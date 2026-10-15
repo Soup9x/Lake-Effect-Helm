@@ -6,6 +6,7 @@ import { NotebookPen, Pencil } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Textarea } from './ui/field';
+import { apiFetch } from '@/lib/ui/api';
 
 const LIMIT = 4000;
 
@@ -46,24 +47,18 @@ export function NotesCard({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(endpoint, {
+      const result = await apiFetch(endpoint, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
         // Emptied means cleared, not "an empty string". null is what the column
         // holds for "nothing written here", and it is what every reader checks.
-        body: JSON.stringify({ notes: value.trim() === '' ? null : value.trim() }),
+        json: { notes: value.trim() === '' ? null : value.trim() },
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(payload?.error?.message ?? `Saving failed (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setEditing(false);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

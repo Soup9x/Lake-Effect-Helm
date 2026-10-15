@@ -18,6 +18,7 @@ import { FieldHint, Input, Label, Select } from './ui/field';
 import { Badge, type BadgeTone } from './ui/badge';
 import { formatDateTime } from '@/lib/ui/format';
 import { syncLabel, syncState, syncTone } from '@/lib/ui/sync-health';
+import { apiFetch, type Feedback } from '@/lib/ui/api';
 
 export interface UnifiMapping {
   id: string;
@@ -85,8 +86,6 @@ const BLANK = {
   isActive: false,
   pollIntervalSeconds: 900,
 };
-
-type Feedback = { ok: boolean; message: string } | null;
 
 /*
  * HEALTH COMES FROM src/lib/ui/sync-health.ts, the same three calls the
@@ -213,26 +212,21 @@ export function UnifiSettingsCard({
     setIssued(null);
     setRegistrationNote(null);
     try {
-      const response = await fetch(`/api/network/mappings/${mapping.id}/webhook`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          attemptRegistration: true,
-          callbackUrl: `${callbackBase}/api/network/webhook/${mapping.id}`,
-        }),
-      });
-      const payload = (await response.json()) as {
+      const result = await apiFetch<{
         secret?: string;
         registration?: { attempted: boolean; ok: boolean; message: string | null };
-        error?: { message?: string };
-      };
-      if (!response.ok) {
-        setFeedback({
-          ok: false,
-          message: payload.error?.message ?? `Could not turn live events on (${response.status}).`,
-        });
+      }>(`/api/network/mappings/${mapping.id}/webhook`, {
+        method: 'PUT',
+        json: {
+          attemptRegistration: true,
+          callbackUrl: `${callbackBase}/api/network/webhook/${mapping.id}`,
+        },
+      });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
+      const payload = result.value;
       setIssued(payload.secret ?? null);
       setIssuedFor(mapping.id);
       setRegistrationNote(
@@ -241,8 +235,6 @@ export function UnifiSettingsCard({
           : null,
       );
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'Could not reach the server.' });
     } finally {
       setBusy(false);
     }
@@ -252,9 +244,9 @@ export function UnifiSettingsCard({
     setBusy(true);
     setFeedback(null);
     try {
-      const response = await fetch(`/api/network/mappings/${mappingId}/webhook`, { method: 'DELETE' });
-      if (!response.ok) {
-        setFeedback({ ok: false, message: `Could not turn live events off (${response.status}).` });
+      const result = await apiFetch(`/api/network/mappings/${mappingId}/webhook`, { method: 'DELETE' });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
       setIssued(null);
@@ -297,10 +289,9 @@ export function UnifiSettingsCard({
     setFeedback(null);
 
     try {
-      const response = await fetch('/api/network/mappings', {
+      const result = await apiFetch('/api/network/mappings', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           ...(form.id ? { id: form.id } : {}),
           organizationId: form.organizationId,
           name: form.name,
@@ -309,15 +300,11 @@ export function UnifiSettingsCard({
           isActive: form.isActive,
           pollIntervalSeconds: form.pollIntervalSeconds,
           ...(apiKey ? { apiKey } : {}),
-        }),
+        },
       });
 
-      const payload = (await response.json()) as { error?: { message?: string } };
-      if (!response.ok) {
-        setFeedback({
-          ok: false,
-          message: payload.error?.message ?? `Save failed (${response.status}).`,
-        });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
 
@@ -328,8 +315,6 @@ export function UnifiSettingsCard({
         message: 'Saved. Run a connection test before relying on it.',
       });
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'Could not reach the server.' });
     } finally {
       setBusy(false);
     }
@@ -339,19 +324,13 @@ export function UnifiSettingsCard({
     setBusy(true);
     setFeedback(null);
     try {
-      const response = await fetch(`/api/network/mappings/${id}/test`, { method: 'POST' });
-      const payload = (await response.json()) as TestResult & { error?: { message?: string } };
-      if (!response.ok) {
-        setFeedback({
-          ok: false,
-          message: payload.error?.message ?? `The test could not run (${response.status}).`,
-        });
+      const result = await apiFetch<TestResult>(`/api/network/mappings/${id}/test`, { method: 'POST' });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
-      setTested((prior) => ({ ...prior, [id]: payload }));
+      setTested((prior) => ({ ...prior, [id]: result.value }));
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'Could not reach the server.' });
     } finally {
       setBusy(false);
     }
@@ -367,10 +346,9 @@ export function UnifiSettingsCard({
     setBusy(true);
     setFeedback(null);
     try {
-      const response = await fetch('/api/network/mappings', {
+      const result = await apiFetch('/api/network/mappings', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           id: mapping.id,
           organizationId: mapping.organizationId,
           name: mapping.name,
@@ -379,14 +357,10 @@ export function UnifiSettingsCard({
           isActive: mapping.isActive,
           pollIntervalSeconds: mapping.pollIntervalSeconds,
           tlsPinnedSha256: sha256,
-        }),
+        },
       });
-      if (!response.ok) {
-        const payload = (await response.json()) as { error?: { message?: string } };
-        setFeedback({
-          ok: false,
-          message: payload.error?.message ?? `Could not pin it (${response.status}).`,
-        });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
       setTested((prior) => {
@@ -414,9 +388,9 @@ export function UnifiSettingsCard({
     setBusy(true);
     setFeedback(null);
     try {
-      const response = await fetch(`/api/network/mappings/${id}`, { method: 'DELETE' });
-      if (!response.ok) {
-        setFeedback({ ok: false, message: `Could not remove it (${response.status}).` });
+      const result = await apiFetch(`/api/network/mappings/${id}`, { method: 'DELETE' });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
       setEditing(null);
@@ -425,8 +399,6 @@ export function UnifiSettingsCard({
         message: 'Controller removed. The devices it found, and anything written on them, stayed.',
       });
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'The request did not reach the server. Nothing was changed.' });
     } finally {
       setBusy(false);
     }

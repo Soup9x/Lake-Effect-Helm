@@ -36,6 +36,7 @@ import { reorder } from '@/lib/workspace/widgets';
 import { STEP_LIMITS, validateSteps, type StepDraft } from '@/lib/sops/steps';
 import type { TemplateView } from '@/lib/sops/queries';
 import { formatDateTime, fromDateTimeLocalInput } from '@/lib/ui/format';
+import { apiFetch, type ApiRequest } from '@/lib/ui/api';
 
 export function ChecklistTemplateCard({
   sopId,
@@ -78,27 +79,23 @@ export function ChecklistTemplateCard({
     setError(null);
   }
 
-  async function send(url: string, method: string, payload?: unknown): Promise<boolean> {
+  async function send(
+    url: string,
+    method: NonNullable<ApiRequest['method']>,
+    payload?: unknown,
+  ): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(url, {
+      const result = await apiFetch(url, {
         method,
-        ...(payload === undefined
-          ? {}
-          : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }),
+        ...(payload === undefined ? {} : { json: payload }),
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(body?.error?.message ?? `That did not work (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return false;
       }
       return true;
-    } catch {
-      setError('The request did not reach the server.');
-      return false;
     } finally {
       setBusy(false);
     }
@@ -125,10 +122,8 @@ export function ChecklistTemplateCard({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/sop-runs', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const result = await apiFetch<{ runId?: string } | undefined>('/api/sop-runs', {
+        json: {
           sopId,
           organizationId,
           ...(runTitle.trim() === '' ? {} : { title: runTitle.trim() }),
@@ -138,21 +133,16 @@ export function ChecklistTemplateCard({
           // its inverse live together in lib/ui/format for the reason given
           // there, which is that slicing toISOString() moves the deadline.
           ...(dueAt === '' ? {} : { dueAt: fromDateTimeLocalInput(dueAt) }),
-        }),
+        },
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(body?.error?.message ?? `The run could not be started (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
-      const created = (await response.json().catch(() => null)) as { runId?: string } | null;
+      const created = result.value;
       setStarting(false);
       if (created?.runId) router.push(`/runs/${created.runId}`);
       else router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

@@ -6,6 +6,7 @@ import { ArrowDown, ArrowUp, GripVertical, LayoutDashboard, Plus, X } from 'luci
 import { useDismissable } from '@/lib/ui/use-dismissable';
 import { reorder, WIDGETS, WIDGET_KEYS, type WidgetKey } from '@/lib/workspace/widgets';
 import { cn } from '@/lib/ui/cn';
+import { apiFetch } from '@/lib/ui/api';
 import { Button } from './ui/button';
 
 /**
@@ -52,22 +53,16 @@ export function DashboardCustomise({ layout }: { layout: WidgetKey[] }) {
     const previous = widgets;
     setWidgets(next);
     setFailed(false);
-    try {
-      const response = await fetch('/api/workspace/dashboard', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ widgets: next }),
-      });
-      if (!response.ok) {
-        setWidgets(previous);
-        setFailed(true);
-        return;
-      }
-      startTransition(() => router.refresh());
-    } catch {
+    const result = await apiFetch('/api/workspace/dashboard', {
+      method: 'PUT',
+      json: { widgets: next },
+    });
+    if (!result.ok) {
       setWidgets(previous);
       setFailed(true);
+      return;
     }
+    startTransition(() => router.refresh());
   }
 
   function move(index: number, delta: number) {

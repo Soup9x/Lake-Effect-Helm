@@ -26,6 +26,7 @@ import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
 import { Modal } from './ui/modal';
 import { HEALTH_DAYS_MAX, HEALTH_DAYS_MIN, type HealthSetting } from '@/lib/health/window';
+import { apiFetch } from '@/lib/ui/api';
 
 export function HealthWindowForm({
   setting,
@@ -66,24 +67,19 @@ export function HealthWindowForm({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/tenant/documentation-health', {
+      const result = await apiFetch('/api/tenant/documentation-health', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           staleAfterDays: staleDays,
           unviewedAfterDays: unviewedDays,
-        }),
+        },
       });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        const message = (payload as { error?: { message?: string } } | null)?.error?.message;
-        setError(message ?? 'That could not be saved.');
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setOpen(false);
       router.refresh();
-    } catch {
-      setError('That could not be saved.');
     } finally {
       setBusy(false);
     }

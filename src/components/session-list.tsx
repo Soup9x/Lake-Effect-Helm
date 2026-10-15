@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Badge, type BadgeTone } from './ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { formatDateTimeLocal } from '@/lib/ui/format';
+import { apiFetch } from '@/lib/ui/api';
 
 export interface SessionRow {
   ref: string;
@@ -63,21 +64,12 @@ export function SessionList({
     setBusy(key);
     setError(null);
     try {
-      const response = await fetch('/api/account/sessions', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(payload?.error?.message ?? `Could not end that session (${response.status}).`);
+      const result = await apiFetch('/api/account/sessions', { json: body });
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(null);
     }

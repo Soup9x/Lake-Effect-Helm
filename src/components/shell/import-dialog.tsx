@@ -22,6 +22,7 @@ import { AlertTriangle, Check, FileUp, Loader2, Upload } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/modal';
 import { FieldHint } from '../ui/field';
+import { apiFetch } from '@/lib/ui/api';
 
 interface RowDetail {
   line: number;
@@ -80,22 +81,17 @@ export function ImportDialog({
 
   async function send(commit: boolean): Promise<ImportSummary | null> {
     if (!csv) return null;
-    const response = await fetch(`/api/organizations/${organizationId}/import`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ category, csv, commit }),
+    const result = await apiFetch<ImportSummary>(`/api/organizations/${organizationId}/import`, {
+      json: { category, csv, commit },
     });
-    const payload = (await response.json().catch(() => null)) as
-      | (ImportSummary & { error?: { message?: string; details?: ImportSummary } })
-      | null;
 
-    if (!response.ok) {
-      const details = payload?.error?.details;
+    if (!result.ok) {
+      const details = result.details as ImportSummary | undefined;
       if (details) setPreview(details);
-      setError(payload?.error?.message ?? 'The import could not be read.');
+      setError(result.message);
       return null;
     }
-    return payload as ImportSummary;
+    return result.value;
   }
 
   async function pick(file: File) {
@@ -111,17 +107,14 @@ export function ImportDialog({
       setCsv(text);
       // Preview immediately: making somebody press a second button before they
       // learn the file is unreadable is a step with no decision in it.
-      const response = await fetch(`/api/organizations/${organizationId}/import`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ category, csv: text, commit: false }),
+      const result = await apiFetch<ImportSummary>(`/api/organizations/${organizationId}/import`, {
+        json: { category, csv: text, commit: false },
       });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) {
-        setError(payload?.error?.message ?? 'That file could not be read.');
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
-      setPreview(payload as ImportSummary);
+      setPreview(result.value);
     } catch {
       setError('The file could not be read.');
     } finally {

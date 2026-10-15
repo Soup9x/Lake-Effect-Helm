@@ -31,6 +31,7 @@ import { ImageUp, Loader2, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { ClientAvatar } from './client-avatar';
 import { LOGO_CONTENT_TYPES, MAX_LOGO_BYTES } from '@/lib/logos/limits';
+import { apiFetch } from '@/lib/ui/api';
 
 export function LogoControl({
   organizationId,
@@ -70,19 +71,16 @@ export function LogoControl({
     try {
       const body = new FormData();
       body.set('file', file);
-      const response = await fetch(`/api/organizations/${organizationId}/logo`, {
+      const result = await apiFetch(`/api/organizations/${organizationId}/logo`, {
         method: 'POST',
         body,
       });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        setError(messageFrom(payload) ?? 'The logo could not be stored.');
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setVersion((n) => n + 1);
       router.refresh();
-    } catch {
-      setError('The logo could not be stored.');
     } finally {
       setBusy(null);
       // So choosing the same file twice in a row fires a change event again.
@@ -94,18 +92,15 @@ export function LogoControl({
     setError(null);
     setBusy('remove');
     try {
-      const response = await fetch(`/api/organizations/${organizationId}/logo`, {
+      const result = await apiFetch(`/api/organizations/${organizationId}/logo`, {
         method: 'DELETE',
       });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        setError(messageFrom(payload) ?? 'The logo could not be removed.');
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setVersion((n) => n + 1);
       router.refresh();
-    } catch {
-      setError('The logo could not be removed.');
     } finally {
       setBusy(null);
     }
@@ -172,11 +167,4 @@ export function LogoControl({
       )}
     </div>
   );
-}
-
-/** The route's own message, which names the field and the reason. */
-function messageFrom(payload: unknown): string | null {
-  if (!payload || typeof payload !== 'object') return null;
-  const error = (payload as { error?: { message?: unknown } }).error;
-  return typeof error?.message === 'string' ? error.message : null;
 }

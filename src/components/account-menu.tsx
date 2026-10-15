@@ -8,6 +8,7 @@ import { Badge } from './ui/badge';
 import { ThemeToggle } from './theme-toggle';
 import { initials } from '@/lib/ui/format';
 import { useDismissable } from '@/lib/ui/use-dismissable';
+import { apiFetch } from '@/lib/ui/api';
 
 /**
  * The signed-in account, top right, where every other tool in an MSP's day puts
@@ -57,21 +58,16 @@ export function AccountMenu({
   async function signOut() {
     setSigningOut(true);
     setFailed(false);
-    try {
-      const response = await fetch('/api/auth/local/logout', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-      });
-      if (!response.ok) {
-        setFailed(true);
-        setSigningOut(false);
-        return;
-      }
-      window.location.assign('/sign-in');
-    } catch {
+    const result = await apiFetch('/api/auth/local/logout', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    });
+    if (!result.ok) {
       setFailed(true);
       setSigningOut(false);
+      return;
     }
+    window.location.assign('/sign-in');
   }
 
   return (

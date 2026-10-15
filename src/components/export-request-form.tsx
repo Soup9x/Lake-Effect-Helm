@@ -6,6 +6,7 @@ import { FileDown, Loader2, ShieldAlert } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Label, Select, Textarea } from './ui/field';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { apiFetch } from '@/lib/ui/api';
 
 const KINDS = [
   ['client_offboarding', 'Client offboarding handover'],
@@ -51,22 +52,19 @@ export function ExportRequestForm({
     setError(null);
 
     startTransition(async () => {
-      const response = await fetch('/api/exports', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const result = await apiFetch('/api/exports', {
+        json: {
           organizationId,
           kind,
           format: 'zip',
           reason: reason.trim(),
           includeSecrets,
           ttlHours,
-        }),
+        },
       });
 
-      if (!response.ok) {
-        const body = (await response.json()) as { error?: { message?: string } };
-        setError(body.error?.message ?? 'The request was refused.');
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
 

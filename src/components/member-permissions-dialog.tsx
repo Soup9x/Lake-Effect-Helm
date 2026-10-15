@@ -35,6 +35,7 @@ import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { FieldHint, Input, Label, Select } from './ui/field';
 import { Modal } from './ui/modal';
+import { apiFetch } from '@/lib/ui/api';
 
 interface Override {
   permissionKey: string;
@@ -85,16 +86,12 @@ export function MemberPermissionsDialog({
 
   const load = useCallback(async () => {
     setError(null);
-    try {
-      const response = await fetch(`/api/users/${userId}/permissions`);
-      if (!response.ok) {
-        setError(`The permissions could not be loaded (${response.status}).`);
-        return;
-      }
-      setData((await response.json()) as Payload);
-    } catch {
-      setError('The request did not reach the server.');
+    const result = await apiFetch<Payload>(`/api/users/${userId}/permissions`);
+    if (!result.ok) {
+      setError(result.message);
+      return;
     }
+    setData(result.value);
   }, [userId]);
 
   // Loaded when the dialog opens rather than with the page: most rows are never
@@ -115,21 +112,16 @@ export function MemberPermissionsDialog({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`/api/users/${userId}/permissions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const result = await apiFetch(`/api/users/${userId}/permissions`, {
+        json: {
           permissionKey,
           granted,
           reason: reason.trim(),
           ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}),
-        }),
+        },
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(body?.error?.message ?? `The change could not be saved (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       reset();
@@ -145,20 +137,15 @@ export function MemberPermissionsDialog({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(
+      const result = await apiFetch(
         `/api/users/${userId}/permissions?permission=${encodeURIComponent(key)}`,
         { method: 'DELETE' },
       );
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(body?.error?.message ?? `The override could not be removed (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       await load();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

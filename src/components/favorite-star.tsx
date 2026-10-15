@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Star } from 'lucide-react';
 import { cn } from '@/lib/ui/cn';
+import { apiFetch } from '@/lib/ui/api';
 
 /**
  * Pin a client, or unpin it.
@@ -36,22 +37,16 @@ export function FavoriteStar({
     setPinned(next);
     setFailed(false);
 
-    try {
-      const response = await fetch('/api/workspace/favorites', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ organizationId, pinned: next }),
-      });
-      if (!response.ok) {
-        setPinned(!next);
-        setFailed(true);
-        return;
-      }
-      startTransition(() => router.refresh());
-    } catch {
+    const result = await apiFetch('/api/workspace/favorites', {
+      method: 'PUT',
+      json: { organizationId, pinned: next },
+    });
+    if (!result.ok) {
       setPinned(!next);
       setFailed(true);
+      return;
     }
+    startTransition(() => router.refresh());
   }
 
   return (
