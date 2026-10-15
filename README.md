@@ -2,404 +2,387 @@
 
 [![CI](https://github.com/Soup9x/Lake-Effect-Helm/actions/workflows/ci.yml/badge.svg)](https://github.com/Soup9x/Lake-Effect-Helm/actions/workflows/ci.yml)
 
-Multi-tenant documentation and credential platform for IT Managed Service
-Providers.
+Documentation and credential management for IT Managed Service Providers,
+deployed on premises. Clients, sites, assets, contacts, documents, flexible
+asset types, checklists and a credential vault, with tenant isolation and audit
+enforced by PostgreSQL itself rather than by application code.
 
-> **On-premises deployment.** The master key comes from HashiCorp Vault's
-> transit engine or a versioned key file on the Helm host — no cloud KMS. See
-> `docs/architecture/03-crypto-operations.md` §4.
+> **On-premises by design.** The master key lives in HashiCorp Vault's transit
+> engine or in a versioned key file on the Helm host. There is no cloud KMS.
+> See [`docs/architecture/03-crypto-operations.md`](docs/architecture/03-crypto-operations.md) §4.
+
+**Contents:**
+[What it does](#what-it-does) ·
+[How it is built](#how-it-is-built) ·
+[Deploying it](#deploying-it) ·
+[Development setup](#development-setup) ·
+[Environment variables](#environment-variables) ·
+[Dependencies](#dependency-management) ·
+[Database and migrations](#database-and-migrations) ·
+[Commands](#commands) ·
+[Testing](#testing) ·
+[Security model](#security-model) ·
+[Documentation](#documentation)
 
 ---
 
-## What is here
+## What it does
+
+- **Clients and their estate.** Organisations, sites, contacts, assets (devices,
+  networks, domains, certificates, applications …) linked as a graph, so "what
+  breaks if this fails" is a query.
+- **Credential vault.** Envelope-encrypted secrets with TOTP, autofill domain
+  rules, sensitivity levels, step-up re-authentication and justification for
+  critical credentials. Every reveal and copy is audited in the same database
+  transaction.
+- **Flexible asset types.** Technician-authored JSON Schema types, versioned,
+  validated as untrusted input.
+- **Documents and checklists.** Encrypted document storage per client;
+  procedures with runnable, assignable checklists and due-date reminders.
+- **Expiry tracking.** Certificates, domains, warranties and contracts, with
+  warnings at configurable lead times (Settings → Expiry warnings).
+- **Notifications.** Webhooks (generic, Slack, Teams, Discord), email through
+  your own relay, and an in-app inbox.
+- **Exports.** Client offboarding and audit bundles as PDF and JSON, encrypted
+  with a passphrase delivered out of band when they contain credentials.
+- **Network inventory.** UniFi controllers polled for devices and clients, with
+  certificate pinning and signed webhooks.
+- **Sign-in.** Local passwords (the break-glass path), Microsoft Entra ID, any
+  OpenID Connect provider, and RADIUS. All produce the same revocable session.
+- **Tamper-evident audit log.** Per-tenant SHA-256 hash chain, anchored to an
+  external receipt on a schedule.
+
+## How it is built
+
+Next.js (App Router) and PostgreSQL 16, in TypeScript, with a separate worker
+process for scheduled jobs.
 
 ```
 db/
-  sql/          PostgreSQL schema — the authority. Hand-authored, ordered.
-  schema/       Drizzle ORM definitions — the typed query layer.
-  tests/        SQL security suite (105 assertions) and fixtures.
+  sql/          The schema: ordered, append-only migrations. The authority.
+  schema/       Drizzle ORM definitions of the same tables, for typed queries.
+  tests/        SQL security and tamper-detection suite, and fixtures.
   migrate.ts    Migration runner: transactional, locked, checksum-guarded.
 src/
-  app/          Next.js App Router — 9 pages and 18 API routes, all dynamic.
-  components/   App shell, tenant switcher, reveal and export controls, and a
-                shadcn/ui-shaped primitive layer.
-  lib/
-    api/        Route wrapper, typed HTTP errors. The tenant-context choke point.
-    auth/       API tokens, identity resolution, Auth.js config.
-    db/         Per-role pools; withTenant() opens the RLS session context.
-    crypto/     KEK providers (Vault transit, on-prem key file), DEK cache,
-                AES-256-GCM envelope, TOTP, blind index.
-    secrets/    SecretService and key lifecycle over the audited SQL API.
-    graph/      Relation vocabulary, canonicalisation, the link engine.
-    flexible/   JSON Schema guard and record validator.
-    search/     Global search over helm.search().
-    exports/    Collection, JSON and PDF renderers, bundle format, storage.
-  workers/      Job runtime, expiry alerts, RMM/PSA sync, audit anchoring,
-                export rendering and expiry.
+  app/          Pages (app/(app)) and API routes (app/api).
+  components/   React components. ui/ holds the primitive set.
+  lib/          Server and shared code, one directory per concern:
+                api/ (route wrappers, errors, bounded body reading), auth/,
+                db/ (per-role pools, withTenant), crypto/, secrets/, exports/,
+                documents/, flexible/, graph/, notifications/, email/, unifi/ …
+  workers/      Job runtime and the scheduled jobs (alerts, exports, anchoring,
+                notifications, reminders, external checks, UniFi sync).
 tests/
-  unit/         259 tests — RFC 6238 vectors, envelope semantics, schema guard,
-                on-premises key custody, PDF structure, bundle encryption,
-                Argon2id and password policy, session cookie naming, and the
-                RADIUS codec against a real UDP responder.
-  integration/  359 tests against a real cluster as the real roles.
-                The UI was additionally driven end to end in a real browser;
-                see docs/architecture/06-web-interface.md §8.
-.github/
-  workflows/ci.yml      typecheck, build, SQL suite and integration tests on PG16
-docs/
-  architecture/01-security-model.md     guarantees, mechanisms, and limitations
-  architecture/02-data-model.md         schema shape and rejected alternatives
-  architecture/03-crypto-operations.md  how reads, writes and rotation work
-  architecture/04-api-layer.md          request flow, auth, untrusted schemas
-  architecture/05-workers-and-exports.md  jobs, worker identities, exports
-  architecture/06-web-interface.md      pages, tenant switching, secret handling
-  architecture/07-local-authentication.md  passwords, lockout, reset, the outage case
-  architecture/08-radius-authentication.md  the third door, and how it degrades
-  architecture/09-oidc-authentication.md   any OpenID Connect provider, and its custody
-  architecture/10-notifications.md      what leaves the building, and what cannot
-  architecture/11-network-integration.md   reading a UniFi controller, and its custody
-  deployment/docker-on-prem.md          step-by-step Docker install and backup/restore
-  deployment/on-premises.md             docker compose, keys, TLS, rotation runbook
-deploy/
-  setup.sh              turnkey on-prem install: preflight, secrets, up, bootstrap
-  init-secrets.sh       generate the master key ring and every password
-scripts/
-  check-drift.ts        Drizzle schema vs. live catalog
-  rotate-kek.ts         re-wrap tenant DEKs onto a new master key version
-  run-tests.sh          rebuild + fixtures + SQL security suite
-  rebuild-test-db.sh    drop and reapply every migration
+  unit/         No database needed.
+  integration/  Against a real Postgres, connecting as the real roles.
+scripts/        Bootstrap, key rotation, drift and migration checks, test DB.
+deploy/         Turnkey on-prem install: setup.sh, secrets, Postgres, Caddy.
+docs/           Architecture and deployment documents.
 ```
 
-### Migrations
+Three ideas carry most of the weight:
 
-| File | Contents |
-| --- | --- |
-| `0000_bootstrap` | Extensions, schemas, four database roles, RLS session-context API |
-| `0010_tenancy` | tenant → organization → site, contacts |
-| `0020_identity` | Users, Auth.js tables, RBAC, service accounts, API tokens |
-| `0030_session_context` | `helm.set_session_context()` — the only way into a tenant |
-| `0040_keys_and_secrets` | Wrapped per-tenant DEKs, AES-256-GCM envelopes |
-| `0050_asset_graph` | `asset_node` supertype, `asset_link`, relation inversion |
-| `0060_core_assets` | Devices, networks, IPs, domains, certificates, directories, contracts |
-| `0070_credentials` | Vault items, TOTP parameters, autofill domain matching |
-| `0075_graph_views` | Bi-directional edge views, bounded graph traversal |
-| `0080_flexible_assets` | Versioned JSON Schema templates, out-of-band secret fields |
-| `0090_sops` | Procedures, frozen versions, checklist runs |
-| `0100_expirations` | Unified expiry projection, severity, alert rules |
-| `0110_integrations` | RMM/PSA/Graph connections, sync runs, webhooks |
-| `0120_search` | `tsvector` index across all documentation |
-| `0130_attachments` | Files, notes, the export engine's ledger |
-| `0140_audit` | Partitioned, hash-chained, immutable audit log |
-| `0200_rls_policies` | RLS on every tenant table, with a catalog assertion |
-| `0210_secret_access_api` | The audited reveal/write API |
-| `0220_grants` | Privilege separation, with assertions |
-| `0230_key_rotation` | Rotation worker's read API — counts and ids, never ciphertext |
-| `0240_trigger_privileges` | Trigger functions that must run as definer, plus a catalog guard |
-| `0250_graph_walk_fix` | One row per reachable node; parallel-edge regression guard |
-| `0260_secret_write_handshake` | Version allocation under lock, without granting UPDATE |
-| `0270_authentication` | The three pre-context authentication functions, and a guard fixing their number |
-| `0280_onprem_kek` | On-premises KEK custody, `host_held_kek`, key-custody reporting |
-| `0290_worker_identities` | `helm_worker`, per-tenant worker service accounts, reveal-purpose pinning |
-| `0300_worker_queues` | Backlog enumerators, alert evaluation, sync lifecycle, chain anchoring |
-| `0310_export_engine` | Export request/approve/render/download, four-eyes and scope binding (approval removed in `0400`) |
-| `0320_export_approval_window` | The parked-approval window; `v_secret_metadata` without a join |
-| `0330_export_render_context` | Requester and approver names, without granting the worker `user:read` |
-| `0340_local_authentication` | Password hashes in `helm_auth`, lockout, reset tokens |
-| `0350_membership_authority` | Who may grant which role, enforced in the database |
-| `0360_radius_authentication` | RADIUS config and session tracking; `radius_config` readable only by `helm_auth` |
-| `0370_workspace_and_notes` | Per-user favourites, recently viewed, dashboard layout, item notes |
-| `0380_search_tags_and_archive` | Trigram search, tags, archive state |
-| `0390_internal_only_rls` | `is_internal_only` enforced in RLS rather than in application code |
-| `0400_single_approver_exports` | Two-person approval on credential exports removed; `credential.client_visible` dropped |
-| `0405_auth_method_oidc` | One statement: `auth_method` gains `oidc`. Separate because a new enum value cannot be used in the transaction that adds it |
-| `0410_oidc_provider` | Generic OIDC provider config and its enveloped client secret, behind `helm_auth` |
-| `0420_outbound_notifications` | Webhook destinations with per-platform payloads; the URL moved behind an envelope and the payload allow-list added |
-| `0900_seed_system_data` | Roles and permissions |
-| `0910_worker_seed` | Worker roles, their permissions, and per-tenant identities |
-
----
-
-## Design commitments
-
-A handful of decisions that everything else follows from. The reasoning is in
-`docs/architecture/01-security-model.md`.
-
-**Secrets cannot be read without being logged.** `secret_version` has RLS on and
-no `SELECT` policy; `helm_app` has no privilege on it. The only route to
-ciphertext is `helm.reveal_secret()`, which writes the audit event in the same
-transaction. Not "the application logs access" — the database cannot hand out a
-secret without recording it.
-
-**Cross-tenant references are structurally impossible.** Composite
-`(id, tenant_id)` foreign keys mean a row cannot point at another tenant's parent
-even with every RLS policy dropped.
-
-**Unset context means no access.** Reads return zero rows, writes raise. A
-connection that skipped `set_session_context()` sees nothing.
-
-**The audit log is tamper-evident.** Per-tenant SHA-256 chain. The test suite
-proves detection of row edits, row deletions, and re-hashed forgeries.
-
-**`db/sql` is the schema authority, not the ORM.** RLS policies, `SECURITY
-DEFINER` routines, partitioning and column grants cannot be expressed in the
-Drizzle DSL. `pnpm db:drift` keeps the TypeScript honest.
-
-**Plaintext is hard to leak by accident.** Every decrypted value is a
-`SecretValue`: it redacts in `String()`, template literals, `JSON.stringify` and
-`console.log`. Reaching the real value takes an explicit `.expose()` that shows
-up in a diff.
-
-**Key rotation cannot revert a credential.** If a technician changes a password
-while the rotation worker holds a decrypted copy, the database refuses the stale
-write and the worker skips.
-
-**A route cannot query without a tenant context.** `tenantRoute()` hands the
-handler a transaction that already has one and no way to reach a pool. Declared
-permissions produce a clear error; RLS is what actually enforces them.
-
-**The master key never has to be a cloud service.** Helm runs on-premises.
-`vault-transit` keeps the KEK inside HashiCorp Vault — Helm holds a token, not a
-key, so revoking it stops decryption and every unwrap is in Vault's audit log.
-`local-keyfile` holds a mode-0400 versioned key ring on the host instead, which
-is simpler and honestly weaker: root on that box can decrypt the database
-offline. `tenant_data_key.host_held_kek` records which case each key is, so a
-breach assessment is a query.
-
-**Rotating the master key is not an outage.** The key ring is versioned, so old
-DEKs stay openable while `pnpm helm:rotate-kek` moves them onto the new version.
-The DEK does not change, so no field ciphertext is touched. The job is
-idempotent, reports what it could not re-wrap rather than skipping it, and exits
-non-zero — because the next thing the operator does is delete a key.
-
-**No background worker holds a general reveal capability.** Each job runs as its
-own per-tenant service account, pinned to the reveal purposes that job actually
-has. For `integration` and `export` the scope is re-derived from the database on
-every call — the secret must be a live integration credential, or inside a live
-approved export. A compromised sync worker gets the RMM keys it was always going
-to need; it does not get the vault.
-
-**The request role cannot enumerate tenants.** Background jobs connect as
-`helm_worker`, a member of `helm_app` with the same tables and the same RLS,
-plus EXECUTE on the cross-tenant backlog functions. The membership runs one way,
-and a migration guard asserts it: nothing reachable from an HTTP request can ask
-which tenants exist.
-
-**Worker mutual exclusion is a Postgres advisory lock.** Two app servers both
-run the job runtime, and two concurrent syncs against one connection is how
-duplicate assets get created. Making that correctness depend on Redis — on a
-deployment where nobody is monitoring Redis — would be the wrong trade.
-
-**One alert per expiry, not four.** Of the lead-day thresholds an expiry has
-crossed and not yet fired, only the most urgent is delivered; the rest are
-recorded as suppressed so they can never fire later. A team that gets four
-alerts for one certificate stops reading alerts.
-
-**A credential export needs two people, and the approval is bound to what they
-read.** Approving records a digest of the scope; the render refuses if the scope
-changed since. Every credential in the bundle is decrypted through the audited
-path individually, and anything the worker could not decrypt is named on the
-cover page rather than quietly missing.
-
-**An export bundle's passphrase is stored nowhere.** Not in the database, not in
-the audit log. The file at rest is useless to anyone who has only the file.
-
-**Secret material never reaches a server component.** Revealing a credential is
-a client-side fetch, because server-rendering it would put the plaintext in the
-RSC payload, the data cache and any proxy in between. It auto-hides, and copying
-is a separate audited call rather than a local read of what is already on screen.
-
-**Technician-authored schemas are treated as untrusted code.** A structural scan
-plus an empirical cost probe reject patterns that backtrack catastrophically —
-because a length limit does not: `^((a)+)+$` against 31 characters runs for over
-a minute.
-
----
+1. **`db/sql` is the schema authority.** Row-level security policies,
+   `SECURITY DEFINER` functions, grants and partitioning live in SQL. The
+   Drizzle definitions mirror the tables for typing, and `pnpm db:drift` checks
+   they still agree.
+2. **A request cannot reach tenant data without a tenant context.** API routes
+   are wrapped in `tenantRoute()` (handler gets a transaction with the RLS
+   session context already set) or `serviceRoute()` (handler gets the caller's
+   full context to pass to a service that opens its own transaction).
+   `publicRoute()` is for pre-authentication endpoints and gets no database at
+   all. See [`docs/architecture/04-api-layer.md`](docs/architecture/04-api-layer.md).
+3. **Every subsystem connects as its own database role.** `helm_app` (requests),
+   `helm_auth` (sign-in), `helm_worker` (jobs), `helm_key_admin` (key rotation),
+   `helm_auditor` (read-only audit). None has `BYPASSRLS`.
 
 ## Deploying it
 
-One command, from a clone on the target host. It checks Docker and Compose
-versions and host permissions, generates the master key ring and every
-password, asks for the address people will type, builds and starts the stack,
-and runs the first bootstrap:
+On a fresh Linux host with Docker and Compose, from a clone of this repository:
 
 ```bash
 sudo ./deploy/setup.sh
 ```
 
-It is safe to re-run: a second run detects what is already done, skips it, and
-picks up where the first stopped. It never overwrites an existing master key.
-Every prompt can be supplied as a flag (`--host`, `--tenant`, `--slug`,
-`--admin-email`, `--admin-name`, `--yes`) so it runs unattended from a
-provisioning tool.
+It checks prerequisites, generates the master key ring and every database
+password, asks for the hostname people will use, builds and starts the stack
+(Postgres, web, worker, Caddy for TLS), applies the migrations, and creates the
+first tenant and administrator. It is safe to re-run and never overwrites an
+existing master key. Every prompt has a flag (`--host`, `--tenant`, `--slug`,
+`--admin-email`, `--admin-name`, `--yes`) for unattended installs.
 
-[`docs/deployment/docker-on-prem.md`](docs/deployment/docker-on-prem.md) is the
-install guide: a Quick Start built on that script, then the same five steps by
-hand, TLS, backup and restore, and troubleshooting.
-[`docs/deployment/on-premises.md`](docs/deployment/on-premises.md) is the
-operational runbook — what Helm needs from *any* environment, where the master
-key lives, how to rotate it, and what to back up. Nothing here requires the
-bundled Compose stack; it is the shortest path, not the only one.
+- [`docs/deployment/docker-on-prem.md`](docs/deployment/docker-on-prem.md):
+  the install guide, covering the same steps by hand, TLS, backup and restore,
+  and troubleshooting.
+- [`docs/deployment/on-premises.md`](docs/deployment/on-premises.md):
+  the operational runbook for any environment: key custody, KEK rotation, what
+  to back up.
 
-Three things are not optional and are the usual causes of a failed first
-install:
+Three things cause most failed installs:
 
-* **TLS.** The session cookie is `__Secure-` prefixed in production, so sign-in
-  cannot work over plain http. Caddy is in the stack for this.
-* **The master key file must not be readable by group or other.** Helm refuses
-  to start otherwise — including from the 0444 that `docker secret` produces by
-  default. It must also be owned by whoever Helm runs as: uid 10001 in the
-  bundled images, your service account otherwise. `init-secrets.sh` gets both
-  right for the Compose stack.
-* **Decide your sign-in story before you invite anybody.** Entra and local
-  passwords both work, and both produce the same revocable session. Keep a
-  local password on at least one administrator — it is what gets you in when
-  Entra cannot be reached, which is the outage where you most need a client's
+- **TLS is required.** The session cookie is `__Secure-` prefixed in
+  production, so sign-in cannot work over plain http. Caddy handles it.
+- **The master key file must be mode 0400** and owned by the user Helm runs as
+  (uid 10001 in the bundled images). Helm refuses to start otherwise.
+  `init-secrets.sh` sets both.
+- **Keep a local password on at least one administrator.** It is how you get in
+  when the identity provider is down, which is exactly when you need a client's
   credentials.
 
----
+## Development setup
 
-## Getting started
+You need **Node 26+**, **pnpm 10** and **PostgreSQL 16+**.
 
-Requires PostgreSQL 16+ (`security_invoker` views), Node 26+, pnpm 10+.
+**1. Toolchain and dependencies.** The pnpm version is pinned in
+`package.json`'s `packageManager` field; corepack provides it.
 
 ```bash
+corepack enable
 pnpm install
-cp .env.example .env.local     # then fill it in
-
-# Apply the schema. Migrations run as a superuser — every table is FORCE ROW
-# LEVEL SECURITY, which applies to the table owner too, and the schema's
-# SECURITY DEFINER functions run as whoever owns them. A migrating role that
-# RLS applies to owns functions that silently match zero rows. The runner
-# refuses rather than letting that happen.
-DATABASE_URL_MIGRATOR=postgresql://postgres@host/helm pnpm db:migrate
-
-# Verify
-pnpm db:drift                  # TypeScript schema vs. live catalog
-pnpm typecheck
+pnpm hooks:install        # optional: the pre-commit check for edited migrations
 ```
 
-`0000_bootstrap.sql` creates the four database roles without passwords. Set them
-out of band, or use IAM/certificate authentication:
+**2. A database.** Migrations run as a superuser: every table is
+`FORCE ROW LEVEL SECURITY`, and `SECURITY DEFINER` functions must be owned by a
+role RLS does not apply to.
+
+```bash
+createdb helm
+DATABASE_URL_MIGRATOR=postgresql://postgres@localhost/helm pnpm db:migrate
+```
+
+`0000_bootstrap.sql` and `0290_worker_identities.sql` create the runtime roles
+without passwords. Give the five that connect a password, or use certificate
+authentication:
 
 ```sql
 ALTER ROLE helm_app       PASSWORD '...';
 ALTER ROLE helm_auth      PASSWORD '...';
+ALTER ROLE helm_worker    PASSWORD '...';
 ALTER ROLE helm_key_admin PASSWORD '...';
 ALTER ROLE helm_auditor   PASSWORD '...';
 ```
 
-### Running the tests
+**3. Configuration.**
 
 ```bash
-pnpm verify        # typecheck + 244 vitest tests + schema drift
-pnpm test:sql      # 142 SQL assertions including tamper detection
-pnpm build         # every route must compile and be dynamic
+cp .env.example .env.local
 ```
 
-Both need a throwaway cluster they can drop and rebuild; point them at one with
-`PGSOCK` / `PGPORT` / `PGDATABASE`:
+Fill in the five `DATABASE_URL*` connection strings and `AUTH_SECRET`
+(`openssl rand -base64 32`). For development the simplest key custody is:
 
 ```bash
-PGSOCK=/var/run/postgresql PGPORT=5432 pnpm verify
+HELM_KEK_PROVIDER=local-dev
+HELM_LOCAL_KEK_B64=$(openssl rand -base64 32)
 ```
 
-Integration tests connect as the real non-superuser roles. That is not
-thoroughness for its own sake: RLS policies, `SECURITY DEFINER` boundaries and
-grants do not exist in a mock, and three of the bugs found during Step 2 were
-invisible to any test that did not commit against real roles.
+`local-dev` is refused when `NODE_ENV=production`. To skip signing in while
+developing, set `HELM_DEV_SESSION_EMAIL` to an existing user's address; Helm
+refuses to start with it set in production.
 
----
+**4. The first tenant and administrator.** `next dev` reads `.env.local` by
+itself; the command-line scripts do not, so export it first:
 
-## Roles
+```bash
+set -a; . ./.env.local; set +a
+pnpm helm:bootstrap --tenant "Northwind IT" --slug northwind \
+                    --admin-email you@example.com --admin-name "Your Name"
+```
+
+This prints a one-time local password for the administrator.
+
+**5. Run it.**
+
+```bash
+pnpm dev                  # the web app on http://localhost:3000
+pnpm helm:worker          # the scheduled jobs, in a second terminal
+```
+
+## Environment variables
+
+[`.env.example`](.env.example) is the authoritative list, with a paragraph on
+each. `tests/unit/env-docs.test.ts` fails CI if the code reads a variable that
+file does not document, or the file documents one nothing reads. Integer
+settings are validated, so a malformed value stops Helm with the variable's
+name rather than being treated as zero.
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | yes | `helm_app`, the request role |
+| `DATABASE_URL_AUTH` | yes | `helm_auth`, sign-in and sessions |
+| `DATABASE_URL_WORKER` | worker | `helm_worker`, the scheduled jobs |
+| `DATABASE_URL_KEY_ADMIN` | rotation | `helm_key_admin`, for `pnpm helm:rotate-kek` |
+| `DATABASE_URL_AUDITOR` | audit | `helm_auditor`, read-only audit access |
+| `DATABASE_URL_MIGRATOR` | migrations | A superuser, used by `pnpm db:migrate` and bootstrap only |
+| `DATABASE_POOL_MAX`, `DATABASE_STATEMENT_TIMEOUT_MS` | no | Pool size per role (default 20) and statement timeout (15 s). The worker runs at most half the pool's worth of jobs at once. |
+| `HELM_KEK_PROVIDER` | yes | `vault-transit`, `local-keyfile` or `local-dev` |
+| `HELM_KEK_FILE` / `HELM_KEK_B64`, `HELM_KEK_ID` | local-keyfile | The versioned key ring (a 0400 file is strongly preferred over the variable) and its label |
+| `VAULT_ADDR`, `HELM_VAULT_TRANSIT_MOUNT`, `HELM_VAULT_TRANSIT_KEY`, `VAULT_ROLE_ID`, `VAULT_SECRET_ID` (or `VAULT_TOKEN`), `VAULT_NAMESPACE`, `VAULT_APPROLE_MOUNT`, `HELM_VAULT_TIMEOUT_MS` | vault-transit | Vault transit custody; AppRole recommended |
+| `HELM_LOCAL_KEK_B64` | local-dev | A development-only key |
+| `HELM_DEK_CACHE_TTL_SECONDS` | no | How long an unwrapped data key stays in memory (300) |
+| `HELM_BLIND_INDEX_KEY_B64` | UniFi | Separate key for blind indexes; required for network sync, optional otherwise |
+| `AUTH_SECRET` | yes | Auth.js signing secret |
+| `HELM_PUBLIC_URL`, `AUTH_URL` | yes | The address people use; links in mail and reset codes are built from it |
+| `AUTH_TRUST_HOST`, `HELM_TRUSTED_PROXY_HOPS` | no | Proxy trust. Hops must match the proxies in front of Helm (1 behind the bundled Caddy) |
+| `AUTH_MICROSOFT_ENTRA_ID_*` | no | Entra ID sign-in. Generic OIDC and RADIUS are configured in Settings, not here |
+| `NODE_EXTRA_CA_CERTS` | no | A private CA for Vault, an IdP or a mail relay |
+| `HELM_RESET_DELIVERY_URL` | no | Where self-service reset links are posted. Without it self-service reset is off, and administrator-issued codes still work |
+| `HELM_DOCUMENT_DIR`, `HELM_DOCUMENT_MAX_BYTES` | yes / no | Encrypted document storage, and the upload limit (50 MB) |
+| `HELM_EXPORT_DIR`, `HELM_EXPORT_PASSPHRASE_DIR` | yes / for credential exports | Export bundles, and where passphrases are written for an operator to hand over. Keep them on different backups |
+| `HELM_AUDIT_ANCHOR_DIR` | recommended | Where audit-chain anchor receipts are written. Without it the anchoring job has nowhere to record them and says so in its log |
+| `HELM_LOG_LEVEL`, `HELM_MAINTENANCE_ACTOR_ID`, `HELM_MIGRATE_VERBOSE` | no | Worker logging, attribution for shell maintenance jobs, migration output |
+| `HELM_DEV_SESSION_EMAIL` | dev only | Authentication bypass for development; refused in production |
+
+The Compose stack adds a few variables of its own (database passwords, ports,
+the TLS directive); they are documented in
+[`docs/deployment/docker-on-prem.md`](docs/deployment/docker-on-prem.md) §3.
+
+## Dependency management
+
+- **pnpm, pinned.** `packageManager` in `package.json` fixes the pnpm version,
+  and corepack, CI and the Dockerfile all honour it. Install with
+  `pnpm install --frozen-lockfile` anywhere that is not a developer adding a
+  dependency.
+- **Node, pinned in one place.** `.nvmrc` is read by CI; `engines` and the
+  Dockerfile's base image say the same version.
+- **Native and build scripts are opt-in.** `pnpm.onlyBuiltDependencies` allows
+  esbuild's install script and nothing else.
+- **Overrides are deliberate.** `pnpm.overrides` forces a patched esbuild
+  under drizzle-kit, and `peerDependencyRules` accepts nodemailer 10 where
+  Auth.js declares an older peer range. Remove either when the reason has gone.
+  (`package.json` cannot hold comments, so the reason belongs in the commit
+  that adds one.)
+- **Updates.** Dependabot opens grouped monthly updates for npm, GitHub Actions
+  and Docker base images, and security updates as soon as an advisory lands.
+  CI's audit job fails on a moderate or higher advisory. GitHub Actions are
+  pinned to commit SHAs, which Dependabot keeps current.
+- **Runtime vs. dev.** `tsx` is a runtime dependency on purpose: the migrate,
+  bootstrap and rotation containers run TypeScript directly. Everything used
+  only to build or test belongs in `devDependencies`, which keeps it out of
+  the production images (CI checks that the migrate image carries no test
+  toolchain).
+
+## Database and migrations
+
+- **Append-only.** A migration that has run anywhere is never edited or
+  deleted. Change something with a new migration. `db/sql/MANIFEST.sha256`
+  records every file's checksum; `pnpm db:check-migrations` (CI and the
+  pre-commit hook) refuses an edited or missing one, and `db/migrate.ts`
+  refuses at deploy time if the database ran different bytes.
+- **Adding one.** Take the next free number below `0900` (the `09xx` range is
+  seed data and stays last), write it with a header saying why, and end it with
+  a guard (`DO $$ … RAISE EXCEPTION …`) that asserts what it set up. Then:
+  ```bash
+  pnpm db:check-migrations --update     # records the new file's checksum
+  ```
+  If it adds or changes columns, update `db/schema/` to match; `pnpm db:drift`
+  compares the two against a live database.
+- **Superseded migrations stay.** Some early behaviour was later replaced: the
+  two-person export approval of `0310`/`0320` (removed in `0400`), notes
+  (`0370` → `0440`), topology sync (`0570` → `0580`). The files remain because
+  databases have run them.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `pnpm dev` / `pnpm build` / `pnpm start` | Next.js development server, production build, production server |
+| `pnpm helm:worker` / `pnpm helm:worker:once` | The job runtime; `--once` runs every job once and exits non-zero if any failed |
+| `pnpm build:worker` | Bundle the worker to `dist/worker.mjs` (what the image runs) |
+| `pnpm db:migrate` / `pnpm db:migrate:status` | Apply pending migrations / list them |
+| `pnpm db:check-migrations` | Compare `db/sql` with `MANIFEST.sha256` |
+| `pnpm db:drift` | Compare the Drizzle schema with a live database |
+| `pnpm helm:bootstrap` | Create the first tenant, administrator and data key |
+| `pnpm helm:rotate-kek` | Re-wrap tenant data keys onto the current master key version |
+| `pnpm typecheck` | `tsc --noEmit` |
+| `pnpm test` / `test:unit` / `test:integration` / `test:sql` | The test suites (below) |
+| `pnpm verify` | Typecheck, migration check, every vitest suite, drift |
+
+## Testing
+
+```bash
+pnpm test:unit                       # no database needed
+PGHOST=/run/pgt PGPORT=5433 pnpm test:sql            # rebuilds a throwaway DB
+PGHOST=/run/pgt PGPORT=5433 pnpm test:integration
+```
+
+The SQL and integration suites **drop and recreate a database called `helm`**.
+Point them at a throwaway cluster (`PGHOST`, `PGPORT`, `PGSUPERUSER`), never a
+deployment; `scripts/rebuild-test-db.sh` refuses to run in a checkout that has a
+deployment's `.env`. Run `pnpm test:sql` first on a fresh cluster: it creates
+the roles the integration suite connects as.
+
+Integration tests connect as the real non-superuser roles, because RLS
+policies, `SECURITY DEFINER` boundaries and grants do not exist in a mock.
+[`docs/testing.md`](docs/testing.md) describes what each suite covers, how to
+write a test for a new route or job, and which areas still need tests.
+
+## Security model
+
+The reasoning is in
+[`docs/architecture/01-security-model.md`](docs/architecture/01-security-model.md).
+In short:
+
+- **Secrets cannot be read without being logged.** No role can `SELECT`
+  ciphertext. The only way to it is `helm.reveal_secret()`, which writes the
+  audit row in the same transaction.
+- **Unset context means no access.** A connection that never set a tenant
+  context sees zero rows and cannot write.
+- **Cross-tenant references are impossible.** Composite `(id, tenant_id)`
+  foreign keys, so a row cannot point at another tenant's parent even with
+  every policy dropped.
+- **Authority follows rank, in the database.** Nobody can grant, revoke or
+  reset the password of somebody whose role outranks theirs (`0350`, `0710`),
+  and client-side roles can never hold an MSP-only permission.
+- **The audit log is tamper-evident.** Per-tenant hash chain. The suite proves
+  that edited, deleted and re-hashed rows are detected.
+- **Plaintext is hard to leak by accident.** Decrypted values are `SecretValue`
+  objects that redact in strings, JSON and logs; reaching the value takes an
+  explicit `.expose()`.
+- **Revealing never happens server-side.** A credential is fetched by the
+  browser on request and never rendered into a page or its payload.
+- **No background job holds a general reveal capability.** Each job runs as its
+  own per-tenant service account, pinned to the reveal purposes it needs.
+- **Credential exports are detected, not approved.** Two-person approval was
+  removed in `0400`. Every credential export and download is audited and
+  notifies whoever subscribes to export activity. The bundle is encrypted, and
+  its passphrase is stored nowhere and delivered separately.
+- **Technician-authored schemas are untrusted code.** Regular expressions are
+  scanned and cost-probed for catastrophic backtracking before a type is
+  accepted.
+
+### Roles
 
 | Role | Rank | Scope | Notable |
 | --- | --- | --- | --- |
 | `super_admin` | 100 | Tenant-wide | Everything, including key rotation |
-| `tier3` | 80 | Tenant-wide | Schemas and integrations |
+| `tier3` | 80 | Tenant-wide | Schemas, integrations, people |
 | `tier2` | 60 | Tenant-wide | Full documentation and credential access |
 | `tier1` | 40 | Tenant-wide | Reveal is permitted but audited and gated |
 | `client_admin` | 30 | Own organisation | `secret:read` but **not** `secret:reveal` |
 | `client_read_only` | 20 | Own organisation | No secret reveal at all |
-| `api_service` | 10 | Per service account | Effective = role ∩ token scopes |
+| `api_service` | 10 | Per service account | Effective permissions = role ∩ token scopes |
 
-A client-side role can never hold an MSP-only permission — enforced by trigger on
-every grant, and asserted across the whole seeded set.
+## Documentation
 
----
+| Document | Covers |
+| --- | --- |
+| [01 Security model](docs/architecture/01-security-model.md) | Guarantees, mechanisms and known limitations |
+| [02 Data model](docs/architecture/02-data-model.md) | Schema shape and rejected alternatives |
+| [03 Crypto operations](docs/architecture/03-crypto-operations.md) | Reads, writes, key custody and rotation |
+| [04 API layer](docs/architecture/04-api-layer.md) | Request flow, route wrappers, authentication, errors |
+| [05 Workers and exports](docs/architecture/05-workers-and-exports.md) | Job runtime, worker identities, alerts, exports |
+| [06 Web interface](docs/architecture/06-web-interface.md) | Pages, tenant switching, secret handling in the browser |
+| [07 Local authentication](docs/architecture/07-local-authentication.md) | Passwords, lockout, reset, the outage case |
+| [08 RADIUS](docs/architecture/08-radius-authentication.md) | The third sign-in path and how it degrades |
+| [09 OIDC](docs/architecture/09-oidc-authentication.md) | Any OpenID Connect provider, and its custody |
+| [10 Notifications](docs/architecture/10-notifications.md) | What leaves the building, and what cannot |
+| [11 Network integration](docs/architecture/11-network-integration.md) | UniFi polling, pinning and webhooks |
+| [Docker install](docs/deployment/docker-on-prem.md) · [Runbook](docs/deployment/on-premises.md) | Installing and operating Helm |
+| [Testing](docs/testing.md) | The suites, writing tests, and the gaps |
+| [IT Glue parity](docs/itg-parity.md) | Historical feature plan and its decisions log |
 
-## Using the engine
+## License
 
-```ts
-const secrets = new SecretService({ dekCache, blindIndex });
-
-// Write. The version is allocated under a row lock and bound into the AAD.
-const { secretId } = await secrets.create(
-  { tenantId, actorId },
-  { organizationId, kind: 'password', label: 'ACME Domain Admin',
-    sensitivity: 'critical' },
-  plaintext,
-);
-
-// Read. Throws SecretAccessDeniedError on refusal — after the denial is
-// committed to the audit log.
-const revealed = await secrets.reveal({ tenantId, actorId }, secretId, {
-  reason: 'INC-4471 emergency domain controller restore',
-});
-revealed.value.use((password) => connectTo(host, password));
-
-// Link. Idempotent in either direction.
-await links.link({ tenantId, actorId }, {
-  sourceNodeId: firewallId, relation: 'secures', targetNodeId: networkId,
-});
-
-// What breaks if this fails?
-const blast = await links.impactOf({ tenantId, actorId }, domainControllerId);
-```
-
-## The API
-
-Fourteen routes, all tenant-scoped through one wrapper. See
-`docs/architecture/04-api-layer.md` for the full table and the reasoning.
-
-```ts
-// Every route looks like this. The handler is given a transaction that already
-// has the RLS session context set, and no way to reach a pool without one.
-export const GET = tenantRoute(
-  async ({ tx, session, identity }) => {
-    return search(tx, { query: 'acme-fw-01' });
-  },
-  { permissions: ['asset:read'] },
-);
-```
-
-```bash
-# Reveal is a POST: a GET would land in browser history, proxy logs and Referer
-# headers, for the one endpoint that hands out plaintext credentials.
-curl -X POST https://helm.example.com/api/secrets/$ID/reveal \
-  -H 'content-type: application/json' \
-  -d '{"reason":"INC-4471 emergency domain controller restore"}'
-```
-
-## Next steps
-
-The engine, the API, the web interface, the three workers, the export engine
-and the on-premises deployment are all in place; `docs/architecture/` covers
-each in turn.
-
-What is deliberately left open:
-
-* **RMM/PSA adapters are configuration, not hand-written clients.** The sync
-  engine is complete and vendor-independent — `external_identity` correlation,
-  manual-edit protection, payload hashing, backoff. Vendor specifics live in
-  `integration_connection.config` via a configurable REST adapter, with
-  `registerProvider()` for the cases that need a real client. Writing six
-  clients against six APIs with no live tenant of any of them produces six
-  plausible-looking files wrong in six different ways.
-* **Audit anchoring writes a file receipt.** Pointing it at an append-only
-  store — object lock, a WORM share, a timestamping authority — is a
-  deployment decision, and the runbook says what the default does and does not
-  prove.
-* **Self-service password reset needs a delivery channel.** Without
-  `HELM_RESET_DELIVERY_URL` the endpoint refuses rather than accepting the
-  request and dropping the mail. The administrator-issued path works with no
-  mail server at all, which is the one that matters during an outage.
+Proprietary. See [LICENSE](LICENSE).

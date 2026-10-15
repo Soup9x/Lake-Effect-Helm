@@ -2,8 +2,9 @@
 
 Everything in the first four documents happens inside a request. This one covers
 the two subsystems that do not: the jobs that run on a schedule, and the engine
-that produces a file containing a client's documentation — and, when a second
-person has approved it, their credentials.
+that produces a file containing a client's documentation — and, when the
+requester holds the permission for it, their credentials. (Two-person approval
+on credential exports was removed in `0400`; §7 explains what replaced it.)
 
 ---
 

@@ -534,13 +534,28 @@ reliably end up matching `example.com.attacker.tld`. The extension sends the
 browser-reported origin, never a page-supplied string, and the server resolves
 candidates — the extension never holds a searchable copy of the vault.
 
+### 7.6 Session tokens are stored as issued
+
+API tokens and password-reset tokens are stored as SHA-256 digests, so a copy
+of those tables yields nothing usable. Session tokens are not: `auth_session`
+holds the cookie value itself, and `auth_account` holds identity-provider
+access and refresh tokens in the clear. A database dump or backup of the
+`helm_auth`-owned tables therefore yields live sessions until they expire or
+are revoked. `helm_app` cannot read either table (§6), so this is about backups
+and database-host compromise, not about a request-path bug.
+
+Hashing them means wrapping the Auth.js adapter's session methods, the local
+and RADIUS session functions in SQL, and a migration that hashes existing rows
+(the presented cookie is then hashed on lookup, so nobody is signed out). It is
+a deliberate change for its own review, not a cleanup.
+
 ---
 
 ## 8. Verification
 
 ```bash
-pnpm test:sql              # 142 SQL assertions against a real Postgres 16 cluster
-pnpm verify                # typecheck + 151 TypeScript tests + schema drift
+pnpm test:sql    # the SQL security suite, against a real Postgres 16 cluster
+pnpm verify      # typecheck + migration manifest + every vitest suite + schema drift
 ```
 
 The SQL suite covers fail-closed defaults, tenant isolation, organisation
