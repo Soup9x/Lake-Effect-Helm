@@ -165,7 +165,7 @@ export async function isReused(plaintext: string, history: readonly string[]): P
 export const MIN_PASSWORD_LENGTH = 12;
 
 /** Argon2 has no practical input limit; this caps the work an attacker can ask for. */
-export const MAX_PASSWORD_LENGTH = 256;
+const MAX_PASSWORD_LENGTH = 256;
 
 /** Minimum scoreStrength() band: 0 very weak … 4 strong. */
 const MIN_STRENGTH_SCORE = 2;

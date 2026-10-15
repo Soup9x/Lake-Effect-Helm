@@ -23,7 +23,7 @@ import type { HelmTx } from '../db/client';
  * extraction and rank time on a hot path, and nobody types 500 characters into
  * a search box on purpose.
  */
-export const MAX_QUERY_LENGTH = 256;
+const MAX_QUERY_LENGTH = 256;
 export const MAX_PAGE_SIZE = 100;
 
 /**
@@ -129,7 +129,7 @@ interface RawHit {
  * characters are escaped in SQL rather than stripped here, so a query
  * containing `%` searches for a literal per cent sign.
  */
-export function normaliseQuery(raw: string): string {
+function normaliseQuery(raw: string): string {
   return raw.trim().replace(/\s+/g, ' ').slice(0, MAX_QUERY_LENGTH);
 }
 
@@ -171,7 +171,7 @@ export async function search(tx: HelmTx, request: SearchRequest): Promise<Search
  * ranks everything together, and the grouping is a presentation step over the
  * page it returned.
  */
-export function groupHits(hits: SearchHit[]): SearchGroup[] {
+function groupHits(hits: SearchHit[]): SearchGroup[] {
   const buckets = new Map<ResultKind, SearchHit[]>();
   for (const hit of hits) {
     const bucket = buckets.get(hit.kind);

@@ -21,7 +21,6 @@
     "helm:rotate-kek": "tsx scripts/rotate-kek.ts",
     "helm:worker": "tsx src/workers/main.ts",
     "helm:worker:once": "tsx src/workers/main.ts --once",
-    "db:generate": "drizzle-kit generate --name manual",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint .",

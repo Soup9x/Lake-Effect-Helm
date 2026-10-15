@@ -420,10 +420,12 @@ retroactively tidy up is not evidence.
 **What it does not give you:** protection from someone with superuser or
 filesystem access, who can disable triggers and recompute the whole chain
 forward. Tamper *evidence* requires the head to be witnessed somewhere Postgres
-cannot reach. Periodically anchor `audit_chain_head` to WORM storage
-(`HELM_AUDIT_MIRROR_BUCKET`); `anchored_seq` records how far that has got. The
-schema is built for this, but the anchoring job is an operational control and
-without it the chain only detects careless tampering.
+cannot reach. The anchoring worker writes witnessed heads to
+`HELM_AUDIT_ANCHOR_DIR`, one JSON line each; `anchored_seq` records how far
+that has got. The directory is only a witness if Helm cannot rewrite it — a
+WORM mount, an append-only share, a path your backups snapshot — so the choice
+of directory is an operational control, and without it the chain only detects
+careless tampering.
 
 ---
 

@@ -49,11 +49,11 @@ function binding(tenantId: string, assetId: string, field: AssetField) {
 }
 
 /** nonce || tag || ciphertext. */
-export function packEnvelope(envelope: Envelope): Buffer {
+function packEnvelope(envelope: Envelope): Buffer {
   return Buffer.concat([envelope.nonce, envelope.authTag, envelope.ciphertext]);
 }
 
-export function unpackEnvelope(packed: Buffer, aad: string): Envelope {
+function unpackEnvelope(packed: Buffer, aad: string): Envelope {
   if (packed.length < NONCE_BYTES + TAG_BYTES + 1) {
     throw new HelmCryptoError('invalid_envelope', 'packed field is too short to be one');
   }

@@ -384,7 +384,7 @@ In short:
 | [11 Network integration](docs/architecture/11-network-integration.md) | UniFi polling, pinning and webhooks |
 | [Docker install](docs/deployment/docker-on-prem.md) · [Runbook](docs/deployment/on-premises.md) | Installing and operating Helm |
 | [Testing](docs/testing.md) | The suites, writing tests, and the gaps |
-| [IT Glue parity](docs/itg-parity.md) | Historical feature plan and its decisions log |
+| [IT Glue parity](docs/history/itg-parity.md) | Historical feature plan and its decisions log |
 
 ## License
 

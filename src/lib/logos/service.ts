@@ -347,9 +347,4 @@ export function getLogoService(): LogoService {
   return service;
 }
 
-/** For tests, and for a deployment that wires its own storage first. */
-export function resetLogoService(): void {
-  service = null;
-}
-
 

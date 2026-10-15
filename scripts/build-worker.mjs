@@ -20,7 +20,8 @@ await build({
   entryPoints: [resolve(root, 'src/workers/main.ts')],
   bundle: true,
   platform: 'node',
-  target: 'node22',
+  // Keep in step with .nvmrc and the Dockerfile's base image.
+  target: 'node26',
   format: 'esm',
   outfile: resolve(root, 'dist/worker.mjs'),
   sourcemap: true,

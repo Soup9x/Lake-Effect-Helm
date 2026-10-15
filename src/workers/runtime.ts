@@ -128,7 +128,7 @@ export function describeError(error: unknown): Record<string, unknown> {
  * lock skips this tick rather than queueing behind the first, which is correct
  * for periodic work — the next tick is only seconds away.
  */
-export async function withJobLock<T>(
+async function withJobLock<T>(
   sql: HelmSql,
   key: number,
   fn: () => Promise<T>,

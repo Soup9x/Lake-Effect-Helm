@@ -136,7 +136,7 @@ export function searchablePointers(
     .map((f) => pointerFor(f.key));
 }
 
-export const KEY_PATTERN = /^[a-z][a-z0-9_]{0,62}$/;
+const KEY_PATTERN = /^[a-z][a-z0-9_]{0,62}$/;
 
 export interface FieldIssue {
   /** The field's key, or '' for an issue about the list as a whole. */

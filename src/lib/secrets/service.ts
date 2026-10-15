@@ -29,7 +29,6 @@ import {
 } from '../crypto/totp';
 import { activeDataKey } from './keys';
 import {
-  NoActiveDataKeyError,
   SecretAccessDeniedError,
   SecretWriteError,
   StaleSecretVersionError,
@@ -702,11 +701,3 @@ export class SecretService {
     });
   }
 }
-
-export {
-  SecretAccessDeniedError,
-  SecretWriteError,
-  NoActiveDataKeyError,
-  StaleSecretVersionError,
-  SecretValue,
-};

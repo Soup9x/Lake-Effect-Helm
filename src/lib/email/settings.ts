@@ -39,7 +39,7 @@ export interface SmtpSettingView {
 }
 
 /** What a tenant that has never configured mail looks like. */
-export const SMTP_DEFAULTS: SmtpSettingView = {
+const SMTP_DEFAULTS: SmtpSettingView = {
   configured: false,
   enabled: false,
   host: '',

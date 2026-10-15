@@ -21,7 +21,7 @@
  *
  * That cost is the product's, not this grid's — every RLS-filtered aggregate
  * pays it, including the dashboard's counter strip — and it is written up in
- * docs/itg-parity.md rather than changed here, because removing a search_path
+ * docs/history/itg-parity.md rather than changed here, because removing a search_path
  * pin from a function every policy calls is a security decision and not one
  * this group gets to take. What this group can do is not ask for 404 clients
  * when it is showing 50, which is the difference between 430 ms and 79 ms and
@@ -37,7 +37,7 @@ import { ORG_CATEGORIES } from '../nav/org-categories';
 import type { GridColumn, GridRow } from './grid';
 
 /** How many clients one page of the grid shows. */
-export const GRID_PAGE_SIZE = 50;
+const GRID_PAGE_SIZE = 50;
 
 /**
  * The grid's columns: Helm's own node types, then the tenant's.

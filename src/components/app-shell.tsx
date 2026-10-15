@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { KeyRound, ShieldAlert } from 'lucide-react';
+import { ShieldAlert } from 'lucide-react';
 import { Breadcrumbs, type Crumb } from './ui/breadcrumbs';
 
 /*
@@ -74,4 +74,3 @@ export function EmptyState({
   );
 }
 
-export { KeyRound };

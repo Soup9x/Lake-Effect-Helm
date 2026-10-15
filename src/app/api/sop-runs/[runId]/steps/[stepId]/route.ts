@@ -13,7 +13,7 @@ import { RUN_STEP_STATES } from '@/lib/sops/steps';
  * `blocked` step wants a reason and a way to unblock, `failed` wants an
  * incident, `not_applicable` wants a judgement recorded. Offering a dropdown of
  * seven words with no behaviour behind four of them is the shape this plan has
- * been removing. Recorded as deferred in docs/itg-parity.md.
+ * been removing. Recorded as deferred in docs/history/itg-parity.md.
  *
  * completed_at IS SET BY THIS ROUTE, not defaulted, because
  * sop_run_step_terminal_has_actor requires it for every terminal status —

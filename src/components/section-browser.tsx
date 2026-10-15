@@ -49,7 +49,7 @@ export interface SectionFilter {
 }
 
 /** The windows the expirations modal offers, in days. */
-export const EXPIRY_WINDOWS = [30, 60, 90] as const;
+const EXPIRY_WINDOWS = [30, 60, 90] as const;
 
 export function SectionBrowser({
   title,

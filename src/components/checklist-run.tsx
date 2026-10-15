@@ -11,7 +11,7 @@
  * and a way to unblock, `failed` wants an incident, `not_applicable` wants a
  * judgement recorded. Four words with no behaviour behind them would be the
  * placeholder shape this plan has been removing; they are recorded as deferred
- * in docs/itg-parity.md.
+ * in docs/history/itg-parity.md.
  *
  * SKIPPING A REQUIRED STEP ASKS WHY, because sop_run_step_skip_needs_note
  * refuses one without a note. The constraint is the authority — this asks so

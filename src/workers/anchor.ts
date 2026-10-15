@@ -86,7 +86,7 @@ export interface AnchorReceipt {
  * process can also rewrite is not a witness, and this is said here rather than
  * left for the reader to work out.
  */
-export class FileAnchorSink implements AuditAnchorSink {
+class FileAnchorSink implements AuditAnchorSink {
   readonly name = 'file';
 
   constructor(private readonly directory: string) {}
@@ -115,7 +115,7 @@ export class FileAnchorSink implements AuditAnchorSink {
  * logs ship off-host. It does not write `anchored_seq`, because claiming an
  * anchor that does not exist is the failure this whole job is guarding against.
  */
-export class LoggingAnchorSink implements AuditAnchorSink {
+class LoggingAnchorSink implements AuditAnchorSink {
   readonly name = 'log';
 
   async anchor(receipt: AnchorReceipt): Promise<string> {
@@ -128,7 +128,7 @@ export class LoggingAnchorSink implements AuditAnchorSink {
 }
 
 /** Raised when a head was verified but could not be witnessed. Not a chain fault. */
-export class UnwitnessedError extends Error {
+class UnwitnessedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'UnwitnessedError';
@@ -137,15 +137,11 @@ export class UnwitnessedError extends Error {
 
 let sink: AuditAnchorSink | null = null;
 
-export function resolveAnchorSink(): AuditAnchorSink {
+function resolveAnchorSink(): AuditAnchorSink {
   if (sink) return sink;
   const directory = process.env.HELM_AUDIT_ANCHOR_DIR?.trim();
   sink = directory ? new FileAnchorSink(directory) : new LoggingAnchorSink();
   return sink;
-}
-
-export function setAnchorSink(next: AuditAnchorSink | null): void {
-  sink = next;
 }
 
 export function anchorAuditChainJob(): Job {

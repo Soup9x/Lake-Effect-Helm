@@ -278,7 +278,7 @@ function assertPermitted(session: ResolvedSessionContext, options: TenantRouteOp
   }
 }
 
-export function json(body: unknown, status: number, requestId: string): Response {
+function json(body: unknown, status: number, requestId: string): Response {
   return new Response(body === undefined ? null : JSON.stringify(body), {
     status: body === undefined ? 204 : status,
     headers: {
@@ -507,6 +507,6 @@ export async function readJson<T>(
  * (2 MiB of text, which JSON escaping can roughly double); everything else is
  * a few kilobytes.
  */
-export const JSON_BODY_MAX_BYTES = 8 * 1024 * 1024;
+const JSON_BODY_MAX_BYTES = 8 * 1024 * 1024;
 
 export type { ErrorCode };

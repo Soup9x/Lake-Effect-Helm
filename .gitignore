@@ -21,7 +21,6 @@ next-env.d.ts
 helm-master-key*
 
 # database
-/db/migrations-generated/
 *.dump
 
 # typescript

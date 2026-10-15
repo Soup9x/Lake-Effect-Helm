@@ -87,7 +87,7 @@ export const DEFAULT_LAYOUT: WidgetKey[] = [
 
 const KNOWN = new Set<string>(WIDGET_KEYS);
 
-export function isWidgetKey(value: unknown): value is WidgetKey {
+function isWidgetKey(value: unknown): value is WidgetKey {
   return typeof value === 'string' && KNOWN.has(value);
 }
 

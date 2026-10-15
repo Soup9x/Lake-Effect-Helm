@@ -39,7 +39,7 @@ export const STEP_LIMITS = {
  * estimated_minutes — are deliberately NOT here: F1 does not offer them, and
  * offering a field the run page cannot honour is the placeholder shape this
  * plan has been removing. They keep their database defaults and are recorded
- * as deferred in docs/itg-parity.md.
+ * as deferred in docs/history/itg-parity.md.
  */
 export interface StepDraft {
   title: string;
@@ -175,7 +175,7 @@ export function stepsFromSnapshot(snapshot: unknown): { position: number; title:
  * `not_applicable` and `in_progress` stay in the enum — removing them would be
  * a migration against a model that is right — and get no control until
  * something is built that means them. Deferred rather than dropped; see
- * docs/itg-parity.md.
+ * docs/history/itg-parity.md.
  */
 export const RUN_STEP_STATES = ['pending', 'done', 'skipped'] as const;
 export type RunStepState = (typeof RUN_STEP_STATES)[number];

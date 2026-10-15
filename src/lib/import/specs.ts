@@ -39,7 +39,7 @@ export interface ImportSpec {
 }
 
 /** `Last Name`, `last_name` and `LASTNAME` are the same column. */
-export function normaliseHeader(header: string): string {
+function normaliseHeader(header: string): string {
   return header.toLowerCase().replace(/[\s_-]+/g, '');
 }
 

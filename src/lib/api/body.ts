@@ -55,7 +55,7 @@ export async function readTextBounded(request: Request, maxBytes: number): Promi
 }
 
 /** Enough for any form these routes accept; small enough to refuse a flood. */
-export const AUTH_BODY_MAX_BYTES = 64 * 1024;
+const AUTH_BODY_MAX_BYTES = 64 * 1024;
 
 /**
  * For the unauthenticated auth routes: the parsed JSON object, or `{}` when the

@@ -7,7 +7,6 @@
       "!**/dist",
       "!**/node_modules",
       "!next-env.d.ts",
-      "!**/db/migrations-generated",
       "!pnpm-lock.yaml",
       "!**/*.css"
     ]
