@@ -5,7 +5,7 @@
  * can look at its size, so a size check after them limits nothing: on a public
  * route a caller can send a gigabyte and the process holds it. This refuses on
  * the declared Content-Length when there is one, and otherwise counts bytes as
- * they stream and cancels the moment the limit is passed — which also covers a
+ * they stream and stops reading the moment the limit is passed — which also covers a
  * chunked upload that declares nothing.
  *
  * Returns null when the body is too large.
@@ -26,7 +26,14 @@ export async function readBodyBounded(
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
-      await reader.cancel().catch(() => {});
+      // Stop reading, but do not cancel(). On Node 26, cancelling a stream that
+      // undici is still filling (a FormData or Blob body) makes undici's own
+      // pump enqueue into the closed stream and reject inside undici, where no
+      // caller can catch it — an unhandled rejection, which ends a Node process.
+      // Releasing the lock instead leaves the rest unread: the producer stops
+      // once the stream's small internal queue is full, so memory stays
+      // bounded, and the request is answered and dropped.
+      reader.releaseLock();
       return null;
     }
     chunks.push(value);
