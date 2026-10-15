@@ -136,7 +136,7 @@ export function hotp(secret: Buffer, counter: number, config: TotpConfig = {}): 
   return (binary % 10 ** digits).toString().padStart(digits, '0');
 }
 
-export function counterForTime(atMs: number, periodSeconds: number): number {
+function counterForTime(atMs: number, periodSeconds: number): number {
   return Math.floor(atMs / 1000 / periodSeconds);
 }
 

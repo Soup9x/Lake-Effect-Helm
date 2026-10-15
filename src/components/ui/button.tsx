@@ -54,4 +54,3 @@ export function Button({ className, variant, size, asChild, ...props }: ButtonPr
   return <Component className={cn(button({ variant, size }), className)} {...props} />;
 }
 
-export { button as buttonVariants };

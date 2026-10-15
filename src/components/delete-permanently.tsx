@@ -25,6 +25,7 @@ import { AlertTriangle, Loader2, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 import { Modal } from './ui/modal';
+import { apiFetch } from '@/lib/ui/api';
 
 export interface DeleteCounts {
   assets?: number;
@@ -82,19 +83,14 @@ export function DeletePermanently({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(endpoint, { method: 'DELETE' });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(body?.error?.message ?? `It could not be deleted (${response.status}).`);
+      const result = await apiFetch(endpoint, { method: 'DELETE' });
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setOpen(false);
       if (redirectTo) router.push(redirectTo);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

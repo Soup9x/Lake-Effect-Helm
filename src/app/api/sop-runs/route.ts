@@ -26,7 +26,7 @@ import { stepsFromSnapshot } from '@/lib/sops/steps';
  * client administrator passes this route's gate and is then refused by the
  * database. Not changed here: reconciling them is a permission decision beyond
  * this group, and failing closed is the safe direction. It is written up in
- * docs/itg-parity.md.
+ * docs/history/itg-parity.md.
  */
 const createSchema = z.object({
   sopId: z.guid('sopId must be a UUID'),

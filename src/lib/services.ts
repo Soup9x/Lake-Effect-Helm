@@ -276,4 +276,3 @@ export function resetServices(): void {
   validator = null;
 }
 
-export { LocalMasterKekProvider, VaultTransitKekProvider };

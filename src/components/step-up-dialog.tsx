@@ -36,6 +36,7 @@ import { Loader2, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 import { Modal } from './ui/modal';
+import { apiFetch } from '@/lib/ui/api';
 
 export interface UseStepUp {
   /**
@@ -85,27 +86,18 @@ export function useStepUp(): UseStepUp {
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/auth/step-up', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
+      const result = await apiFetch('/api/auth/step-up', { json: { password } });
 
-      if (response.ok) {
+      if (result.ok) {
         finish(true);
         return;
       }
 
-      const body = (await response.json().catch(() => null)) as {
-        error?: { message?: string };
-      } | null;
       // Stays open on a wrong password. Closing would drop the caller back to
       // its own refusal message and hide the one that says what went wrong
       // here, which is how somebody concludes the button is broken.
-      setError(body?.error?.message ?? `Verification failed (${response.status}).`);
+      setError(result.message);
       setPassword('');
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

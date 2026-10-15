@@ -48,5 +48,6 @@ export function ThemeSync({ accountTheme }: { accountTheme: Theme }) {
     + `try{if(!document.documentElement.hasAttribute('data-theme')){`
     + `document.documentElement.setAttribute('data-theme','${theme}')}}catch(e2){}}})();`;
 
+  // biome-ignore lint/security/noDangerouslySetInnerHtml: built above from a value narrowed to 'light' | 'dark'
   return <script dangerouslySetInnerHTML={{ __html: script }} />;
 }

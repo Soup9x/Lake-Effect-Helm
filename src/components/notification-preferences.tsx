@@ -6,8 +6,7 @@ import { Button } from './ui/button';
 import { FieldHint } from './ui/field';
 import { KIND_LABELS, NOTIFICATION_KINDS, type NotificationKind } from '@/lib/notifications/kinds';
 import type { NotificationPreference } from '@/lib/email/preferences';
-
-type Feedback = { ok: boolean; message: string } | null;
+import { apiFetch, type Feedback } from '@/lib/ui/api';
 
 /**
  * What I want to be emailed about.
@@ -52,27 +51,20 @@ export function NotificationPreferencesCard({ initial }: { initial: Notification
     setSaving(true);
     setFeedback(null);
     try {
-      const response = await fetch('/api/account/notifications', {
+      const result = await apiFetch<NotificationPreference | undefined>('/api/account/notifications', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kinds }),
+        json: { kinds },
       });
-      const payload = (await response.json().catch(() => null)) as
-        | (NotificationPreference & { error?: { message?: string } })
-        | null;
 
-      if (!response.ok) {
-        setFeedback({
-          ok: false,
-          message: payload?.error?.message ?? `Save failed (${response.status}).`,
-        });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
 
       // Taken from the response rather than from local state: the server
       // normalises the list, and believing the input is what was stored is how
       // a form and a database come to disagree.
-      const stored = payload?.kinds ?? kinds;
+      const stored = result.value?.kinds ?? kinds;
       setKinds([...stored]);
       setSaved([...stored]);
       setFeedback({
@@ -81,8 +73,6 @@ export function NotificationPreferencesCard({ initial }: { initial: Notification
           ? 'Saved. You will not be emailed about either of these.'
           : 'Saved.',
       });
-    } catch {
-      setFeedback({ ok: false, message: 'The request did not reach the server.' });
     } finally {
       setSaving(false);
     }

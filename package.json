@@ -21,14 +21,14 @@
     "helm:rotate-kek": "tsx scripts/rotate-kek.ts",
     "helm:worker": "tsx src/workers/main.ts",
     "helm:worker:once": "tsx src/workers/main.ts --once",
-    "db:generate": "drizzle-kit generate --name manual",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
+    "lint": "biome lint .",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:sql": "./scripts/run-tests.sh",
-    "verify": "pnpm typecheck && pnpm db:check-migrations && pnpm test && pnpm db:drift",
+    "verify": "pnpm typecheck && pnpm lint && pnpm db:check-migrations && pnpm test && pnpm db:drift",
     "db:check-migrations": "tsx scripts/check-migrations.ts",
     "hooks:install": "git config core.hooksPath .githooks && echo \"hooks installed (core.hooksPath=.githooks)\""
   },
@@ -55,6 +55,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.6.4",
     "@types/nodemailer": "^8.0.2",

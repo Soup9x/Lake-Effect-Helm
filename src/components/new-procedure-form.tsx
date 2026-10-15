@@ -22,6 +22,7 @@ import { BookOpen, Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
+import { apiFetch } from '@/lib/ui/api';
 
 /** Intervals that mean something to somebody, rather than a free number box. */
 const REVIEW_INTERVALS: [string, string][] = [
@@ -54,32 +55,25 @@ export function NewProcedureForm({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/sops', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const result = await apiFetch<{ sopId?: string } | undefined>('/api/sops', {
+        json: {
           organizationId,
           name: name.trim(),
           ...(category.trim() === '' ? {} : { category: category.trim() }),
           ...(summary.trim() === '' ? {} : { summary: summary.trim() }),
           ...(reviewInterval === '' ? {} : { reviewIntervalDays: Number(reviewInterval) }),
-        }),
+        },
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(body?.error?.message ?? `The procedure could not be created (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
-      const created = (await response.json().catch(() => null)) as { sopId?: string } | null;
+      const created = result.value;
       onOpenChange(false);
       // Straight to the procedure, because the next thing to do is write its
       // steps and that is where they live.
       if (created?.sopId) router.push(`/assets/${created.sopId}`);
       else router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

@@ -199,7 +199,9 @@ export function inspectSchema(schema: unknown): SchemaInspection {
     for (const combinator of ['allOf', 'anyOf', 'oneOf']) {
       const branches = node[combinator];
       if (Array.isArray(branches)) {
-        branches.forEach((branch, index) => walk(branch, `${path}/${combinator}/${index}`, depth + 1));
+        branches.forEach((branch, index) => {
+          walk(branch, `${path}/${combinator}/${index}`, depth + 1);
+        });
       }
     }
     if ('not' in node) walk(node.not, `${path}/not`, depth + 1);
@@ -261,7 +263,6 @@ function inspectPattern(node: JsonObject, path: string, issues: SchemaIssue[]): 
   }
 
   try {
-    // eslint-disable-next-line no-new
     new RegExp(pattern, 'u');
   } catch {
     issues.push({ path, message: 'pattern is not a valid regular expression' });

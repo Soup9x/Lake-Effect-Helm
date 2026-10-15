@@ -835,6 +835,20 @@ Stated plainly so they are decisions rather than surprises.
 
 ---
 
+## 13. Settings that no longer exist
+
+Two variables were documented in earlier revisions of `.env.example` and read
+by nothing. They are gone from the template so that nobody sets them expecting
+an effect:
+
+- **`HELM_STEP_UP_TTL_MINUTES`.** There is no step-up window to configure.
+  `helm.step_up_verified()` is a boolean the application turns on after a
+  re-authentication, for that request. If a real window is wanted it needs
+  implementing in the session context first.
+- **`HELM_AUDIT_MIRROR_BUCKET`.** Helm does not write to a bucket. The audit
+  chain head is witnessed by the anchoring worker into `HELM_AUDIT_ANCHOR_DIR`
+  (§10); copying it somewhere Postgres cannot reach is your scheduler's job.
+
 ## Reference
 
 | Document | |

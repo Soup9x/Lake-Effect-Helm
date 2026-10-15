@@ -33,6 +33,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           script is the only thing that mutates the html element before React
           arrives, and React would otherwise object to the attribute it added.
         */}
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: a constant from lib/ui/theme.ts with no interpolated input */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body className="min-h-screen antialiased">{children}</body>

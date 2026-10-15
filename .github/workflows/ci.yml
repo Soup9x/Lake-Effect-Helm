@@ -55,6 +55,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # Biome rather than ESLint: typescript-eslint has no TypeScript 7 support
+      # yet, and a single binary with no plugin graph is the smaller surface.
+      # Type-aware rules are deliberately absent; tsc above is the type check.
+      - name: Lint
+        run: pnpm lint
+
       # Three different questions, so three steps.
       #
       # The manifest answers "does this tree match what was recorded", which is
@@ -256,7 +262,7 @@ jobs:
       # one to observeCertificate() so a test could pass would be widening the
       # product to suit the test, and the alternative — dropping the assertion —
       # loses integration coverage of exactly the write path that shipped broken
-      # once in this group (see docs/itg-parity.md, group H). Scoped to an
+      # once in this group (see docs/history/itg-parity.md, group H). Scoped to an
       # ephemeral container, and tests/support/fake-external.ts names this step
       # in its error message if the bind is ever refused anyway.
       - name: Allow the fixture to serve TLS on 443

@@ -196,8 +196,12 @@ describe('the relay', () => {
 
   it('refuses a password with no username, which is a relay nobody can log in to', async () => {
     currentUser = USERS.admin;
-    const { status } = await read(await save({ ...VALID, username: null }));
-    expect(status).toBe(500);
+    // A CHECK constraint (smtp_password_needs_username) refuses the row. It
+    // used to come back as a 500; the handler now maps a check_violation to a
+    // 400 without repeating the constraint's name to the caller.
+    const { status, payload } = await read(await save({ ...VALID, username: null }));
+    expect(status).toBe(400);
+    expect((payload.error as { message: string }).message).not.toMatch(/smtp_|constraint|relation/);
     expect(await su((sql) => sql`SELECT 1 FROM smtp_setting`)).toEqual([]);
   });
 
@@ -306,7 +310,8 @@ describe('the certificate pin', () => {
       tlsPinnedCertificate:
         '-----BEGIN PRIVATE KEY-----\nMIIBOgIBAAJBAKj\n-----END PRIVATE KEY-----',
     }));
-    expect(status).toBe(500);
+    // smtp_pin_shape, a CHECK: a 400 now rather than the 500 it used to be.
+    expect(status).toBe(400);
     expect(await su((sql) => sql`SELECT 1 FROM smtp_setting`)).toEqual([]);
   });
 

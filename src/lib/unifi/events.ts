@@ -111,7 +111,7 @@ function when(value: unknown): Date | null {
  * MOST severe — the inversion is the trap, and getting it backwards would file
  * every critical alert as informational while looking like it worked.
  */
-export function normaliseSeverity(value: unknown): ThreatSeverity {
+function normaliseSeverity(value: unknown): ThreatSeverity {
   const text = str(value)?.toLowerCase();
   if (!text) return 'info';
 

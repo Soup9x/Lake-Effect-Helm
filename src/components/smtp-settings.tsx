@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Badge } from './ui/badge';
 import { formatDateTime } from '@/lib/ui/format';
+import { apiFetch, type Feedback } from '@/lib/ui/api';
 import type { SmtpSecurity, SmtpSettingView } from '@/lib/email/settings';
 
 /** The port each mode is normally on, for the nudge when the mode changes. */
@@ -22,8 +23,6 @@ const SECURITY_COPY: Record<SmtpSecurity, string> = {
   tls: 'TLS from the first byte — implicit TLS, usually on 465.',
   plaintext: 'No encryption at all. The password and every notification cross the network readable.',
 };
-
-type Feedback = { ok: boolean; message: string } | null;
 
 /**
  * The tenant's mail relay.
@@ -112,10 +111,9 @@ export function SmtpSettingsCard({
     setSaving(true);
     setFeedback(null);
     try {
-      const response = await fetch('/api/tenant/smtp', {
+      const result = await apiFetch<SmtpSettingView | undefined>('/api/tenant/smtp', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           enabled: form.enabled,
           host: form.host.trim(),
           port: form.port,
@@ -130,21 +128,15 @@ export function SmtpSettingsCard({
           fromName: form.fromName?.trim() || null,
           allowedRecipientDomains: domains,
           ...(form.security === 'plaintext' ? { acknowledgePlaintext: true } : {}),
-        }),
+        },
       });
 
-      const payload = (await response.json().catch(() => null)) as
-        | (SmtpSettingView & { error?: { message?: string } })
-        | null;
-
-      if (!response.ok) {
-        setFeedback({
-          ok: false,
-          message: payload?.error?.message ?? `Save failed (${response.status}).`,
-        });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
 
+      const payload = result.value;
       if (payload) {
         setForm(payload);
         setDomainText(payload.allowedRecipientDomains.join(', '));
@@ -159,8 +151,6 @@ export function SmtpSettingsCard({
           : 'Saved, and switched off. Nothing will be sent until you enable it.',
       });
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'The request did not reach the server.' });
     } finally {
       setSaving(false);
     }

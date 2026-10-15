@@ -5,7 +5,8 @@ import { Copy, Eye, EyeOff, Loader2, ShieldAlert, ShieldCheck } from 'lucide-rea
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 import { useStepUp } from './step-up-dialog';
-import { STEP_UP_CODE, toAttemptResult, withStepUp } from '@/lib/ui/step-up';
+import { STEP_UP_CODE, withStepUp } from '@/lib/ui/step-up';
+import { apiFetch } from '@/lib/ui/api';
 import { copyAudited, copyFailureMessage, type CopyOutcome } from '@/lib/ui/clipboard';
 import { cn } from '@/lib/ui/cn';
 
@@ -104,15 +105,10 @@ export function RevealButton({
    * retry re-runs this, and it must send whatever is in the box at that moment
    * — the person may have typed a justification while the prompt was open.
    */
-  const attemptReveal = async () => {
-    const response = await fetch(`/api/secrets/${secretId}/reveal`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ purpose: 'view', ...(reason ? { reason } : {}) }),
+  const attemptReveal = () =>
+    apiFetch<RevealOk>(`/api/secrets/${secretId}/reveal`, {
+      json: { purpose: 'view', ...(reason ? { reason } : {}) },
     });
-    const body = await response.json().catch(() => null);
-    return toAttemptResult<RevealOk>(response.ok, response.status, body, (b) => b as RevealOk);
-  };
 
   const reveal = async () => {
     setState({ status: 'loading' });
@@ -156,14 +152,7 @@ export function RevealButton({
       // No `reason` is sent because there is nowhere for one to go —
       // helm.record_secret_copy() takes a field and no justification, and the
       // route's schema drops any other key.
-      record: async () => {
-        const response = await fetch(`/api/secrets/${secretId}/copy`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        return response.ok;
-      },
+      record: async () => (await apiFetch(`/api/secrets/${secretId}/copy`, { json: {} })).ok,
     });
 
     setCopyOutcome(outcome);

@@ -36,11 +36,12 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
-import { Modal } from './ui/modal';
+import { Modal, ModalTrigger } from './ui/modal';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { FIELD_KIND_INFO, pointerFor, type FieldDef } from '@/lib/flexible/fields';
+import { apiFetch } from '@/lib/ui/api';
 
 /** The template being filled in. */
 export interface RecordFormType {
@@ -193,32 +194,25 @@ export function FlexibleRecordForm({
     const data = toDocument(type.fields, draft);
 
     try {
-      const response = editing
-        ? await fetch(`/api/flexible-assets/records/${record.nodeId}`, {
+      const result = editing
+        ? await apiFetch(`/api/flexible-assets/records/${record.nodeId}`, {
             method: 'PATCH',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ data }),
+            json: { data },
           })
-        : await fetch('/api/flexible-assets/records', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
+        : await apiFetch<{ nodeId?: string }>('/api/flexible-assets/records', {
+            json: {
               typeId: type.id,
               organizationId,
               name: name.trim(),
               ...(siteId === '' ? {} : { siteId }),
               data,
-            }),
+            },
           });
 
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string; details?: { fields?: { path: string; message: string }[] } };
-        } | null;
-
+      if (!result.ok) {
         // `path` is a JSON Pointer into the document, which is the field key
         // with a leading slash. The root pointer belongs to the whole form.
-        const fields = body?.error?.details?.fields ?? [];
+        const fields = (result.details?.fields ?? []) as { path: string; message: string }[];
         const byKey: Record<string, string> = {};
         let unplaced = 0;
         for (const issue of fields) {
@@ -231,11 +225,7 @@ export function FlexibleRecordForm({
         // field to sit beside. Counting placements rather than comparing sizes,
         // because two issues on one field collapse to one entry and the sizes
         // would stop matching for a reason that is not a missed message.
-        setError(
-          fields.length > 0 && unplaced === 0
-            ? null
-            : body?.error?.message ?? `This could not be saved (${response.status}).`,
-        );
+        setError(fields.length > 0 && unplaced === 0 ? null : result.message);
         return;
       }
 
@@ -243,12 +233,10 @@ export function FlexibleRecordForm({
       if (editing) {
         router.refresh();
       } else {
-        const created = (await response.json().catch(() => null)) as { nodeId?: string } | null;
+        const created = result.value as { nodeId?: string } | undefined;
         if (created?.nodeId) router.push(`/assets/${created.nodeId}`);
         else router.refresh();
       }
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }
@@ -259,7 +247,7 @@ export function FlexibleRecordForm({
       {/* onOpenChange rather than setOpen: opening is where the draft is
           re-seeded from props, so bypassing it is the bug the comment above
           describes. */}
-      <span onClick={() => onOpenChange(true)}>{trigger}</span>
+      <ModalTrigger onOpen={() => onOpenChange(true)}>{trigger}</ModalTrigger>
 
       <Modal
         open={open}

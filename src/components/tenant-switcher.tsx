@@ -78,13 +78,13 @@ export function TenantSwitcher({
       </button>
 
       {open && (
-        <ul
+        <div
           role="listbox"
           className="absolute z-20 mt-1 w-full overflow-hidden rounded-md border border-border bg-surface-raised shadow-lg"
         >
           {memberships.map((membership) => (
-            <li key={membership.tenantId}>
               <button
+                key={membership.tenantId}
                 type="button"
                 role="option"
                 aria-selected={membership.tenantId === activeTenantId}
@@ -106,9 +106,8 @@ export function TenantSwitcher({
                   </span>
                 </span>
               </button>
-            </li>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );

@@ -33,6 +33,7 @@ import { KeyRound, Loader2, ShieldAlert } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 import { HelmMark } from './ui/helm-mark';
+import { apiFetch } from '@/lib/ui/api';
 
 export interface OidcOption {
   slug: string;
@@ -110,30 +111,21 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
     setPending(true);
 
     try {
-      const response = await fetch('/api/auth/local/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
+      const result = await apiFetch<{ ok?: boolean; mustChange?: boolean } | undefined>(
+        '/api/auth/local/login',
+        { json: { email, password } },
+      );
 
-      const payload = (await response.json()) as {
-        ok?: boolean;
-        mustChange?: boolean;
-        error?: { message?: string };
-      };
-
-      if (!response.ok) {
-        setError(payload.error?.message ?? 'Sign-in failed.');
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
 
       // An administrator-issued password is a temporary one. Sending them
       // straight to the change screen is the difference between a password
       // that gets replaced and one that stays in a handover document forever.
-      router.push(payload.mustChange ? '/account?password=change' : next);
+      router.push(result.value?.mustChange ? '/account?password=change' : next);
       router.refresh();
-    } catch {
-      setError('Could not reach the server. Check your connection and try again.');
     } finally {
       setPending(false);
     }

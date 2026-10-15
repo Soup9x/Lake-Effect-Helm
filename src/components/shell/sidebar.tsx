@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { useShell } from './shell-context';
-import { type CategoryCounts } from '@/lib/nav/org-categories';
+import type { CategoryCounts } from '@/lib/nav/org-categories';
 import { splitSidebar } from '@/lib/nav/sidebar-layout';
 import type { FlexibleAssetNav } from '@/lib/nav/org-sidebar';
 import { SidebarCustomise } from '../sidebar-customise';

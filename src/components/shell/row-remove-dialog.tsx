@@ -24,6 +24,7 @@ import { useRouter } from 'next/navigation';
 import { AlertTriangle, Loader2, Trash2 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/modal';
+import { apiFetch } from '@/lib/ui/api';
 
 export type RemoveKind = 'node' | 'document' | 'contact' | 'site';
 
@@ -72,40 +73,28 @@ export function RowRemoveDialog({
     setBusy(true);
     setError(null);
     try {
-      const response = await (async () => {
+      const result = await (() => {
         switch (kind) {
           case 'node':
             // The same endpoint the bulk toolbar uses, with one id — so a single
             // row and a selection of forty take exactly the same path.
-            return fetch('/api/bulk/archive', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ target: 'node', ids: [rowId], archived: true }),
-            });
+            return apiFetch('/api/bulk/archive', { json: { target: 'node', ids: [rowId], archived: true } });
           case 'document':
-            return fetch(`/api/documents/${rowId}`, {
-              method: 'PATCH',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ archived: true }),
-            });
+            return apiFetch(`/api/documents/${rowId}`, { method: 'PATCH', json: { archived: true } });
           case 'contact':
-            return fetch(`/api/contacts/${rowId}`, { method: 'DELETE' });
+            return apiFetch(`/api/contacts/${rowId}`, { method: 'DELETE' });
           case 'site':
-            return fetch(`/api/sites/${rowId}`, { method: 'DELETE' });
+            return apiFetch(`/api/sites/${rowId}`, { method: 'DELETE' });
         }
       })();
 
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        setError((body as { error?: { message?: string } } | null)?.error?.message
-          ?? `${rowLabel} could not be removed.`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
 
       onOpenChange(false);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

@@ -153,7 +153,10 @@ export default async function CoveragePage({
                               )}
                             >
                               {n === 0 ? (
-                                <span aria-label={`No ${column.label} documented`}>—</span>
+                                <>
+                                  <span aria-hidden>—</span>
+                                  <span className="sr-only">{`No ${column.label} documented`}</span>
+                                </>
                               ) : column.categorySlug ? (
                                 <Link
                                   href={`/organizations/${row.organizationId}/${column.categorySlug}`}

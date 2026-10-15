@@ -62,6 +62,26 @@ function renderIcon(icon: ModalProps['icon']): ReactNode {
   return <Icon className="size-4 text-ink-faint" />;
 }
 
+/**
+ * The element a server component wraps a button in to open a modal.
+ *
+ * A server component cannot pass a component reference across the boundary,
+ * so every form that opens from a server-rendered page renders its button on
+ * the server and hands the ELEMENT to a client component, which wraps it so
+ * the click reaches it. Six forms carried this span before it lived here.
+ *
+ * The span itself is not a control. The button inside it is, and it is what
+ * a keyboard activates: Enter and Space on a button dispatch a click, which
+ * bubbles to this handler. So there is nothing to add for the keyboard, and
+ * the lint rules that ask for a role and a key handler are answered here
+ * once rather than six times.
+ */
+export function ModalTrigger({ onOpen, children }: { onOpen: () => void; children: ReactNode }) {
+  // biome-ignore lint/a11y/noStaticElementInteractions: relays the inner button's own activation, see above
+  // biome-ignore lint/a11y/useKeyWithClickEvents: the keyboard reaches the button inside, whose click bubbles here
+  return <span onClick={onOpen}>{children}</span>;
+}
+
 export function Modal({
   open,
   onOpenChange,

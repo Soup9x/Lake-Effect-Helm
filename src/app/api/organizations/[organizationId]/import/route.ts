@@ -126,7 +126,7 @@ export const POST = tenantRoute(
 
     parsed.rows.forEach((row, index) => {
       const { values, ignored: unknown } = mapRow(spec, row);
-      unknown.forEach((h) => ignored.add(h));
+      for (const h of unknown) ignored.add(h);
       mapped.push(values);
       results.push({
         line: index + 2, // +1 for zero-based, +1 for the header

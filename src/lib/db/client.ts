@@ -24,7 +24,7 @@ import { envInt } from '../env';
  * literally postgres.js's default type argument, and anything "tidier"
  * (Record<string, never>, Record<string, unknown>) fails to unify with it.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+// biome-ignore lint/complexity/noBannedTypes: it has to be exactly postgres.js's default, see above
 type NoCustomTypes = {};
 
 export type HelmSql = postgres.Sql<NoCustomTypes>;

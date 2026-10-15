@@ -24,8 +24,9 @@ import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
-import { Modal } from './ui/modal';
+import { Modal, ModalTrigger } from './ui/modal';
 import { HEALTH_DAYS_MAX, HEALTH_DAYS_MIN, type HealthSetting } from '@/lib/health/window';
+import { apiFetch } from '@/lib/ui/api';
 
 export function HealthWindowForm({
   setting,
@@ -66,24 +67,19 @@ export function HealthWindowForm({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/tenant/documentation-health', {
+      const result = await apiFetch('/api/tenant/documentation-health', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           staleAfterDays: staleDays,
           unviewedAfterDays: unviewedDays,
-        }),
+        },
       });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        const message = (payload as { error?: { message?: string } } | null)?.error?.message;
-        setError(message ?? 'That could not be saved.');
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setOpen(false);
       router.refresh();
-    } catch {
-      setError('That could not be saved.');
     } finally {
       setBusy(false);
     }
@@ -91,10 +87,9 @@ export function HealthWindowForm({
 
   return (
     <>
-      {/* The same trigger shape every other modal in this project uses: the
-          caller renders the button, this wraps it. A server component cannot
-          pass a component reference across the boundary. */}
-      <span onClick={() => openWith(true)}>{trigger}</span>
+      {/* The caller renders the button; the trigger wraps it, because a server
+          component cannot pass a component reference across the boundary. */}
+      <ModalTrigger onOpen={() => openWith(true)}>{trigger}</ModalTrigger>
       <Modal
         open={open}
         onOpenChange={openWith}

@@ -601,7 +601,7 @@ describe('an email destination', () => {
     const response = await putNotification(request('PUT', emailDestination()));
     // The database refuses it — helm.set_webhook_endpoint checks for the row —
     // so this also proves the route cannot create one by going round the check.
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(400);
 
     const sql = superuserSql();
     try {
@@ -619,7 +619,7 @@ describe('an email destination', () => {
     const response = await putNotification(
       request('PUT', emailDestination({ emailAddress: 'someone@elsewhere.test' })),
     );
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(400);
 
     // ...and accepts one inside them, so the refusal is about the domain and
     // not about email destinations in general.

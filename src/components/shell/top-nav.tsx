@@ -32,7 +32,7 @@ export interface TopNavTab {
   owns: readonly string[];
 }
 
-export const TOP_NAV_TABS: readonly TopNavTab[] = [
+const TOP_NAV_TABS: readonly TopNavTab[] = [
   { href: '/dashboard', label: 'Dashboard', owns: ['/dashboard'] },
   { href: '/organizations', label: 'Organizations', owns: ['/organizations', '/assets'] },
   /*

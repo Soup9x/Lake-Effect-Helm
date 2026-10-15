@@ -30,6 +30,10 @@ import { logoSrc } from '@/lib/ui/logo';
 import { HealthDot } from '@/components/ui/health-dot';
 import { isFavorite, listRecentInOrganization, recordView } from '@/lib/workspace/queries';
 import { listClientActivity, listRecentlyUpdated } from '@/lib/clients/activity';
+import {
+  listAssets, listContacts, listCredentials, listDocumentFolders, listDocuments, listExpiries,
+  listSites, readClientHealth, readOrganization,
+} from '@/lib/clients/queries';
 import { listRunsForOrganization } from '@/lib/sops/queries';
 import { ChecklistRunsCard } from '@/components/checklist-runs-card';
 import {
@@ -42,75 +46,12 @@ import { Button } from '@/components/ui/button';
 import { RevealButton } from '@/components/reveal-button';
 import { formatDate, humanise, relativeDays } from '@/lib/ui/format';
 
-interface OrgRow {
-  id: string; name: string; legal_name: string | null; status: string;
-  industry: string | null; employee_count: number | null; timezone: string | null;
-  website: string | null; onboarded_at: Date | null; notes: string | null;
-  tags: string[];
-  logo_url: string | null;
-  /** Whether 0680's organization_logo holds bytes for this client. */
-  has_logo: boolean;
-}
-
-interface SiteRow {
-  id: string; name: string; code: string | null; is_primary: boolean; address_line1: string | null;
-  city: string | null; region: string | null; main_phone: string | null;
-  notes: string | null;
-}
-
-interface ContactRow {
-  id: string; first_name: string; last_name: string | null; title: string | null;
-  email: string | null; phone: string | null; is_primary: boolean; is_emergency: boolean;
-  // Group L. The other three flags, for the "who to call" widget — which ranks
-  // the flags that already existed rather than adding a sixth (decision 35).
-  is_technical: boolean; is_billing: boolean; is_authorised: boolean;
-}
-
-interface AssetRow {
-  id: string; node_type: string; name: string; status: string; criticality: number;
-}
-
-interface CredentialRow {
-  node_id: string; name: string; credential_type: string; username: string | null;
-  url: string | null; secret_id: string | null; sensitivity: string | null;
-  requires_reason: boolean; requires_step_up: boolean; is_break_glass: boolean;
-  strength_score: number | null; tags: string[];
-  /* Both maintained inside helm.reveal_secret(), immediately after it writes
-     the secret.revealed audit row. "Most used" is therefore a view of the
-     audited path and not a second, unaudited counter. */
-  access_count: string | null; last_accessed_at: Date | null;
-  notes: string | null; criticality: number; secret_label: string | null;
-  /** Whether a TOTP seed is attached. A boolean, never the id and never the seed. */
-  has_totp: boolean;
-}
-
-interface ExpiryRow {
-  id: string; label: string; kind: string; expires_at: Date; severity: string; days_remaining: number;
-}
-
-/** Flat rows; src/lib/ui/documents.ts nests them. */
-interface FolderQueryRow {
-  id: string; parent_id: string | null; name: string; is_internal_only: boolean;
-}
-
-interface DocumentQueryRow {
-  id: string; folder_id: string | null; filename: string; content_type: string;
-  byte_size: string; is_internal_only: boolean; archived_at: Date | null;
-  uploaded_at: Date; uploaded_by_name: string | null;
-}
-
-interface HealthRow {
-  health: string; expired_count: number; critical_count: number;
-  warning_count: number; reasons: string[] | null;
-}
-
 /**
  * One client, everything Helm knows about them.
  *
- * Six queries rather than one join: they are independent lists with different
- * cardinalities, and a single query would fan out the credential rows across
- * every asset. Each is RLS-scoped in its own right, so an organisation the
- * actor cannot see produces `notFound()` at the first query rather than an
+ * The reads are in src/lib/clients/queries.ts; this page composes them on one
+ * transaction. Each is RLS-scoped in its own right, so an organisation the
+ * actor cannot see produces `notFound()` at the first read rather than an
  * empty page that looks like a data problem.
  */
 export default async function OrganizationPage({
@@ -123,17 +64,7 @@ export default async function OrganizationPage({
   if (!isUuid(organizationId)) notFound();
 
   const data = await withTenant(actorOf(identity), async (tx, session) => {
-    const [organization] = await tx<OrgRow[]>`
-      SELECT id, name, legal_name, status::text, industry, employee_count,
-             timezone, website, onboarded_at, notes, tags, logo_url,
-             -- EXISTS rather than a join: one bit is wanted, the bytes are
-             -- never read here, and organization_logo is RLS-scoped in its own
-             -- right so an invisible client contributes nothing.
-             EXISTS (
-               SELECT 1 FROM organization_logo l WHERE l.organization_id = o.id
-             ) AS has_logo
-      FROM organization o WHERE o.id = ${organizationId}::uuid AND o.deleted_at IS NULL
-    `;
+    const organization = await readOrganization(tx, organizationId);
     if (!organization) return null;
 
     // Recorded before the rest, and only once the organisation has been proven
@@ -145,81 +76,15 @@ export default async function OrganizationPage({
       sites, contacts, assets, credentials, expiries, health, pinned, folders, documents,
       recentlyUpdated, recentlyViewed, activity, runs, documentationHealth,
     ] = await Promise.all([
-      tx<SiteRow[]>`
-        SELECT id, name, code, is_primary, address_line1, city, region, main_phone, notes
-        FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
-        ORDER BY is_primary DESC, name
-      `,
-      tx<ContactRow[]>`
-        SELECT id, first_name, last_name, title, email::text, phone,
-               is_primary, is_emergency, is_technical, is_billing, is_authorised
-        FROM contact WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
-        ORDER BY is_primary DESC, last_name NULLS LAST, first_name
-      `,
-      tx<AssetRow[]>`
-        SELECT id, node_type::text, name, status::text, criticality
-        FROM asset_node
-        WHERE organization_id = ${organizationId}::uuid AND archived_at IS NULL
-          AND node_type <> 'credential'
-        ORDER BY criticality DESC, node_type, name
-        LIMIT 300
-      `,
-      tx<CredentialRow[]>`
-        SELECT n.id AS node_id, n.name, n.tags, n.notes, n.criticality,
-               c.credential_type::text, c.username::text, c.url,
-               c.secret_id::text, c.is_break_glass,
-               c.totp_secret_id IS NOT NULL AS has_totp,
-               m.label AS secret_label,
-               m.sensitivity::text, m.requires_reason, m.requires_step_up, m.strength_score,
-               m.access_count, m.last_accessed_at
-        FROM credential c
-        JOIN asset_node n ON n.id = c.id
-        LEFT JOIN v_secret_metadata m ON m.id = c.secret_id
-        WHERE n.organization_id = ${organizationId}::uuid AND n.archived_at IS NULL
-        ORDER BY n.name
-      `,
-      tx<ExpiryRow[]>`
-        SELECT id, label, kind::text, expires_at, severity::text, days_remaining
-        FROM v_expiration_dashboard
-        WHERE organization_id = ${organizationId}::uuid
-        ORDER BY expires_at LIMIT 200
-      `,
-      tx<HealthRow[]>`
-        SELECT health, expired_count, critical_count, warning_count, reasons
-        FROM v_client_health WHERE organization_id = ${organizationId}::uuid
-      `,
+      listSites(tx, organizationId),
+      listContacts(tx, organizationId),
+      listAssets(tx, organizationId),
+      listCredentials(tx, organizationId),
+      listExpiries(tx, organizationId),
+      readClientHealth(tx, organizationId),
       isFavorite(tx, organizationId),
-      /*
-       * The client's whole document tree, metadata only, in two queries.
-       *
-       * RLS decides what comes back — an internal-only folder and everything
-       * under it simply is not in these rows for a co-managed client actor,
-       * which is why the modal has no visibility logic of its own. Archived
-       * documents ARE fetched: they are hidden by default and shown behind a
-       * checkbox, and they are the reason a folder delete is refused.
-       */
-      tx<FolderQueryRow[]>`
-        SELECT id, parent_id, name, is_internal_only
-        FROM document_folder
-        WHERE organization_id = ${organizationId}::uuid
-        ORDER BY name
-      `,
-      tx<DocumentQueryRow[]>`
-        SELECT a.id, a.folder_id, a.filename, a.content_type, a.byte_size,
-               a.is_internal_only, a.archived_at, a.uploaded_at,
-               -- app_user has "name", not "display_name" -- the Auth.js
-               -- adapter schema names it, and it is nullable. Same fallback
-               -- getServerIdentity() uses: an account that never set a name is
-               -- still somebody, and a dash in a document list is less use
-               -- than an address.
-               coalesce(u.name, u.email::text) AS uploaded_by_name
-        FROM attachment a
-        LEFT JOIN app_user u ON u.id = a.uploaded_by
-        WHERE a.organization_id = ${organizationId}::uuid
-          AND a.is_document AND a.deleted_at IS NULL
-        ORDER BY lower(a.filename)
-        LIMIT 2000
-      `,
+      listDocumentFolders(tx, organizationId),
+      listDocuments(tx, organizationId),
       /*
        * The three widget reads. In the same Promise.all as everything else and
        * on the same transaction, so they add round trips rather than a second
@@ -255,7 +120,7 @@ export default async function OrganizationPage({
 
     return {
       organization, sites, contacts, assets, credentials, expiries,
-      health: health[0], pinned, folders, documents,
+      health, pinned, folders, documents,
       recentlyUpdated, recentlyViewed, activity, runs, documentationHealth,
       canWriteOrganization: session.permissions.includes('organization:write'),
       canDeleteDocuments: session.permissions.includes('asset:delete'),

@@ -78,7 +78,7 @@ export const GET = serviceRoute(async ({ params, request, actor }) => {
  * after the reader signs out; revalidating costs one 304 per logo per page
  * load, which is a header comparison on the server and no bytes on the wire.
  * The clients list renders one of these per row, so that was worth measuring
- * rather than assuming — see docs/itg-parity.md.
+ * rather than assuming — see docs/history/itg-parity.md.
  */
 
 export const POST = serviceRoute(

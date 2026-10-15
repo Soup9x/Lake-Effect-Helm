@@ -30,6 +30,7 @@ import { FieldHint, Input, Label, Select } from './ui/field';
 import { applyTheme } from './theme-toggle';
 import { composedName, THEMES, type AccountPreferences, type Theme } from '@/lib/ui/preferences';
 import { cn } from '@/lib/ui/cn';
+import { apiFetch } from '@/lib/ui/api';
 
 const THEME_LABELS: Record<Theme, { label: string; icon: typeof Sun }> = {
   system: { label: 'Match the system', icon: Monitor },
@@ -73,10 +74,9 @@ export function ProfileForm({
     setError(null);
     setDone(false);
     try {
-      const response = await fetch('/api/account', {
+      const result = await apiFetch('/api/account', {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           // null clears; the route normalises a blank string to null too, so an
           // emptied box never becomes the '' the CHECK refuses.
           firstName: firstName.trim() === '' ? null : firstName.trim(),
@@ -86,13 +86,10 @@ export function ProfileForm({
           ...(derived ? {} : { name: name.trim() === '' ? null : name.trim() }),
           timezone: timezone === '' ? null : timezone,
           theme,
-        }),
+        },
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(payload?.error?.message ?? `Could not save (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       // Apply the chosen theme here as well, so the thing just chosen takes
@@ -101,8 +98,6 @@ export function ProfileForm({
       applyTheme(theme);
       setDone(true);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }
@@ -176,7 +171,7 @@ export function ProfileForm({
 
       <div className="space-y-1.5">
         <Label htmlFor="theme-default">Default theme</Label>
-        <div role="group" aria-labelledby="theme-default" className="flex flex-wrap gap-2">
+        <fieldset aria-labelledby="theme-default" className="flex flex-wrap gap-2">
           {THEMES.map((value) => {
             const { label, icon: Icon } = THEME_LABELS[value];
             return (
@@ -197,7 +192,7 @@ export function ProfileForm({
               </button>
             );
           })}
-        </div>
+        </fieldset>
         <FieldHint>
           What a browser you have not used before starts with. The switcher in the shell overrides
           it on this machine only, and keeps doing so until you clear it there.

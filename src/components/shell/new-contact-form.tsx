@@ -19,6 +19,7 @@ import { Loader2, UserPlus } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/modal';
 import { FieldHint, Input, Label } from '../ui/field';
+import { apiFetch } from '@/lib/ui/api';
 
 export function NewContactForm({
   organizationId,
@@ -49,10 +50,8 @@ export function NewContactForm({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/contacts', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const result = await apiFetch('/api/contacts', {
+        json: {
           organizationId,
           firstName: firstName.trim(),
           lastName: lastName.trim(),
@@ -60,18 +59,15 @@ export function NewContactForm({
           ...(email.trim() ? { email: email.trim() } : {}),
           ...(phone.trim() ? { phone: phone.trim() } : {}),
           isPrimary,
-        }),
+        },
       });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        setError((body as { error?: { message?: string } } | null)?.error?.message ?? 'The contact could not be saved.');
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       onOpenChange(false);
       reset();
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

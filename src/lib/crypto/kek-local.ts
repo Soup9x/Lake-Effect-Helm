@@ -257,7 +257,7 @@ export function loadKeyRingFromFile(path: string): MasterKeyRing {
   return parseKeyRing(raw, 'file', path);
 }
 
-export function loadKeyRingFromEnv(value: string): MasterKeyRing {
+function loadKeyRingFromEnv(value: string): MasterKeyRing {
   return parseKeyRing(value, 'environment');
 }
 

@@ -27,6 +27,7 @@ import { Loader2, Lock } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/modal';
 import { FieldHint, Label, Select } from '../ui/field';
+import { apiFetch, type ApiResult } from '@/lib/ui/api';
 
 export interface RowPermissions {
   /** asset_node.is_internal_only / attachment.is_internal_only. */
@@ -97,14 +98,13 @@ export function RowPermissionsDialog({
     setBusy(true);
     setError(null);
     try {
-      const calls: Promise<Response>[] = [];
+      const calls: Promise<ApiResult<unknown>>[] = [];
 
       if (internalOnly !== permissions.internalOnly) {
         calls.push(
-          fetch(kind === 'document' ? `/api/documents/${rowId}` : `/api/assets/${rowId}`, {
+          apiFetch(kind === 'document' ? `/api/documents/${rowId}` : `/api/assets/${rowId}`, {
             method: 'PATCH',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ isInternalOnly: internalOnly }),
+            json: { isInternalOnly: internalOnly },
           }),
         );
       }
@@ -116,12 +116,9 @@ export function RowPermissionsDialog({
           reason !== s.requiresReason || minRank !== s.minRoleRank;
         if (changed) {
           calls.push(
-            fetch(`/api/secrets/${s.id}`, {
+            apiFetch(`/api/secrets/${s.id}`, {
               method: 'PATCH',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({
-                sensitivity, requiresStepUp: stepUp, requiresReason: reason, minRoleRank: minRank,
-              }),
+              json: { sensitivity, requiresStepUp: stepUp, requiresReason: reason, minRoleRank: minRank },
             }),
           );
         }
@@ -132,19 +129,15 @@ export function RowPermissionsDialog({
         return;
       }
 
-      const responses = await Promise.all(calls);
-      const failed = responses.find((r) => !r.ok);
-      if (failed) {
-        const body = await failed.json().catch(() => null);
-        setError((body as { error?: { message?: string } } | null)?.error?.message
-          ?? 'The change could not be saved.');
+      const results = await Promise.all(calls);
+      const failed = results.find((r) => !r.ok);
+      if (failed && !failed.ok) {
+        setError(failed.message);
         return;
       }
 
       onOpenChange(false);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

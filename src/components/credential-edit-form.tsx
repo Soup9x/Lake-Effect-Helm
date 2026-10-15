@@ -40,7 +40,8 @@ import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
 import { TagEditor } from './tag-editor';
 import { useStepUp } from './step-up-dialog';
-import { toAttemptResult, withStepUp } from '@/lib/ui/step-up';
+import { withStepUp } from '@/lib/ui/step-up';
+import { apiFetch } from '@/lib/ui/api';
 import { changedFields, hasChanges, type FieldValue } from '@/lib/ui/form-diff';
 
 const SENSITIVITIES = ['standard', 'elevated', 'critical'] as const;
@@ -145,41 +146,26 @@ export function CredentialEditForm({
     setError(null);
     setSaved(null);
     try {
-      const response = await fetch(`/api/secrets/${secretId}`, {
+      const result = await apiFetch(`/api/secrets/${secretId}`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(changedFields(initial, values)),
+        json: changedFields(initial, values),
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(body?.error?.message ?? `The changes could not be saved (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setOpen(false);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }
   }
 
   /** One rotation attempt, reduced to stored-or-refused. */
-  async function attemptRotate() {
-    const response = await fetch(`/api/secrets/${secretId}/rotate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ value: newValue, reason: reason.trim() }),
+  function attemptRotate() {
+    return apiFetch<{ version?: number } | undefined>(`/api/secrets/${secretId}/rotate`, {
+      json: { value: newValue, reason: reason.trim() },
     });
-    const body = await response.json().catch(() => null);
-    return toAttemptResult<{ version?: number }>(
-      response.ok,
-      response.status,
-      body,
-      (b) => (b ?? {}) as { version?: number },
-    );
   }
 
   /**
@@ -190,17 +176,14 @@ export function CredentialEditForm({
    * secret and rotating the existing one — that is its business, not the form's,
    * and it is the part that keeps one audit chain per slot.
    */
-  async function attemptTotp() {
-    const response = await fetch(`/api/assets/${nodeId}/totp`, {
+  function attemptTotp() {
+    return apiFetch(`/api/assets/${nodeId}/totp`, {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
+      json: {
         seed: totpSeed.trim(),
         ...(reason.trim() ? { reason: reason.trim() } : {}),
-      }),
+      },
     });
-    const body = await response.json().catch(() => null);
-    return toAttemptResult<unknown>(response.ok, response.status, body, (b) => b);
   }
 
   async function saveTotp() {
@@ -234,20 +217,14 @@ export function CredentialEditForm({
     setError(null);
     setSaved(null);
     try {
-      const response = await fetch(`/api/assets/${nodeId}/totp`, { method: 'DELETE' });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        setError(
-          (body as { error?: { message?: string } } | null)?.error?.message ??
-            'The seed could not be removed.',
-        );
+      const result = await apiFetch(`/api/assets/${nodeId}/totp`, { method: 'DELETE' });
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setEditingTotp(false);
       setSaved('The one-time code seed was detached. Its history is kept for the audit trail.');
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }
@@ -272,10 +249,8 @@ export function CredentialEditForm({
       setNewValue('');
       setReason('');
       setRotating(false);
-      setSaved(`Stored as version ${result.value.version ?? '?'}. The previous value is superseded.`);
+      setSaved(`Stored as version ${result.value?.version ?? '?'}. The previous value is superseded.`);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

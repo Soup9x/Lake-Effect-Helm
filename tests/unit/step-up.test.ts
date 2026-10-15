@@ -8,10 +8,10 @@
  * this; the rule is tested here.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { STEP_UP_CODE, toAttemptResult, withStepUp } from '../../src/lib/ui/step-up';
+import { STEP_UP_CODE, withStepUp } from '../../src/lib/ui/step-up';
 
-const refused = (code: string) => ({ ok: false as const, code, message: `refused: ${code}` });
-const granted = <T,>(value: T) => ({ ok: true as const, value });
+const refused = (code: string) => ({ ok: false as const, status: 403, code, message: `refused: ${code}` });
+const granted = <T,>(value: T) => ({ ok: true as const, status: 200, value });
 
 describe('withStepUp', () => {
   it('never prompts when the action succeeds', async () => {
@@ -77,35 +77,5 @@ describe('withStepUp', () => {
     expect(result).toEqual(refused(STEP_UP_CODE));
     expect(prompt).toHaveBeenCalledTimes(1);
     expect(attempt).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('toAttemptResult', () => {
-  it('carries the code through, which is what opens the prompt', () => {
-    const result = toAttemptResult(
-      false,
-      403,
-      { error: { code: STEP_UP_CODE, message: 'nope', details: { auditEventUid: 'abc' } } },
-      () => null,
-    );
-    expect(result).toEqual({
-      ok: false,
-      code: STEP_UP_CODE,
-      message: 'nope',
-      auditEventUid: 'abc',
-    });
-  });
-
-  it('falls back to a usable failure when the body is not an error envelope', () => {
-    // A proxy returning an HTML error page, or a route that threw before the
-    // handler. Without this the code is undefined and every refusal silently
-    // stops prompting.
-    const result = toAttemptResult(false, 502, '<html>bad gateway</html>', () => null);
-    expect(result).toEqual({ ok: false, code: 'internal', message: 'The request failed (502).' });
-  });
-
-  it('projects the success body through the caller function', () => {
-    const result = toAttemptResult(true, 200, { value: 'hunter2' }, (b) => (b as { value: string }).value);
-    expect(result).toEqual({ ok: true, value: 'hunter2' });
   });
 });

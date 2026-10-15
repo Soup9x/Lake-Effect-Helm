@@ -333,7 +333,7 @@ export class RadiusProtocolError extends Error {
   }
 }
 
-export class RadiusIdentifierMismatch extends Error {
+class RadiusIdentifierMismatch extends Error {
   constructor(got: number, want: number) {
     super(`reply identifier ${got} does not match request ${want}`);
     this.name = 'RadiusIdentifierMismatch';

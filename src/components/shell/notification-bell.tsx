@@ -31,6 +31,7 @@ import { useRouter } from 'next/navigation';
 import { Bell, ClipboardCheck, FileDown, KeyRound, Settings2, TriangleAlert } from 'lucide-react';
 import { useDismissable } from '@/lib/ui/use-dismissable';
 import { formatDateTime } from '@/lib/ui/format';
+import { apiFetch } from '@/lib/ui/api';
 import type { NotificationKind } from '@/lib/notifications/kinds';
 
 interface InboxItem {
@@ -76,51 +77,42 @@ export function NotificationBell({ unread }: { unread: number }) {
     if (!next) return;
 
     setFailed(false);
-    try {
-      const response = await fetch('/api/account/inbox', {
-        headers: { accept: 'application/json' },
-      });
-      if (!response.ok) {
-        setFailed(true);
-        return;
-      }
-      const body = (await response.json()) as { notifications?: InboxItem[]; unread?: number };
-      const list = body.notifications ?? [];
-      setItems(list);
-      setCount(body.unread ?? 0);
-
-      // Exactly what was shown, not everything. See the header.
-      const unseen = list.filter((item) => !item.read).map((item) => item.id);
-      if (unseen.length > 0) await markRead(unseen);
-    } catch {
+    const result = await apiFetch<{ notifications?: InboxItem[]; unread?: number } | undefined>(
+      '/api/account/inbox',
+      { headers: { accept: 'application/json' } },
+    );
+    if (!result.ok) {
       setFailed(true);
+      return;
     }
+    const list = result.value?.notifications ?? [];
+    setItems(list);
+    setCount(result.value?.unread ?? 0);
+
+    // Exactly what was shown, not everything. See the header.
+    const unseen = list.filter((item) => !item.read).map((item) => item.id);
+    if (unseen.length > 0) await markRead(unseen);
   }
 
   async function markRead(ids: string[]) {
-    try {
-      const response = await fetch('/api/account/inbox', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ids }),
-      });
-      if (!response.ok) return;
-      const body = (await response.json()) as { unread?: number };
-      setCount(body.unread ?? 0);
-      // Locally too, so the dots clear without a second fetch.
-      setItems((current) => current?.map(
-        (item) => (ids.includes(item.id) ? { ...item, read: true } : item),
-      ) ?? null);
-      /*
-       * The shell's own count came from the server and is now wrong. Refreshing
-       * is what keeps it right on the NEXT navigation rather than carrying a
-       * stale number until something else happens to re-render the layout.
-       */
-      router.refresh();
-    } catch {
-      // A failed mark-read is not worth an error message: the rows are still
-      // there, still unread, and the next open tries again.
-    }
+    const result = await apiFetch<{ unread?: number } | undefined>('/api/account/inbox', {
+      method: 'PUT',
+      json: { ids },
+    });
+    // A failed mark-read is not worth an error message: the rows are still
+    // there, still unread, and the next open tries again.
+    if (!result.ok) return;
+    setCount(result.value?.unread ?? 0);
+    // Locally too, so the dots clear without a second fetch.
+    setItems((current) => current?.map(
+      (item) => (ids.includes(item.id) ? { ...item, read: true } : item),
+    ) ?? null);
+    /*
+     * The shell's own count came from the server and is now wrong. Refreshing
+     * is what keeps it right on the NEXT navigation rather than carrying a
+     * stale number until something else happens to re-render the layout.
+     */
+    router.refresh();
   }
 
   return (

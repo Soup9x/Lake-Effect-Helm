@@ -123,7 +123,7 @@ describe('POST /api/sites', () => {
     const response = await createSite(
       post('/api/sites', { organizationId: IDS.orgGlobex, name: 'Out of scope' }),
     );
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(403);
 
     const sql = superuserSql();
     try {
@@ -255,7 +255,7 @@ describe('POST /api/assets', () => {
         address: 'not-an-ip',
       }),
     );
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(400);
 
     const sql = superuserSql();
     try {

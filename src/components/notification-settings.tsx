@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Input, Label } from './ui/field';
 import { Badge, type BadgeTone } from './ui/badge';
 import { formatDateTime } from '@/lib/ui/format';
+import { apiFetch, type Feedback } from '@/lib/ui/api';
 
 export interface NotificationDestination {
   id: string;
@@ -101,8 +102,6 @@ const BLANK: {
   maxAttempts: 6,
   timeoutMs: 5000,
 };
-
-type Feedback = { ok: boolean; message: string } | null;
 
 function statusTone(status: string): BadgeTone {
   switch (status) {
@@ -212,10 +211,9 @@ export function NotificationSettingsCard({
     setFeedback(null);
 
     try {
-      const response = await fetch('/api/notifications', {
+      const result = await apiFetch('/api/notifications', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           ...(form.id ? { id: form.id } : {}),
           name: form.name,
           transport: form.transport,
@@ -233,12 +231,11 @@ export function NotificationSettingsCard({
               ...(url ? { url } : {}),
               ...(signingSecret ? { signingSecret } : {}),
             }),
-        }),
+        },
       });
 
-      const payload = (await response.json()) as { error?: { message?: string } };
-      if (!response.ok) {
-        setFeedback({ ok: false, message: payload.error?.message ?? `Save failed (${response.status}).` });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
 
@@ -253,8 +250,6 @@ export function NotificationSettingsCard({
           : 'Saved. Send a test to prove it reaches the channel.',
       });
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'Could not reach the server.' });
     } finally {
       setBusy(false);
     }
@@ -264,13 +259,10 @@ export function NotificationSettingsCard({
     setBusy(true);
     setFeedback(null);
     try {
-      const response = await fetch(`/api/notifications/${id}/test`, { method: 'POST' });
-      const payload = (await response.json()) as { message?: string; error?: { message?: string } };
+      const result = await apiFetch<{ message?: string }>(`/api/notifications/${id}/test`, { method: 'POST' });
       setFeedback({
-        ok: response.ok,
-        message: response.ok
-          ? payload.message ?? 'Queued.'
-          : payload.error?.message ?? `Could not queue a test (${response.status}).`,
+        ok: result.ok,
+        message: result.ok ? result.value.message ?? 'Queued.' : result.message,
       });
       router.refresh();
     } finally {
@@ -288,9 +280,9 @@ export function NotificationSettingsCard({
     setBusy(true);
     setFeedback(null);
     try {
-      const response = await fetch(`/api/notifications/${id}`, { method: 'DELETE' });
-      if (!response.ok) {
-        setFeedback({ ok: false, message: `Could not remove it (${response.status}).` });
+      const result = await apiFetch(`/api/notifications/${id}`, { method: 'DELETE' });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
       setEditing(null);
@@ -301,8 +293,6 @@ export function NotificationSettingsCard({
           : 'Destination removed, and its webhook URL with it.',
       });
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'The request did not reach the server. Nothing was changed.' });
     } finally {
       setBusy(false);
     }

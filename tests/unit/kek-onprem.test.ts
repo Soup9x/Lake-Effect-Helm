@@ -449,7 +449,7 @@ describe('Vault transit KEK provider', () => {
     await provider.generateDek(context);
 
     const call = vault.calls.find((c) => c.url.includes('/datakey/'));
-    expect((call?.body as { context: string }).context).toBe(
+    expect((call!.body as { context: string }).context).toBe(
       serialiseContext(context).toString('base64'),
     );
   });

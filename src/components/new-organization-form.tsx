@@ -6,6 +6,7 @@ import { Building2, Loader2, Plus } from 'lucide-react';
 import { Button } from './ui/button';
 import { Modal } from './ui/modal';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
+import { apiFetch } from '@/lib/ui/api';
 
 /**
  * Adding a client.
@@ -66,31 +67,24 @@ export function NewOrganizationForm() {
     setError(null);
 
     try {
-      const response = await fetch('/api/organizations', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const result = await apiFetch('/api/organizations', {
+        json: {
           name: name.trim(),
           slug: slugTouched ? slug.trim() : slugify(name),
           status,
           ...(industry.trim() ? { industry: industry.trim() } : {}),
           ...(notes.trim() ? { notes: notes.trim() } : {}),
-        }),
+        },
       });
 
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(payload?.error?.message ?? `The client could not be created (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
 
       reset();
       setOpen(false);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

@@ -399,7 +399,6 @@ function assemble(bodies: string[], meta: DocumentMeta): Buffer {
  * the only one that can carry an em-dash or a client name with an accent.
  */
 function pdfTextString(text: string): string {
-  // eslint-disable-next-line no-control-regex
   if (/^[\x20-\x7e]*$/.test(text)) return `(${encodePdfText(text)})`;
 
   const utf16 = Buffer.from(`\uFEFF${text}`, 'utf16le').swap16();

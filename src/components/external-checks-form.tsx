@@ -22,10 +22,11 @@ import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
-import { Modal } from './ui/modal';
+import { Modal, ModalTrigger } from './ui/modal';
 import {
   INTERVAL_MAX_HOURS, INTERVAL_MIN_HOURS, type ExternalCheckSetting,
 } from '@/lib/external/settings';
+import { apiFetch } from '@/lib/ui/api';
 
 export function ExternalChecksForm({
   setting,
@@ -77,27 +78,21 @@ export function ExternalChecksForm({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/tenant/external-checks', {
+      const result = await apiFetch('/api/tenant/external-checks', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           domainsEnabled: domains,
           certificatesEnabled: certificates,
           intervalHours: parsed,
           rdapBaseUrl: endpoint.trim(),
-        }),
+        },
       });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(body?.error?.message ?? `That could not be saved (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setOpen(false);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }
@@ -105,7 +100,7 @@ export function ExternalChecksForm({
 
   return (
     <>
-      <span onClick={() => openWith(true)}>{trigger}</span>
+      <ModalTrigger onOpen={() => openWith(true)}>{trigger}</ModalTrigger>
       <Modal
         open={open}
         onOpenChange={openWith}

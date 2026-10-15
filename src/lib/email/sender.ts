@@ -205,5 +205,3 @@ export async function recordRelayResult(
   `;
 }
 
-/** Re-exported so a caller needs one import. */
-export { EmailTransportError, withTenant };

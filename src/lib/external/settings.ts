@@ -19,7 +19,7 @@ export interface ExternalCheckSetting {
 }
 
 /** The shipped defaults, which are also what an absent row means. */
-export const EXTERNAL_CHECK_DEFAULTS = {
+const EXTERNAL_CHECK_DEFAULTS = {
   domainsEnabled: false,
   certificatesEnabled: false,
   intervalHours: 24,

@@ -31,9 +31,9 @@ enforced by PostgreSQL itself rather than by application code.
 - **Clients and their estate.** Organisations, sites, contacts, assets (devices,
   networks, domains, certificates, applications …) linked as a graph, so "what
   breaks if this fails" is a query.
-- **Credential vault.** Envelope-encrypted secrets with TOTP, autofill domain
-  rules, sensitivity levels, step-up re-authentication and justification for
-  critical credentials. Every reveal and copy is audited in the same database
+- **Credential vault.** Envelope-encrypted secrets with TOTP, sensitivity
+  levels, step-up re-authentication and justification for critical
+  credentials. Every reveal and copy is audited in the same database
   transaction.
 - **Flexible asset types.** Technician-authored JSON Schema types, versioned,
   validated as untrusted input.
@@ -49,6 +49,9 @@ enforced by PostgreSQL itself rather than by application code.
   certificate pinning and signed webhooks.
 - **Sign-in.** Local passwords (the break-glass path), Microsoft Entra ID, any
   OpenID Connect provider, and RADIUS. All produce the same revocable session.
+- **Personal API tokens.** Issued from the account page, scoped to a subset of
+  what the person holds, expiring within a year, revocable at once, for
+  scripts and integrations that act as a technician.
 - **Tamper-evident audit log.** Per-tenant SHA-256 hash chain, anchored to an
   external receipt on a schedule.
 
@@ -67,9 +70,11 @@ src/
   app/          Pages (app/(app)) and API routes (app/api).
   components/   React components. ui/ holds the primitive set.
   lib/          Server and shared code, one directory per concern:
-                api/ (route wrappers, errors, bounded body reading), auth/,
+                api/ (route wrappers, errors, SQL-error mapping, bounded
+                body reading), auth/ (sessions, tokens, sign-in methods),
                 db/ (per-role pools, withTenant), crypto/, secrets/, exports/,
-                documents/, flexible/, graph/, notifications/, email/, unifi/ …
+                documents/, flexible/, graph/, notifications/, email/, unifi/,
+                ui/ (browser helpers: apiFetch, clipboard, step-up retry) …
   workers/      Job runtime and the scheduled jobs (alerts, exports, anchoring,
                 notifications, reminders, external checks, UniFi sync).
 tests/
@@ -79,6 +84,22 @@ scripts/        Bootstrap, key rotation, drift and migration checks, test DB.
 deploy/         Turnkey on-prem install: setup.sh, secrets, Postgres, Caddy.
 docs/           Architecture and deployment documents.
 ```
+
+Four conventions keep the rest consistent:
+
+- **Routes answer one envelope.** Every refusal is
+  `{ error: { code, message, details?, requestId } }`, whether the route threw
+  an `ApiError` or the database refused the write — `src/lib/api/pg-errors.ts`
+  maps the schema's own `helm:` raises and constraints to 4xx codes. In the
+  browser, every call goes through `apiFetch()` in `src/lib/ui/api.ts`, which
+  never throws and returns `{ ok, value }` or `{ ok, code, message }`.
+- **Queries live with their concern**, in `src/lib/<concern>/queries.ts`, and
+  pages compose them on one transaction. A page does not carry SQL.
+- **Types are the check, Biome is the lint.** `tsconfig.json` is strict;
+  `pnpm lint` adds what the type checker cannot see (hook dependencies, keys,
+  accessibility). Both run in CI.
+- **Tokens narrow.** A personal API token carries a subset of what its issuer
+  holds and nothing more; the session context enforces it per request.
 
 Three ideas carry most of the weight:
 
@@ -257,6 +278,11 @@ the TLS directive); they are documented in
   and Docker base images, and security updates as soon as an advisory lands.
   CI's audit job fails on a moderate or higher advisory. GitHub Actions are
   pinned to commit SHAs, which Dependabot keeps current.
+- **Two pins worth knowing.** `next-auth` is a 5.0 beta because Auth.js v5
+  has not shipped a stable release; Dependabot's `runtime` group will offer
+  beta bumps, which need the sign-in tests run before merging. Biome is the
+  linter rather than ESLint because `typescript-eslint` does not yet support
+  the TypeScript 7 this tree uses.
 - **Runtime vs. dev.** `tsx` is a runtime dependency on purpose: the migrate,
   bootstrap and rotation containers run TypeScript directly. Everything used
   only to build or test belongs in `devDependencies`, which keeps it out of
@@ -296,8 +322,10 @@ the TLS directive); they are documented in
 | `pnpm helm:bootstrap` | Create the first tenant, administrator and data key |
 | `pnpm helm:rotate-kek` | Re-wrap tenant data keys onto the current master key version |
 | `pnpm typecheck` | `tsc --noEmit` |
+| `pnpm lint` | Biome, the same rules CI runs |
+| `pnpm db:studio` | drizzle-kit's browser over a development database |
 | `pnpm test` / `test:unit` / `test:integration` / `test:sql` | The test suites (below) |
-| `pnpm verify` | Typecheck, migration check, every vitest suite, drift |
+| `pnpm verify` | Typecheck, lint, migration check, every vitest suite, drift |
 
 ## Testing
 
@@ -317,6 +345,26 @@ Integration tests connect as the real non-superuser roles, because RLS
 policies, `SECURITY DEFINER` boundaries and grants do not exist in a mock.
 [`docs/testing.md`](docs/testing.md) describes what each suite covers, how to
 write a test for a new route or job, and which areas still need tests.
+
+## Using the API from a script
+
+Issue a personal token on your account page (Account → API tokens). It is
+shown once. It acts as you, narrowed to the scopes you chose, until it
+expires or you revoke it, and every request it makes is audited against you.
+
+```bash
+export HELM_TOKEN='helm_pa_XXXXXXXX.…'
+curl -sS https://helm.example.com/api/organizations \
+     -H "Authorization: Bearer $HELM_TOKEN"
+curl -sS https://helm.example.com/api/search?q=firewall \
+     -H "Authorization: Bearer $HELM_TOKEN"
+```
+
+A refusal is always `{ "error": { "code", "message", "requestId" } }` with a
+4xx status; the request id is what to quote when asking an administrator to
+look in the audit log. A token cannot reveal a credential that requires
+step-up, and cannot issue another token. The route table is in
+[`docs/architecture/04-api-layer.md`](docs/architecture/04-api-layer.md) §8.
 
 ## Security model
 
@@ -381,7 +429,7 @@ In short:
 | [11 Network integration](docs/architecture/11-network-integration.md) | UniFi polling, pinning and webhooks |
 | [Docker install](docs/deployment/docker-on-prem.md) · [Runbook](docs/deployment/on-premises.md) | Installing and operating Helm |
 | [Testing](docs/testing.md) | The suites, writing tests, and the gaps |
-| [IT Glue parity](docs/itg-parity.md) | Historical feature plan and its decisions log |
+| [IT Glue parity](docs/history/itg-parity.md) | Historical feature plan and its decisions log |
 
 ## License
 

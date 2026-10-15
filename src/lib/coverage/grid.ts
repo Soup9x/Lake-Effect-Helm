@@ -13,7 +13,7 @@
  * What IS factual is coverage: this client has at least one record of 7 of the
  * 11 kinds you document. That sentence is true, it carries its own denominator,
  * and the grid shows the four zero cells behind it so the number can be acted
- * on rather than argued with. The summary table in docs/itg-parity.md asked for
+ * on rather than argued with. The summary table in docs/history/itg-parity.md asked for
  * "a per-type/per-client coverage query", and this is that, named the same way.
  *
  * FIELD-LEVEL COMPLETENESS IS DELIBERATELY NOT HERE. "How many of a record's

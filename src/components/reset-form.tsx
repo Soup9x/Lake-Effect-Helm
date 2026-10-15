@@ -13,6 +13,8 @@ import { useRouter } from 'next/navigation';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label, FieldHint } from './ui/field';
+import { apiFetch } from '@/lib/ui/api';
+import { policyProblems } from '@/lib/ui/password-problems';
 
 export function ResetForm({ token }: { token: string }) {
   const router = useRouter();
@@ -33,29 +35,14 @@ export function ResetForm({ token }: { token: string }) {
 
     setPending(true);
     try {
-      const response = await fetch('/api/auth/local/reset/redeem', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ token, password }),
-      });
+      const result = await apiFetch('/api/auth/local/reset/redeem', { json: { token, password } });
 
-      const payload = (await response.json()) as {
-        ok?: boolean;
-        error?: { message?: string; problems?: string[] };
-      };
-
-      if (!response.ok) {
-        setProblems(
-          payload.error?.problems?.map((p) => `Your password ${p}.`) ?? [
-            payload.error?.message ?? 'That reset link is no longer valid.',
-          ],
-        );
+      if (!result.ok) {
+        setProblems(policyProblems(result.details)?.map((p) => `Your password ${p}.`) ?? [result.message]);
         return;
       }
 
       setDone(true);
-    } catch {
-      setProblems(['Could not reach the server. Check your connection and try again.']);
     } finally {
       setPending(false);
     }

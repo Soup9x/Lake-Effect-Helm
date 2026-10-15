@@ -74,12 +74,6 @@ export function hasSessionResolver(): boolean {
   return slot().registered;
 }
 
-/** Drop any registered resolver. For tests that need a clean slate. */
-export function clearSessionResolver(): void {
-  const host = globalThis as typeof globalThis & { [SLOT_KEY]?: ResolverSlot };
-  delete host[SLOT_KEY];
-}
-
 export function getSessionUser(): Promise<SessionUser | null> {
   return slot().resolver();
 }

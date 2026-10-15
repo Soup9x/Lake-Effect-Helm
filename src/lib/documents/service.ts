@@ -210,7 +210,7 @@ export class DocumentService {
       // internal-only to a client actor and simply absent are one answer on
       // purpose: a distinguishable "exists but you may not" tells a client
       // which documents the MSP keeps from them.
-      if (!row || !row.ok || !row.attachment_id || !row.storage_key) {
+      if (!row?.ok || !row.attachment_id || !row.storage_key) {
         return { refused: true as const };
       }
 

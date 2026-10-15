@@ -6,6 +6,7 @@ import { Loader2, Plus, Server } from 'lucide-react';
 import { Button } from './ui/button';
 import { Modal } from './ui/modal';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
+import { apiFetch } from '@/lib/ui/api';
 
 /**
  * Documenting an asset.
@@ -162,29 +163,22 @@ export function NewAssetForm({
     setError(null);
     try {
       const key = EXTRA_KEY[nodeType];
-      const response = await fetch('/api/assets', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const result = await apiFetch('/api/assets', {
+        json: {
           organizationId,
           nodeType,
           name: name.trim(),
           ...(siteId ? { siteId } : {}),
           ...(key ? { [key]: extraValue } : {}),
           ...(notes.trim() ? { notes: notes.trim() } : {}),
-        }),
+        },
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(payload?.error?.message ?? `The asset could not be created (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       close();
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }

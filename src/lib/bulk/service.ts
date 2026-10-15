@@ -100,7 +100,7 @@ async function runSelection(
 }
 
 /** Reject a selection before it reaches the database. */
-export function normaliseSelection(ids: string[]): string[] {
+function normaliseSelection(ids: string[]): string[] {
   const unique = [...new Set(ids)];
   if (unique.length === 0) throw ApiError.invalid('select at least one item');
   if (unique.length > MAX_SELECTION) {
@@ -125,7 +125,7 @@ export function normaliseSelection(ids: string[]): string[] {
  * Lowercased on the way in so "Production" and "production" are one tag rather
  * than two that sort apart and filter separately.
  */
-export function normaliseTags(raw: string[]): string[] {
+function normaliseTags(raw: string[]): string[] {
   const cleaned = raw
     .map((t) => t.trim().toLowerCase().replace(/\s+/g, ' '))
     .filter((t) => t.length > 0 && t.length <= 60);

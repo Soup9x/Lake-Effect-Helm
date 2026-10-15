@@ -19,263 +19,22 @@ import { SmtpSettingsCard } from '@/components/smtp-settings';
 import { readExternalCheckSetting } from '@/lib/external/settings';
 import { readTenantSidebarDefault } from '@/lib/nav/sidebar-queries';
 import { ORG_CATEGORIES } from '@/lib/nav/org-categories';
-import { RadiusSettingsCard, type RadiusSettings } from '@/components/radius-settings';
-import { OidcSettingsCard, type OidcSettings } from '@/components/oidc-settings';
+import { RadiusSettingsCard } from '@/components/radius-settings';
+import { OidcSettingsCard } from '@/components/oidc-settings';
+import { NotificationSettingsCard } from '@/components/notification-settings';
+import { UnifiSettingsCard } from '@/components/unifi-settings';
+import { listKeyCustody, listSystemWorkers, readTenantSummary } from '@/lib/tenant/queries';
+import { readOidcSettings, readRadiusSettings } from '@/lib/auth/sign-in-settings';
 import {
-  NotificationSettingsCard,
-  type NotificationDestination,
-  type NotificationDelivery,
-} from '@/components/notification-settings';
-import {
-  UnifiSettingsCard,
-  type OrganizationOption,
-  type UnifiMapping,
-} from '@/components/unifi-settings';
-import { redirectUri } from '@/lib/auth/oidc';
+  listNotificationDestinations,
+  listRecentDeliveries,
+  NOTIFICATION_EVENTS,
+} from '@/lib/notifications/queries';
+import { listOrganizationOptions, listUnifiMappings } from '@/lib/unifi/queries';
 import { headers } from 'next/headers';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/ui/format';
-
-interface KeyRow {
-  generation: number;
-  status: string;
-  wrap_provider: string;
-  kek_id: string;
-  host_held_kek: boolean;
-  development_key: boolean;
-  activated_at: Date | null;
-}
-
-interface WorkerRow {
-  id: string; name: string; role_key: string;
-  allowed_reveal_purposes: string[] | null; disabled_at: Date | null;
-}
-
-interface RadiusRow {
-  enabled: boolean;
-  host: string;
-  port: number;
-  timeout_ms: number;
-  retries: number;
-  nas_identifier: string;
-  secret_set: boolean;
-  last_test_at: Date | null;
-  last_test_ok: boolean | null;
-  last_test_error: string | null;
-}
-
-interface DestinationRow {
-  id: string;
-  name: string;
-  format: NotificationDestination['format'];
-  is_active: boolean;
-  transport: NotificationDestination['transport'];
-  email_address: string | null;
-  organization_id: string | null;
-  organization_name: string | null;
-  events: string[];
-  url_host: string | null;
-  url_digest: string | null;
-  signing_secret_set: boolean;
-  max_attempts: number;
-  timeout_ms: number;
-  last_delivery_at: Date | null;
-  last_delivery_ok: boolean | null;
-  last_delivery_error: string | null;
-  consecutive_failures: number;
-  pending_count: string;
-  dead_count: string;
-  updated_at: Date;
-}
-
-interface DeliveryRow {
-  id: string;
-  endpoint_name: string;
-  event_type: string;
-  subject: string;
-  status: string;
-  attempts: number;
-  response_code: number | null;
-  error: string | null;
-  created_at: Date;
-  delivered_at: Date | null;
-}
-
-/** The subscribable vocabulary, mirroring helm.notification_events(). */
-const NOTIFICATION_EVENTS = [
-  'export.requested', 'export.rendered', 'export.downloaded', 'export.revoked',
-  'secret.revealed', 'access.denied', 'expiration.warning',
-  'integration.failed', 'key.rotated',
-] as const;
-
-function toDestination(row: DestinationRow): NotificationDestination {
-  return {
-    id: row.id,
-    name: row.name,
-    format: row.format,
-    isActive: row.is_active,
-    transport: row.transport,
-    emailAddress: row.email_address,
-    organizationId: row.organization_id,
-    organizationName: row.organization_name,
-    events: row.events,
-    urlHost: row.url_host,
-    urlDigest: row.url_digest,
-    signingSecretSet: row.signing_secret_set,
-    maxAttempts: row.max_attempts,
-    timeoutMs: row.timeout_ms,
-    lastDeliveryAt: row.last_delivery_at?.toISOString() ?? null,
-    lastDeliveryOk: row.last_delivery_ok,
-    lastDeliveryError: row.last_delivery_error,
-    consecutiveFailures: row.consecutive_failures,
-    pendingCount: Number(row.pending_count),
-    deadCount: Number(row.dead_count),
-  };
-}
-
-function toDelivery(row: DeliveryRow): NotificationDelivery {
-  return {
-    id: row.id,
-    destination: row.endpoint_name,
-    event: row.event_type,
-    subject: row.subject,
-    status: row.status,
-    attempts: row.attempts,
-    responseCode: row.response_code,
-    error: row.error,
-    createdAt: row.created_at.toISOString(),
-    deliveredAt: row.delivered_at?.toISOString() ?? null,
-  };
-}
-
-/** helm.unifi_mappings(): settings and health, never the API key. */
-interface UnifiRow {
-  id: string;
-  organization_id: string;
-  organization_name: string;
-  name: string;
-  controller_url: string;
-  unifi_site_id: string;
-  is_active: boolean;
-  api_key_set: boolean;
-  tls_verify: boolean;
-  tls_pinned_sha256: string | null;
-  tls_exception_ack_at: Date | null;
-  tls_exception_ack_by_name: string | null;
-  poll_interval_seconds: number;
-  last_poll_at: Date | null;
-  last_poll_ok: boolean | null;
-  last_poll_error: string | null;
-  consecutive_failures: number;
-  next_poll_at: Date;
-  last_device_count: number | null;
-  last_client_count: number | null;
-  asset_count: string;
-  webhook_state: UnifiMapping['webhookState'];
-  webhook_secret_set: boolean;
-  webhook_last_event_at: Date | null;
-  webhook_last_error: string | null;
-  webhook_events_received: string;
-  webhook_events_rejected: string;
-}
-
-function toUnifiMapping(row: UnifiRow): UnifiMapping {
-  return {
-    id: row.id,
-    organizationId: row.organization_id,
-    organizationName: row.organization_name,
-    name: row.name,
-    controllerUrl: row.controller_url,
-    unifiSiteId: row.unifi_site_id,
-    isActive: row.is_active,
-    // Whether a key exists, never the key itself — helm_app cannot read secret
-    // material, so there is nothing here that could carry it.
-    apiKeySet: row.api_key_set,
-    tlsVerify: row.tls_verify,
-    tlsPinnedSha256: row.tls_pinned_sha256,
-    tlsExceptionAckAt: row.tls_exception_ack_at?.toISOString() ?? null,
-    tlsExceptionAckByName: row.tls_exception_ack_by_name,
-    pollIntervalSeconds: row.poll_interval_seconds,
-    lastPollAt: row.last_poll_at?.toISOString() ?? null,
-    lastPollOk: row.last_poll_ok,
-    lastPollError: row.last_poll_error,
-    consecutiveFailures: row.consecutive_failures,
-    nextPollAt: row.next_poll_at.toISOString(),
-    lastDeviceCount: row.last_device_count,
-    lastClientCount: row.last_client_count,
-    assetCount: Number(row.asset_count),
-    // Receiver health (0450). Whether a secret is set, never what it is —
-    // helm.unifi_mappings() has no column that could carry it.
-    webhookState: row.webhook_state,
-    webhookSecretSet: row.webhook_secret_set,
-    webhookLastEventAt: row.webhook_last_event_at?.toISOString() ?? null,
-    webhookLastError: row.webhook_last_error,
-    webhookEventsReceived: Number(row.webhook_events_received),
-    webhookEventsRejected: Number(row.webhook_events_rejected),
-  };
-}
-
-interface OidcRow {
-  enabled: boolean;
-  slug: string;
-  display_name: string;
-  issuer: string;
-  client_id: string;
-  scopes: string[];
-  allow_signup: boolean;
-  link_by_email: boolean;
-  secret_set: boolean;
-  last_test_at: Date | null;
-  last_test_ok: boolean | null;
-  last_test_error: string | null;
-}
-
-/**
- * The redirect URI is COMPUTED from the origin this page was served on, never
- * stored. It has to be the URL the callback will actually arrive at, and the
- * only thing that knows that is the request — behind Caddy, that means the
- * forwarded host. A stored copy would drift from reality, and this is the one
- * value in an OIDC setup whose mismatch produces an error at the provider
- * rather than anywhere an operator would think to look.
- */
-function toOidcSettings(row: OidcRow | null, origin: string): OidcSettings | null {
-  if (!row) return null;
-  return {
-    configured: true,
-    enabled: row.enabled,
-    slug: row.slug,
-    displayName: row.display_name,
-    issuer: row.issuer,
-    clientId: row.client_id,
-    scopes: row.scopes,
-    allowSignup: row.allow_signup,
-    linkByEmail: row.link_by_email,
-    secretSet: row.secret_set,
-    redirectUri: redirectUri(origin, row.slug),
-    lastTestAt: row.last_test_at?.toISOString() ?? null,
-    lastTestOk: row.last_test_ok,
-    lastTestError: row.last_test_error,
-    deadEnd: row.enabled && !row.allow_signup && !row.link_by_email,
-  };
-}
-
-function toRadiusSettings(row: RadiusRow | null): RadiusSettings | null {
-  if (!row) return null;
-  return {
-    configured: true,
-    enabled: row.enabled,
-    host: row.host,
-    port: row.port,
-    timeoutMs: row.timeout_ms,
-    retries: row.retries,
-    nasIdentifier: row.nas_identifier,
-    secretSet: row.secret_set,
-    lastTestAt: row.last_test_at?.toISOString() ?? null,
-    lastTestOk: row.last_test_ok,
-    lastTestError: row.last_test_error,
-  };
-}
 
 /**
  * Deployment-wide settings: how people sign in, where the keys are, what the
@@ -298,52 +57,29 @@ function toRadiusSettings(row: RadiusRow | null): RadiusSettings | null {
 export default async function SettingsPage() {
   const identity = await getServerIdentity();
 
+  const head = await headers();
+  const origin =
+    process.env.AUTH_URL?.replace(/\/+$/, '') ??
+    `${head.get('x-forwarded-proto') ?? 'https'}://${head.get('x-forwarded-host') ?? head.get('host') ?? 'localhost'}`;
+
   const {
     keys, workers, tenant, radius, oidc, destinations, deliveries,
     unifi, organizations, canManageNetwork, flexibleTypeCount,
     sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow, smtp,
     expiryAlerts, canManageAlerts,
   } = await withTenant(actorOf(identity), async (tx) => {
-    const [keyRows, workerRows, tenantRows, radiusRows, oidcRows,
-           destinationRows, deliveryRows, unifiRows, organizationRows, networkRows,
-           flexibleTypeRows, sidebarDefaultRow, externalCheckRow,
-           healthWindowRow, smtpRow, expiryAlertRow, alertPermissionRows] = await Promise.all([
-      tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
-      tx<WorkerRow[]>`
-        SELECT id, name, role_key, allowed_reveal_purposes, disabled_at
-        FROM service_account WHERE is_system ORDER BY name
-      `,
-      // tenant_rls_select restricts this to the current tenant, so no
-      // predicate is needed and adding one would imply the policy were
-      // optional. can_write_tenant mirrors the routes' permission so a control
-      // is only offered to somebody it would work for. Named for the GRANT
-      // rather than for one of its uses: the rename form and the default
-      // sidebar below are two cards reading one permission, and calling the
-      // field can_rename would make the second one look like a mistake.
-      tx<{ name: string; slug: string; can_write_tenant: boolean }[]>`
-        SELECT t.name, t.slug,
-               EXISTS (SELECT 1 FROM membership m
-                       JOIN role_permission rp ON rp.role_key = m.role_key
-                       WHERE m.user_id = ${identity.actorId}::uuid
-                         AND rp.permission_key = 'tenant:write') AS can_write_tenant
-        FROM tenant t
-      `,
-      // Settings only, never the shared secret: helm_app cannot read that
-      // column, and this function's result type does not contain it.
-      tx<RadiusRow[]>`SELECT * FROM helm.radius_settings()`,
-      // Same shape, same boundary: settings without the client secret, which
-      // helm_app cannot read and which is not in this result type.
-      tx<OidcRow[]>`SELECT * FROM helm.oidc_settings()`,
-      // ...and again for the webhook URLs, which helm_app cannot read either.
-      // What comes back is a host and a digest.
-      tx<DestinationRow[]>`SELECT * FROM helm.webhook_endpoints()`,
-      tx<DeliveryRow[]>`SELECT * FROM helm.recent_notifications(20)`,
-      // Settings and health. The API key is a reference into `secret`, and this
-      // result type carries whether one is set — not what it is.
-      tx<UnifiRow[]>`SELECT * FROM helm.unifi_mappings()`,
-      // RLS scopes this to the tenant, and to the organisations this actor may
-      // see, so the picker cannot offer a client they have no access to.
-      tx<OrganizationOption[]>`SELECT id, name FROM organization ORDER BY name`,
+    const [keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
+           networkRows, flexibleTypeRows, sidebarDefaultRow, externalChecks,
+           healthWindow, smtp, expiryAlerts, alertPermissionRows] = await Promise.all([
+      listKeyCustody(tx),
+      listSystemWorkers(tx),
+      readTenantSummary(tx, identity.actorId),
+      readRadiusSettings(tx),
+      readOidcSettings(tx, origin),
+      listNotificationDestinations(tx),
+      listRecentDeliveries(tx),
+      listUnifiMappings(tx),
+      listOrganizationOptions(tx),
       // Mirrors the route's gate, so the editing controls are only offered to
       // somebody they would work for. The route and the database both check
       // again; this only decides what is rendered.
@@ -372,31 +108,15 @@ export default async function SettingsPage() {
       tx<{ allowed: boolean }[]>`SELECT helm.has_permission('alert:manage') AS allowed`,
     ]);
     return {
-      keys: keyRows,
-      workers: workerRows,
-      tenant: tenantRows[0] ?? null,
-      radius: radiusRows[0] ?? null,
-      oidc: oidcRows[0] ?? null,
-      destinations: destinationRows,
-      deliveries: deliveryRows,
-      unifi: unifiRows,
-      organizations: organizationRows,
+      keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
       canManageNetwork: networkRows[0]?.permitted ?? false,
       flexibleTypeCount: flexibleTypeRows[0]?.n ?? 0,
       sidebarDefault: sidebarDefaultRow.categories,
       sidebarDefaultSet: sidebarDefaultRow.set,
-      externalChecks: externalCheckRow,
-      healthWindow: healthWindowRow,
-      smtp: smtpRow,
-      expiryAlerts: expiryAlertRow,
+      externalChecks, healthWindow, smtp, expiryAlerts,
       canManageAlerts: alertPermissionRows[0]?.allowed ?? false,
     };
   });
-
-  const head = await headers();
-  const origin =
-    process.env.AUTH_URL?.replace(/\/+$/, '') ??
-    `${head.get('x-forwarded-proto') ?? 'https'}://${head.get('x-forwarded-host') ?? head.get('host') ?? 'localhost'}`;
 
   const hostHeld = keys.some((key) => key.host_held_kek);
   const developmentKey = keys.some((key) => key.development_key);
@@ -450,14 +170,14 @@ export default async function SettingsPage() {
         <SmtpSettingsCard initial={smtp} canManage={tenant?.can_write_tenant ?? false} />
 
         <NotificationSettingsCard
-          destinations={destinations.map(toDestination)}
-          history={deliveries.map(toDelivery)}
+          destinations={destinations}
+          history={deliveries}
           events={NOTIFICATION_EVENTS}
           emailConfigured={smtp.enabled}
         />
 
         <UnifiSettingsCard
-          mappings={unifi.map(toUnifiMapping)}
+          mappings={unifi}
           organizations={organizations}
           canManage={canManageNetwork}
           // Same origin the OIDC redirect URI is built from, and for the same
@@ -466,9 +186,9 @@ export default async function SettingsPage() {
           callbackBase={origin}
         />
 
-        <OidcSettingsCard initial={toOidcSettings(oidc, origin)} />
+        <OidcSettingsCard initial={oidc} />
 
-        <RadiusSettingsCard initial={toRadiusSettings(radius)} />
+        <RadiusSettingsCard initial={radius} />
 
         <Card className={developmentKey ? 'border-danger/40' : undefined}>
           <CardHeader>

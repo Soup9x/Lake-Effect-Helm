@@ -32,7 +32,7 @@
 import { useId, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { GripVertical, Plus, Trash2 } from 'lucide-react';
-import { Modal } from './ui/modal';
+import { Modal, ModalTrigger } from './ui/modal';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Badge } from './ui/badge';
@@ -41,6 +41,7 @@ import {
   validateFields, type FieldDef, type FieldKind,
 } from '@/lib/flexible/fields';
 import { cn } from '@/lib/ui/cn';
+import { apiFetch } from '@/lib/ui/api';
 
 export interface EditableType {
   id: string;
@@ -130,37 +131,31 @@ export function FlexibleTypeEditor({
     const searchableFields = searchablePointers(fields, [...searchable]);
 
     try {
-      const response = editing
-        ? await fetch(`/api/flexible-assets/types/${type.id}/versions`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
+      const result = editing
+        ? await apiFetch(`/api/flexible-assets/types/${type.id}/versions`, {
+            json: {
               jsonSchema, uiSchema, searchableFields,
               ...(changeNote ? { changeNote } : {}),
-            }),
+            },
           })
-        : await fetch('/api/flexible-assets/types', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
+        : await apiFetch('/api/flexible-assets/types', {
+            json: {
               key: key || slugify(name),
               name,
               ...(description ? { description } : {}),
               clientVisible,
               jsonSchema, uiSchema, searchableFields,
               ...(changeNote ? { changeNote } : {}),
-            }),
+            },
           });
 
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as
-          { error?: { message?: string; details?: unknown } } | null;
+      if (!result.ok) {
         // The API's issue list is the useful part when the guard refuses a
         // schema; a bare "400" sends somebody back to guess.
-        const detail = payload?.error?.details
-          ? ` — ${JSON.stringify(payload.error.details)}`
+        const detail = result.details
+          ? ` — ${JSON.stringify(result.details)}`
           : '';
-        setError(`${payload?.error?.message ?? 'The request was refused.'}${detail}`);
+        setError(`${result.message}${detail}`);
         return;
       }
 
@@ -175,18 +170,15 @@ export function FlexibleTypeEditor({
         if ((colour || null) !== type.colour) metadata.colour = colour || null;
         if (clientVisible !== type.clientVisible) metadata.clientVisible = clientVisible;
         if (Object.keys(metadata).length > 0) {
-          await fetch(`/api/flexible-assets/types/${type.id}`, {
+          await apiFetch(`/api/flexible-assets/types/${type.id}`, {
             method: 'PATCH',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(metadata),
+            json: metadata,
           });
         }
       }
 
       setOpen(false);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }
@@ -194,7 +186,7 @@ export function FlexibleTypeEditor({
 
   return (
     <>
-      <span onClick={() => setOpen(true)}>{trigger}</span>
+      <ModalTrigger onOpen={() => setOpen(true)}>{trigger}</ModalTrigger>
       <Modal
         open={open}
         onOpenChange={setOpen}

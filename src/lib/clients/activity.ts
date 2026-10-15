@@ -137,7 +137,7 @@ export interface ClientActivityItem {
  * is not tenant-wide those two rows are filtered out. That direction is safe —
  * it hides rather than leaks — so it is not this widget's to fix; fixing it
  * means changing an RLS policy, which is a migration. Recorded in
- * docs/itg-parity.md.
+ * docs/history/itg-parity.md.
  */
 export async function listClientActivity(
   tx: HelmTx,

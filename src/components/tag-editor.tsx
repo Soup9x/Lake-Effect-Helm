@@ -32,6 +32,7 @@ import { Badge } from './ui/badge';
 import { Input } from './ui/field';
 import { Button } from './ui/button';
 import { parseTagDraft } from '@/lib/ui/tags';
+import { apiFetch } from '@/lib/ui/api';
 
 export function TagEditor({
   target,
@@ -52,18 +53,16 @@ export function TagEditor({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function call(mode: 'add' | 'remove', values: string[]): Promise<boolean> {
-    const response = await fetch('/api/bulk/tags', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ target, ids: [id], tags: values, mode }),
+  /** Null when the change took; otherwise the sentence to show. */
+  async function call(mode: 'add' | 'remove', values: string[], refused: string): Promise<string | null> {
+    const result = await apiFetch<{ affected?: number } | undefined>('/api/bulk/tags', {
+      json: { target, ids: [id], tags: values, mode },
     });
-    if (!response.ok) return false;
+    if (!result.ok) return result.message;
     // `affected` is the count of rows the UPDATE actually matched. Zero means
     // RLS refused this row, which is a 200 with nothing done — reporting
     // success there would show a tag removed that is still on the record.
-    const body = (await response.json().catch(() => null)) as { affected?: number } | null;
-    return (body?.affected ?? 0) > 0;
+    return (result.value?.affected ?? 0) > 0 ? null : refused;
   }
 
   async function remove(tag: string) {
@@ -72,15 +71,13 @@ export function TagEditor({
     setError(null);
     setCurrent((list) => list.filter((t) => t !== tag));
     try {
-      if (!(await call('remove', [tag]))) {
+      const failure = await call('remove', [tag], `"${tag}" could not be removed.`);
+      if (failure) {
         setCurrent(previous);
-        setError(`"${tag}" could not be removed.`);
+        setError(failure);
         return;
       }
       router.refresh();
-    } catch {
-      setCurrent(previous);
-      setError('The request did not reach the server.');
     } finally {
       setBusy(null);
     }
@@ -99,17 +96,15 @@ export function TagEditor({
     setError(null);
     setCurrent((list) => [...list, ...values]);
     try {
-      if (!(await call('add', values))) {
+      const failure = await call('add', values, 'Those tags could not be added.');
+      if (failure) {
         setCurrent(previous);
-        setError('Those tags could not be added.');
+        setError(failure);
         return;
       }
       setDraft('');
       setAdding(false);
       router.refresh();
-    } catch {
-      setCurrent(previous);
-      setError('The request did not reach the server.');
     } finally {
       setBusy(null);
     }

@@ -131,7 +131,7 @@ export function fields(event: NotificationEvent): [string, string][] {
 }
 
 /** The line under the subject: which client, which deployment, when. */
-export function context(event: NotificationEvent): string {
+function context(event: NotificationEvent): string {
   const parts = [event.organizationName, event.tenantName].filter(
     (p): p is string => Boolean(p),
   );

@@ -45,7 +45,7 @@ export interface ReminderMessage {
  * a subject saying "due tomorrow" over a body saying "due in 3 days" is the
  * kind of thing nobody notices until a technician misses a deadline.
  */
-export function dueInWords(leadDay: number, dueAt: Date | null): string {
+function dueInWords(leadDay: number, dueAt: Date | null): string {
   if (dueAt === null) return 'no due date';
   if (leadDay <= 0) {
     // Past the due date is a different sentence from due today, and the one

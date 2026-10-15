@@ -187,9 +187,9 @@ export const POST = tenantRoute(
  */
 export function translate(error: unknown): unknown {
   const e = error as { code?: string; message?: string; constraint_name?: string };
+  // insufficient_privilege (the rank guard in 0350) is not here: the handler
+  // maps it, with the same `helm:` wording, for every route.
   switch (e.code) {
-    case '42501': // insufficient_privilege — the rank guard in 0350
-      return ApiError.forbidden(e.message?.replace(/^helm: /, '') ?? 'that role outranks you');
     case '23514': // check_violation — a client role given tenant-wide scope
       return ApiError.invalid(
         e.message?.replace(/^helm: /, '') ??

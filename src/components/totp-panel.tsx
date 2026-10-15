@@ -25,7 +25,8 @@ import { KeyRound, Loader2, ShieldAlert, Timer } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 import { useStepUp } from './step-up-dialog';
-import { STEP_UP_CODE, toAttemptResult, withStepUp } from '@/lib/ui/step-up';
+import { STEP_UP_CODE, withStepUp } from '@/lib/ui/step-up';
+import { apiFetch } from '@/lib/ui/api';
 import { cn } from '@/lib/ui/cn';
 
 interface CodeOk {
@@ -91,19 +92,21 @@ export function TotpPanel({
    */
   const inFlight = useRef(false);
 
-  const clearTick = () => {
+  // Both touch only refs and setters, so they are stable across renders and
+  // safe to list as dependencies without re-running anything.
+  const clearTick = useCallback(() => {
     if (tick.current) clearInterval(tick.current);
     tick.current = null;
-  };
+  }, []);
 
-  useEffect(() => clearTick, []);
+  useEffect(() => clearTick, [clearTick]);
 
-  const stop = () => {
+  const stop = useCallback(() => {
     clearTick();
     startedAt.current = null;
     setState({ status: 'idle' });
     setElapsed(0);
-  };
+  }, [clearTick]);
 
   /**
    * One attempt, reduced to granted-or-refused.
@@ -111,15 +114,10 @@ export function TotpPanel({
    * `reason` is read at call time rather than captured, so the step-up retry
    * sends whatever is in the box by then — the same reasoning as RevealButton.
    */
-  const attempt = useCallback(async () => {
-    const response = await fetch(`/api/assets/${nodeId}/totp/code`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...(reason ? { reason } : {}) }),
-    });
-    const body = await response.json().catch(() => null);
-    return toAttemptResult<CodeOk>(response.ok, response.status, body, (b) => b as CodeOk);
-  }, [nodeId, reason]);
+  const attempt = useCallback(
+    () => apiFetch<CodeOk>(`/api/assets/${nodeId}/totp/code`, { json: { ...(reason ? { reason } : {}) } }),
+    [nodeId, reason],
+  );
 
   const load = useCallback(async () => {
     if (inFlight.current) return;
@@ -156,7 +154,7 @@ export function TotpPanel({
     } finally {
       inFlight.current = false;
     }
-  }, [attempt, stepUp.prompt]);
+  }, [attempt, stepUp.prompt, clearTick]);
 
   const show = async () => {
     startedAt.current = Date.now();
@@ -193,7 +191,7 @@ export function TotpPanel({
       return;
     }
     void load();
-  }, [remaining, state.status, load]);
+  }, [remaining, state.status, load, stop]);
 
   const subject = [issuer, account].filter(Boolean).join(' · ');
 

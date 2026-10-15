@@ -31,7 +31,7 @@ import { HelmCryptoError } from '../crypto/errors';
 import { NONCE_BYTES, TAG_BYTES, assertSealingKey, buildAad, type SecretBinding } from '../crypto/envelope';
 
 /** The field name every document ciphertext is bound to. */
-export const DOCUMENT_FIELD = 'document';
+const DOCUMENT_FIELD = 'document';
 
 export interface SealedDocument {
   /** ciphertext || tag, exactly as it is written to disk. */

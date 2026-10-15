@@ -11,7 +11,7 @@
  *
  * `opacity-0 group-hover:opacity-100 focus-within:opacity-100` — not `hidden`.
  */
-import { Pencil } from 'lucide-react';
+import type { Pencil } from 'lucide-react';
 import { cn } from '@/lib/ui/cn';
 
 export interface RowAction {
@@ -33,10 +33,9 @@ export function RowActionIcons({ actions }: { actions: readonly RowAction[] }) {
             ? 'text-ink-faint hover:bg-danger/10 hover:text-danger'
             : 'text-ink-faint hover:bg-surface-sunken hover:text-ink',
         );
-        const inner = <action.icon className="size-3.5" aria-hidden />;
         return action.href ? (
           <a key={action.label} href={action.href} className={className} title={action.label} aria-label={action.label}>
-            {inner}
+            <action.icon className="size-3.5" aria-hidden />
           </a>
         ) : (
           <button
@@ -47,7 +46,7 @@ export function RowActionIcons({ actions }: { actions: readonly RowAction[] }) {
             title={action.label}
             aria-label={action.label}
           >
-            {inner}
+            <action.icon className="size-3.5" aria-hidden />
           </button>
         );
       })}

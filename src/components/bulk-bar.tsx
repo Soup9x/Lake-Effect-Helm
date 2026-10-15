@@ -4,6 +4,7 @@ import { useCallback, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Archive, ArchiveRestore, FileDown, Tag, X } from 'lucide-react';
 import { useDismissable } from '@/lib/ui/use-dismissable';
+import { apiFetch } from '@/lib/ui/api';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
 
@@ -48,22 +49,18 @@ export function BulkBar({
     setError(null);
     setDone(null);
     try {
-      const response = await fetch(path, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+      const result = await apiFetch<{ affected?: number; clients?: number } | undefined>(path, {
+        json: body,
       });
-      const payload = (await response.json().catch(() => null)) as {
-        error?: { message?: string };
-        affected?: number;
-        clients?: number;
-      } | null;
 
-      if (!response.ok) {
-        setError(payload?.error?.message ?? `That did not work (${response.status}).`);
+      if (!result.ok) {
+        // A request that never arrived changed nothing, and the bar should say
+        // so: the person is about to decide whether to retry a bulk action.
+        setError(result.code === 'network' ? `${result.message} Nothing was changed.` : result.message);
         return false;
       }
 
+      const payload = result.value;
       setDone(
         payload?.clients !== undefined
           ? `Queued ${payload.clients} export${payload.clients === 1 ? '' : 's'}.`
@@ -72,9 +69,6 @@ export function BulkBar({
       onClear();
       startTransition(() => router.refresh());
       return true;
-    } catch {
-      setError('The request did not reach the server. Nothing was changed.');
-      return false;
     } finally {
       setBusy(null);
     }

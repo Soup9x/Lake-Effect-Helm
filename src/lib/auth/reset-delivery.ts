@@ -57,7 +57,7 @@ class RefusingDelivery implements ResetDelivery {
   }
 }
 
-export class ResetDeliveryUnavailable extends Error {
+class ResetDeliveryUnavailable extends Error {
   readonly code = 'reset_delivery_unavailable';
 
   constructor() {
@@ -87,7 +87,7 @@ export class ResetDeliveryUnavailable extends Error {
  *
  * Refuses a plain-http endpoint. The message contains a working reset link.
  */
-export class WebhookResetDelivery implements ResetDelivery {
+class WebhookResetDelivery implements ResetDelivery {
   readonly name = 'webhook';
 
   constructor(
@@ -120,7 +120,7 @@ export class WebhookResetDelivery implements ResetDelivery {
   }
 }
 
-export function renderResetText(message: ResetMessage): string {
+function renderResetText(message: ResetMessage): string {
   const minutes = Math.max(1, Math.round((message.expiresAt.getTime() - Date.now()) / 60_000));
   const greeting = message.name ? `Hello ${message.name},` : 'Hello,';
 

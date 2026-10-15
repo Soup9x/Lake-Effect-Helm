@@ -9,6 +9,7 @@ import { FieldHint, Input, Label } from './ui/field';
 import { Badge } from './ui/badge';
 import { formatDateTime } from '@/lib/ui/format';
 import { copyUnaudited } from '@/lib/ui/clipboard';
+import { apiFetch } from '@/lib/ui/api';
 
 export interface OidcSettings {
   configured: boolean;
@@ -103,10 +104,9 @@ export function OidcSettingsCard({ initial }: { initial: OidcSettings | null }) 
     const scopes = scopeText.split(/[\s,]+/).filter(Boolean);
 
     try {
-      const response = await fetch('/api/auth/oidc', {
+      const result = await apiFetch<{ oidc?: OidcSettings }>('/api/auth/oidc', {
         method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+        json: {
           enabled: form.enabled,
           slug: form.slug,
           displayName: form.displayName,
@@ -116,28 +116,21 @@ export function OidcSettingsCard({ initial }: { initial: OidcSettings | null }) 
           allowSignup: form.allowSignup,
           linkByEmail: form.linkByEmail,
           ...(secret ? { clientSecret: secret } : {}),
-        }),
+        },
       });
 
-      const payload = (await response.json()) as {
-        oidc?: OidcSettings;
-        error?: { message?: string };
-      };
-
-      if (!response.ok) {
-        setFeedback({ ok: false, message: payload.error?.message ?? `Save failed (${response.status}).` });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
 
-      if (payload.oidc) {
-        setForm(payload.oidc);
-        setScopeText(payload.oidc.scopes.join(' '));
+      if (result.value.oidc) {
+        setForm(result.value.oidc);
+        setScopeText(result.value.oidc.scopes.join(' '));
       }
       setSecret('');
       setFeedback({ ok: true, message: 'Saved. Run the connection test before relying on it.' });
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'Could not reach the server.' });
     } finally {
       setSaving(false);
     }
@@ -147,22 +140,21 @@ export function OidcSettingsCard({ initial }: { initial: OidcSettings | null }) 
     setTesting(true);
     setFeedback(null);
     try {
-      const response = await fetch('/api/auth/oidc/test', { method: 'POST' });
-      const payload = (await response.json()) as {
+      const result = await apiFetch<{
         ok?: boolean;
         message?: string;
         remedy?: string | null;
         stillUnproven?: string | null;
         warnings?: string[];
         discovery?: Discovery;
-        error?: { message?: string };
-      };
+      }>('/api/auth/oidc/test', { method: 'POST' });
 
-      if (!response.ok) {
-        setFeedback({ ok: false, message: payload.error?.message ?? `Test failed (${response.status}).` });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
 
+      const payload = result.value;
       setFeedback({
         ok: payload.ok === true,
         message: payload.message ?? '',
@@ -172,8 +164,6 @@ export function OidcSettingsCard({ initial }: { initial: OidcSettings | null }) 
         discovery: payload.discovery ?? null,
       });
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'Could not reach the server.' });
     } finally {
       setTesting(false);
     }
@@ -189,9 +179,9 @@ export function OidcSettingsCard({ initial }: { initial: OidcSettings | null }) 
     setSaving(true);
     setFeedback(null);
     try {
-      const response = await fetch('/api/auth/oidc', { method: 'DELETE' });
-      if (!response.ok) {
-        setFeedback({ ok: false, message: `Could not remove the provider (${response.status}).` });
+      const result = await apiFetch('/api/auth/oidc', { method: 'DELETE' });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
         return;
       }
       setForm(BLANK);
@@ -199,8 +189,6 @@ export function OidcSettingsCard({ initial }: { initial: OidcSettings | null }) 
       setScopeText(BLANK.scopes.join(' '));
       setFeedback({ ok: true, message: 'Provider removed, and its client secret with it.' });
       router.refresh();
-    } catch {
-      setFeedback({ ok: false, message: 'The request did not reach the server. Nothing was changed.' });
     } finally {
       setSaving(false);
     }

@@ -28,7 +28,7 @@ import { HelmCryptoError } from './errors';
 
 export const NONCE_BYTES = 12; // 96-bit, the only GCM nonce size with a clean proof
 export const TAG_BYTES = 16; // 128-bit, full-strength authenticator
-export const MAX_PLAINTEXT_BYTES = 64 * 1024; // matches the CHECK on secret_version
+const MAX_PLAINTEXT_BYTES = 64 * 1024; // matches the CHECK on secret_version
 
 const AAD_VERSION = 'helm.v1';
 const AAD_SEPARATOR = '|';

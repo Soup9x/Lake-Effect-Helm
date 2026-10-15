@@ -31,6 +31,7 @@ import { Link2, Loader2, Plus, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
 import { Modal } from './ui/modal';
+import { apiFetch } from '@/lib/ui/api';
 
 interface Candidate {
   nodeId: string;
@@ -76,12 +77,11 @@ export function DependencyEditor({
       setSearching(true);
       try {
         const params = new URLSearchParams({ q: term.trim(), organizationId, limit: '10' });
-        const response = await fetch(`/api/search?${params.toString()}`);
-        if (!response.ok) return;
-        const payload = (await response.json()) as SearchResponse;
+        const result = await apiFetch<SearchResponse>(`/api/search?${params.toString()}`);
+        if (!result.ok) return;
         if (seq !== searchSeq.current) return;
         setCandidates(
-          (payload.hits ?? [])
+          (result.value.hits ?? [])
             // Only things that ARE graph nodes can be linked — a site or a
             // client is a search hit with no node — and an asset cannot be
             // linked to itself.
@@ -118,27 +118,20 @@ export function DependencyEditor({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch('/api/assets/links', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const result = await apiFetch('/api/assets/links', {
+        json: {
           sourceNodeId: nodeId,
           targetNodeId: target.nodeId,
           ...(note.trim() ? { note: note.trim() } : {}),
-        }),
+        },
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(payload?.error?.message ?? `The link could not be saved (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       reset();
       setOpen(false);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }
@@ -289,12 +282,11 @@ export function DependencyChip({
     event.stopPropagation();
     setBusy(true);
     try {
-      const response = await fetch('/api/assets/links', {
+      const result = await apiFetch('/api/assets/links', {
         method: 'DELETE',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sourceNodeId, relation, targetNodeId }),
+        json: { sourceNodeId, relation, targetNodeId },
       });
-      if (response.ok) router.refresh();
+      if (result.ok) router.refresh();
     } finally {
       setBusy(false);
     }

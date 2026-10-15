@@ -26,6 +26,7 @@ import {
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Select } from './ui/field';
 import { Modal } from './ui/modal';
+import { apiFetch, type ApiRequest } from '@/lib/ui/api';
 
 const DEVICE_TYPES = [
   ['switch', 'Switch'],
@@ -126,16 +127,14 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`/api/sites/${siteId}/topology`);
-      if (!response.ok) {
-        setError('The diagram could not be loaded.');
+      const result = await apiFetch<Graph>(`/api/sites/${siteId}/topology`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
-      const next = (await response.json()) as Graph;
+      const next = result.value;
       setGraph(next);
       setPositions(layout(next.nodes));
-    } catch {
-      setError('The request failed. Check your connection and retry.');
     } finally {
       setBusy(false);
     }
@@ -146,24 +145,13 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
   }, [open, load]);
 
   /** One place that turns a failed write into a message, since every action writes. */
-  const send = useCallback(async (path: string, init: RequestInit): Promise<unknown | null> => {
-    try {
-      const response = await fetch(path, {
-        headers: { 'content-type': 'application/json' },
-        ...init,
-      });
-      const payload = (await response.json().catch(() => ({}))) as {
-        error?: { message?: string };
-      };
-      if (!response.ok) {
-        setError(payload.error?.message ?? 'That change was refused.');
-        return null;
-      }
-      return payload;
-    } catch {
-      setError('The request failed. Check your connection and retry.');
-      return null;
+  const send = useCallback(async (path: string, request: ApiRequest): Promise<boolean> => {
+    const result = await apiFetch(path, request);
+    if (!result.ok) {
+      setError(result.message);
+      return false;
     }
+    return true;
   }, []);
 
   // -- dragging ------------------------------------------------------------
@@ -206,13 +194,13 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
   const onPointerUp = async () => {
     const d = drag.current;
     drag.current = null;
-    if (!d || !d.moved) return;
+    if (!d?.moved) return;
 
     const at = positions.get(d.id);
     if (!at) return;
     await send(`/api/sites/${siteId}/topology/nodes/${d.id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ posX: Math.round(at.x), posY: Math.round(at.y) }),
+      json: { posX: Math.round(at.x), posY: Math.round(at.y) },
     });
   };
 
@@ -223,8 +211,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
     if (linkingFrom !== null) {
       if (linkingFrom === node.id) { setLinkingFrom(null); return; }
       const created = await send(`/api/sites/${siteId}/topology/links`, {
-        method: 'POST',
-        body: JSON.stringify({ fromNodeId: linkingFrom, toNodeId: node.id }),
+        json: { fromNodeId: linkingFrom, toNodeId: node.id },
       });
       setLinkingFrom(null);
       if (created) await load();
@@ -343,6 +330,8 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
                 ref={surface}
                 width={extent.w}
                 height={extent.h}
+                role="img"
+                aria-label={`Network diagram for ${siteName}`}
                 className="block touch-none select-none"
                 onPointerMove={onPointerMove}
                 onPointerUp={() => void onPointerUp()}
@@ -359,6 +348,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
                   const y2 = b.y + BOX.h / 2;
                   const active = selected === link.id;
                   return (
+                    // biome-ignore lint/a11y/noStaticElementInteractions: a diagram edge; selection by pointer is the only editing offered, as the header says
                     <g key={link.id} onClick={() => setSelected(active ? null : link.id)}>
                       {/* A 12px transparent stroke under the visible one: a
                           1px line is a cruel click target. */}
@@ -388,6 +378,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
                   const active = selected === node.id;
                   const linkSource = linkingFrom === node.id;
                   return (
+                    // biome-ignore lint/a11y/noStaticElementInteractions: a diagram node, dragged with the pointer; see the edge above
                     <g
                       key={node.id}
                       transform={`translate(${at.x},${at.y})`}
@@ -492,26 +483,20 @@ function AddNodeForm({
     setBusy(true);
     onError(null);
     try {
-      const response = await fetch(`/api/sites/${siteId}/topology/nodes`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
+      const result = await apiFetch(`/api/sites/${siteId}/topology/nodes`, {
+        json: {
           label: label.trim(),
           deviceType,
           ...(ipAddress.trim() ? { ipAddress: ipAddress.trim() } : {}),
           ...(subnet.trim() ? { subnet: subnet.trim() } : {}),
-        }),
+        },
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
-        onError(payload.error?.message ?? 'The node could not be added.');
+      if (!result.ok) {
+        onError(result.message);
         await onDone(false);
         return;
       }
       await onDone(true);
-    } catch {
-      onError('The request failed. Check your connection and retry.');
-      await onDone(false);
     } finally {
       setBusy(false);
     }

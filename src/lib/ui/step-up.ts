@@ -30,37 +30,16 @@
  *   field the person edited while the prompt was open goes with it.
  */
 
+import type { ApiResult } from './api';
+
 /** The code the API returns when a re-authentication would clear the refusal. */
 export const STEP_UP_CODE = 'step_up_required';
 
-export type AttemptResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; code: string; message: string; auditEventUid?: string };
-
 /**
- * Reduce a parsed API response to an AttemptResult.
- *
- * Exported because all three call sites parse the same envelope, and getting
- * the failure shape subtly wrong is how `error.code` becomes undefined and the
- * prompt silently stops opening.
+ * What an attempt comes back as. The same shape api.ts gives every call, so a
+ * component's `() => apiFetch(...)` is an attempt as it stands.
  */
-export function toAttemptResult<T>(
-  ok: boolean,
-  status: number,
-  body: unknown,
-  value: (body: unknown) => T,
-): AttemptResult<T> {
-  if (ok) return { ok: true, value: value(body) };
-
-  const error = (body as { error?: { code?: string; message?: string; details?: { auditEventUid?: string } } })
-    ?.error;
-  return {
-    ok: false,
-    code: error?.code ?? 'internal',
-    message: error?.message ?? `The request failed (${status}).`,
-    ...(error?.details?.auditEventUid ? { auditEventUid: error.details.auditEventUid } : {}),
-  };
-}
+export type AttemptResult<T> = ApiResult<T>;
 
 /**
  * Run `attempt`; if it is refused pending a step-up, run `prompt` and try once

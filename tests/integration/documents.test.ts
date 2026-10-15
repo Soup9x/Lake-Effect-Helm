@@ -115,7 +115,6 @@ describe('uploading', () => {
     `);
 
     const stats = await stat(join(harness.documentRoot, row!.storage_key));
-    // eslint-disable-next-line no-bitwise
     expect(stats.mode & 0o777).toBe(0o600);
   });
 

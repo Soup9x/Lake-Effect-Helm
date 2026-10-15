@@ -53,6 +53,7 @@ import { Modal } from './ui/modal';
 import { Badge } from './ui/badge';
 import { EmptyState } from './app-shell';
 import { cn } from '@/lib/ui/cn';
+import { apiFetch, type ApiRequest } from '@/lib/ui/api';
 import {
   breadcrumbs,
   buildTree,
@@ -109,52 +110,36 @@ export function DocumentsCard({
   const live = useMemo(() => documents.filter((d) => !d.archived), [documents]);
 
   /** One place that talks to the API, so one place that reports a refusal. */
-  async function send(url: string, init: RequestInit): Promise<boolean> {
+  async function send(url: string, request: ApiRequest): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(url, init);
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as
-          | { error?: { message?: string } }
-          | null;
-        setError(body?.error?.message ?? `That did not work (${response.status}).`);
+      const result = await apiFetch(url, request);
+      if (!result.ok) {
+        setError(result.message);
         return false;
       }
       router.refresh();
       return true;
-    } catch {
-      setError('The request failed. Check your connection and retry.');
-      return false;
     } finally {
       setBusy(false);
     }
   }
 
   const patchFolder = (id: string, body: Record<string, unknown>) =>
-    send(`/api/document-folders/${id}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    send(`/api/document-folders/${id}`, { method: 'PATCH', json: body });
 
   const patchDocument = (id: string, body: Record<string, unknown>) =>
-    send(`/api/documents/${id}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    send(`/api/documents/${id}`, { method: 'PATCH', json: body });
 
   async function createFolder(name: string) {
     const ok = await send('/api/document-folders', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
+      json: {
         organizationId,
         parentId: current,
         name,
         isInternalOnly: internalNext,
-      }),
+      },
     });
     if (ok) setNewFolder(null);
   }

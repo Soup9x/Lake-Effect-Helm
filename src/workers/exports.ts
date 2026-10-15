@@ -113,7 +113,7 @@ export class FilePassphraseSink implements PassphraseSink {
 
 let passphraseSink: PassphraseSink | null = null;
 
-export function resolvePassphraseSink(): PassphraseSink | null {
+function resolvePassphraseSink(): PassphraseSink | null {
   if (passphraseSink) return passphraseSink;
   const directory = process.env.HELM_EXPORT_PASSPHRASE_DIR?.trim();
   passphraseSink = directory ? new FilePassphraseSink(directory) : null;

@@ -32,7 +32,7 @@ import {
 } from './harness';
 
 let h: Harness;
-let currentUser: SessionUser | null = null;
+const currentUser: SessionUser | null = null;
 
 const SITE_ID = '1c111111-0000-0000-0000-000000000001';
 const DOC_ID = '1c111111-0000-0000-0000-000000000002';

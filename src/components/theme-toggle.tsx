@@ -72,8 +72,7 @@ export function ThemeToggle() {
   }
 
   return (
-    <div
-      role="group"
+    <fieldset
       aria-label="Colour theme"
       className="flex items-center gap-0.5 rounded-md border border-border bg-surface-sunken p-0.5"
     >
@@ -95,6 +94,6 @@ export function ThemeToggle() {
           <span className="sr-only">{label}</span>
         </button>
       ))}
-    </div>
+    </fieldset>
   );
 }

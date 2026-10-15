@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Loader2, Pencil, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
+import { apiFetch } from '@/lib/ui/api';
 
 /**
  * Rename something in place: a Rename button that becomes a one-field form.
@@ -46,22 +47,16 @@ export function InlineRename({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(endpoint, {
+      const result = await apiFetch(endpoint, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: name.trim() }),
+        json: { name: name.trim() },
       });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        setError(payload?.error?.message ?? `The rename failed (${response.status}).`);
+      if (!result.ok) {
+        setError(result.message);
         return;
       }
       setOpen(false);
       router.refresh();
-    } catch {
-      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }
