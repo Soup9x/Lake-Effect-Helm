@@ -596,6 +596,78 @@ describe('export engine', () => {
       await expect(getExportService().download(ADMIN, request.exportJobId)).rejects.toThrow(/expired/);
     });
 
+    it('fails the export, and keeps no bytes, when the passphrase cannot be delivered', async () => {
+      // Before, render() marked the export completed and the worker delivered
+      // the passphrase afterwards. A sink that failed (EACCES, a full disk)
+      // left a completed, downloadable bundle whose passphrase existed nowhere.
+      const request = await getExportService().request(ADMIN, {
+        organizationId: IDS.orgAcme,
+        kind: 'ad_hoc',
+        format: 'zip',
+        reason: 'proves a failed passphrase delivery fails the export',
+        includeSecrets: true,
+      });
+      const job = (await backlog()).find((r) => r.export_job_id === request.exportJobId)!;
+
+      const before = new Set(await readdir(exportRoot, { recursive: true }));
+      await expect(
+        getExportService().render(exportWorker(), {
+          exportJobId: job.export_job_id,
+          organizationId: job.organization_id,
+          kind: job.kind,
+          format: job.format,
+          includeSecrets: job.include_secrets,
+          scope: job.scope,
+          reason: job.reason,
+          requestedByName: job.requested_by_name,
+          requestedBy: job.requested_by,
+          approvedByName: job.approved_by_name,
+        }, async () => { throw new Error('passphrase directory is read-only'); }),
+      ).rejects.toThrow(/read-only/);
+
+      const [row] = await withTenant(ADMIN, async (tx) => tx<{ status: string; storage_key: string | null }[]>`
+        SELECT status, storage_key FROM export_job WHERE id = ${request.exportJobId}::uuid
+      `);
+      expect(row).toMatchObject({ status: 'failed', storage_key: null });
+      const after = await readdir(exportRoot, { recursive: true });
+      expect(after.filter((f) => !before.has(f) && f.includes('.'))).toEqual([]);
+    });
+
+    it('delivers the passphrase before the export reads as completed', async () => {
+      const request = await getExportService().request(ADMIN, {
+        organizationId: IDS.orgAcme,
+        kind: 'ad_hoc',
+        format: 'zip',
+        reason: 'proves the passphrase arrives before completion',
+        includeSecrets: true,
+      });
+      const job = (await backlog()).find((r) => r.export_job_id === request.exportJobId)!;
+
+      let statusAtDelivery: string | undefined;
+      let delivered: string | undefined;
+      const result = await getExportService().render(exportWorker(), {
+        exportJobId: job.export_job_id,
+        organizationId: job.organization_id,
+        kind: job.kind,
+        format: job.format,
+        includeSecrets: job.include_secrets,
+        scope: job.scope,
+        reason: job.reason,
+        requestedByName: job.requested_by_name,
+        requestedBy: job.requested_by,
+        approvedByName: job.approved_by_name,
+      }, async (passphrase) => {
+        delivered = passphrase;
+        const [row] = await withTenant(ADMIN, async (tx) => tx<{ status: string }[]>`
+          SELECT status FROM export_job WHERE id = ${request.exportJobId}::uuid
+        `);
+        statusAtDelivery = row?.status;
+      });
+
+      expect(delivered).toBe(result.passphrase);
+      expect(statusAtDelivery).toBe('running');
+    });
+
     it('refuses a storage key that escapes the storage root', async () => {
       const storage = new FilesystemExportStorage(exportRoot);
       await expect(storage.get('../../../etc/passwd')).rejects.toThrow(/escapes the storage root/);

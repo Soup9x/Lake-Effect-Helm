@@ -159,34 +159,42 @@ async function renderExports(ctx: JobContext): Promise<JobResult> {
     };
 
     try {
-      const result = await exports.render(actor, {
-        exportJobId: job.export_job_id,
-        organizationId: job.organization_id,
-        kind: job.kind,
-        format: job.format,
-        includeSecrets: job.include_secrets,
-        scope: job.scope ?? {},
-        reason: job.reason,
-        requestedByName: job.requested_by_name,
-        requestedBy: job.requested_by,
-        approvedByName: job.approved_by_name,
-      });
+      const deliver = sink
+        ? (passphrase: string) =>
+            sink.deliver({
+              tenantId: job.tenant_id,
+              exportJobId: job.export_job_id,
+              organizationId: job.organization_id,
+              kind: job.kind,
+              passphrase,
+              requestedBy: job.requested_by_name,
+              approvedBy: job.approved_by_name,
+            })
+        : undefined;
+
+      // The passphrase is delivered inside render(), before the job is marked
+      // completed. Delivered after — as it was — a sink that failed left a
+      // completed, downloadable bundle whose passphrase existed nowhere.
+      const result = await exports.render(
+        actor,
+        {
+          exportJobId: job.export_job_id,
+          organizationId: job.organization_id,
+          kind: job.kind,
+          format: job.format,
+          includeSecrets: job.include_secrets,
+          scope: job.scope ?? {},
+          reason: job.reason,
+          requestedByName: job.requested_by_name,
+          requestedBy: job.requested_by,
+          approvedByName: job.approved_by_name,
+        },
+        deliver,
+      );
 
       if (!result.rendered) {
         log.debug('another worker claimed this export');
         continue;
-      }
-
-      if (result.passphrase && sink) {
-        await sink.deliver({
-          tenantId: job.tenant_id,
-          exportJobId: job.export_job_id,
-          organizationId: job.organization_id,
-          kind: job.kind,
-          passphrase: result.passphrase,
-          requestedBy: job.requested_by_name,
-          approvedBy: job.approved_by_name,
-        });
       }
 
       rendered += 1;
