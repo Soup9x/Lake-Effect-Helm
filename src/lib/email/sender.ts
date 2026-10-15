@@ -205,31 +205,5 @@ export async function recordRelayResult(
   `;
 }
 
-/**
- * A one-off send outside a batch, for the settings page's test button.
- *
- * Still goes through the same gates and the same transport builder — the point
- * of a test is to exercise the path a real message takes, which is §7's rule
- * about the webhook test queueing rather than POSTing.
- */
-export async function sendOne(actor: WorkerActor, mail: OutgoingMail): Promise<void> {
-  const batch = await EmailBatch.open(actor);
-  if (!batch) {
-    throw new EmailTransportError(
-      'outbound email is not configured for this tenant', 'misconfigured',
-    );
-  }
-  try {
-    await batch.send(mail);
-    await recordRelayResult(actor.tenantId, true);
-  } catch (error) {
-    const described = describeTransportError(error);
-    await recordRelayResult(actor.tenantId, false, described.message);
-    throw described;
-  } finally {
-    batch.close();
-  }
-}
-
 /** Re-exported so a caller needs one import. */
 export { EmailTransportError, withTenant };

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { tenantRoute } from '@/lib/api/handler';
+import { serviceRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getExportService } from '@/lib/exports/service';
 
@@ -18,13 +18,13 @@ const idSchema = z.guid();
  * rendered inline in a browser tab ends up in the cache and the session
  * restore.
  */
-export const GET = tenantRoute(
-  async ({ identity, params, request }) => {
+export const GET = serviceRoute(
+  async ({ identity, params, request, actor }) => {
     const exportJobId = idSchema.safeParse(params.exportJobId);
     if (!exportJobId.success) throw ApiError.invalid('invalid export id');
 
     const result = await getExportService().download(
-      { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+      actor,
       exportJobId.data,
       {
         ...(identity.ip ? { ip: identity.ip } : {}),

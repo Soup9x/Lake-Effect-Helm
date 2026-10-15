@@ -44,6 +44,17 @@ pre-checks — follows from having one place all requests pass through.
 `publicRoute()` exists for health checks and login, and is named to be
 conspicuous in review. It hands the handler no database access at all.
 
+`serviceRoute()` is for handlers whose work happens in a service that opens its
+own transaction — reveal, rotate, copy, TOTP codes, exports, documents, logos,
+the link engine. It checks the declared permissions in a short transaction,
+commits it, and hands the handler no transaction at all, only `actor`: the full
+session-context request, with request id, IP, user agent and API token id.
+Under `tenantRoute()` those handlers held one pooled connection idle while the
+service checked out a second — enough concurrent requests could exhaust the pool
+— and the service's audit rows lost the request context, and an API token's
+scopes did not apply. A handler that needs its own reads opens them with
+`withTenant(actor, ...)` before or after the service call, never around it.
+
 ### The permission options are not the security boundary
 
 ```ts
@@ -347,8 +358,8 @@ remembering.
 ## 9. Verification
 
 ```bash
-pnpm verify      # typecheck + 244 vitest tests + schema drift
-pnpm test:sql    # 142 SQL assertions including tamper detection
+pnpm test:sql    # the SQL security suite, against a real Postgres 16 cluster
+pnpm verify      # typecheck + migration manifest + every vitest suite + schema drift
 pnpm build       # every route must compile and be dynamic
 ```
 

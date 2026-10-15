@@ -21,6 +21,7 @@ import { Check, Copy, ExternalLink, EyeOff, KeyRound, Lock, Pencil, Trash2 } fro
 import { FilterToolbar } from './filter-toolbar';
 import { ColumnMenu, useHiddenColumns, type ColumnChoice } from './column-menu';
 import { DataTable, type Column, type GridRow } from './data-table';
+import { matchesBrowse } from '@/lib/ui/browse';
 import { RowRemoveDialog, type RemoveKind } from './row-remove-dialog';
 import { RowPermissionsDialog, type RowPermissions } from './row-permissions-dialog';
 import { Badge } from '../ui/badge';
@@ -264,10 +265,10 @@ export function CategoryGrid({
     [labels],
   );
 
+  // The same matcher DataTable filters with, so the count agrees with the rows.
   const shown = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return rows.length;
-    return rows.filter((r) => (r.search ?? '').includes(needle)).length;
+    if (!query.trim()) return rows.length;
+    return rows.filter((r) => matchesBrowse({ search: r.search ?? '' }, { text: query })).length;
   }, [rows, query]);
 
   /* The identity column is not hideable — see ColumnMenu. */
@@ -291,7 +292,10 @@ export function CategoryGrid({
         columns={columns}
         hiddenColumns={hidden}
         query={query}
-        selectable={canWrite}
+        // Not selectable: nothing here acts on a selection. The checkboxes this
+        // used to render ticked and did nothing, because a category mixes
+        // records BulkBar cannot act on together (assets, documents, contacts,
+        // sites, folders). Bulk actions live on the clients list.
         emptyMessage={`No ${categoryLabel.toLowerCase()} recorded for this client yet.`}
       />
 

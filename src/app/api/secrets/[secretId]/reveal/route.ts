@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { readJson, tenantRoute } from '@/lib/api/handler';
+import { readJson, serviceRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getSecretService } from '@/lib/services';
 
@@ -21,8 +21,8 @@ const bodySchema = z.object({
  * material is returned; surfacing the id lets support answer "who saw this and
  * when" from one lookup, and lets the UI cite it in a break-glass confirmation.
  */
-export const POST = tenantRoute(
-  async ({ request, params, identity }) => {
+export const POST = serviceRoute(
+  async ({ request, params, actor }) => {
     const secretId = params.secretId;
     if (!secretId || !z.guid().safeParse(secretId).success) {
       throw ApiError.invalid('secretId must be a UUID');
@@ -39,11 +39,7 @@ export const POST = tenantRoute(
     // forbidden does not. The denial is already committed to the audit log by
     // the time this throws.
     const revealed = await getSecretService().reveal(
-      {
-        tenantId: identity.tenantId,
-        actorId: identity.actorId,
-        actorType: identity.actorType,
-      },
+      actor,
       secretId,
       {
         ...(body.reason ? { reason: body.reason } : {}),
@@ -83,11 +79,7 @@ export const POST = tenantRoute(
     if (revealed.kind === 'totp_seed') {
       revealed.value.dispose();
       await getSecretService().auditRevealWithheld(
-        {
-          tenantId: identity.tenantId,
-          actorId: identity.actorId,
-          actorType: identity.actorType,
-        },
+        actor,
         secretId,
         {
           cause: 'seed_not_directly_revealable',

@@ -19,6 +19,8 @@ import { withoutTenantContext } from '../db/client';
 import { ApiError } from '../api/errors';
 import { bearerFrom, verifyToken, type TokenRejection } from './tokens';
 import { getSessionUser } from './session';
+import { isIP } from 'node:net';
+import { envInt } from '../env';
 
 export interface RequestIdentity {
   tenantId: string;
@@ -159,16 +161,24 @@ function selectTenant(available: string[], requested: string | undefined): strin
  * the right — taking the leftmost entry, the common mistake, lets a caller
  * forge any address they like and defeats IP allowlisting entirely.
  */
-export function clientIp(request: NextRequest): string | undefined {
+export function clientIp(request: { headers: Headers }): string | undefined {
   const forwarded = request.headers.get('x-forwarded-for');
   if (forwarded) {
-    const hops = Number(process.env.HELM_TRUSTED_PROXY_HOPS ?? 1);
+    // Validated: a non-numeric value used to become NaN, and NaN hops fell
+    // through to parts[0] — the leftmost, client-controlled entry.
+    const hops = envInt('HELM_TRUSTED_PROXY_HOPS', process.env.HELM_TRUSTED_PROXY_HOPS, 1, {
+      min: 1,
+      max: 10,
+    });
     const parts = forwarded.split(',').map((p) => p.trim()).filter(Boolean);
     const index = parts.length - hops;
     const candidate = index >= 0 ? parts[index] : parts[0];
-    if (candidate) return candidate;
+    // An address or nothing: whatever is returned is cast to inet when the
+    // session context is set, and a value that is not one fails the request.
+    if (candidate && isIP(candidate)) return candidate;
   }
-  return request.headers.get('x-real-ip') ?? undefined;
+  const real = request.headers.get('x-real-ip')?.trim();
+  return real && isIP(real) ? real : undefined;
 }
 
 function logRejection(reason: TokenRejection): void {

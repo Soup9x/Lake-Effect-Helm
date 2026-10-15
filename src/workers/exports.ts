@@ -55,6 +55,11 @@ interface ExportBacklogRow {
 export interface PassphraseSink {
   readonly name: string;
   deliver(delivery: PassphraseDelivery): Promise<void>;
+  /**
+   * Discard what deliver() left behind, once the export it opens has expired.
+   * Optional: a sink that hands the passphrase to a person keeps nothing.
+   */
+  forget?(exportJobId: string): Promise<void>;
 }
 
 export interface PassphraseDelivery {
@@ -92,6 +97,17 @@ export class FilePassphraseSink implements PassphraseSink {
       `${delivery.passphrase}\n`,
       { mode: 0o600, flag: 'wx' },
     );
+  }
+
+  /**
+   * Deleted when the export expires. Kept past that, these files only
+   * accumulated — every credential export's passphrase, at rest on this host,
+   * for bundles that no longer exist.
+   */
+  async forget(exportJobId: string): Promise<void> {
+    const { rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    await rm(join(this.directory, `${exportJobId}.passphrase`), { force: true });
   }
 }
 
@@ -159,34 +175,42 @@ async function renderExports(ctx: JobContext): Promise<JobResult> {
     };
 
     try {
-      const result = await exports.render(actor, {
-        exportJobId: job.export_job_id,
-        organizationId: job.organization_id,
-        kind: job.kind,
-        format: job.format,
-        includeSecrets: job.include_secrets,
-        scope: job.scope ?? {},
-        reason: job.reason,
-        requestedByName: job.requested_by_name,
-        requestedBy: job.requested_by,
-        approvedByName: job.approved_by_name,
-      });
+      const deliver = sink
+        ? (passphrase: string) =>
+            sink.deliver({
+              tenantId: job.tenant_id,
+              exportJobId: job.export_job_id,
+              organizationId: job.organization_id,
+              kind: job.kind,
+              passphrase,
+              requestedBy: job.requested_by_name,
+              approvedBy: job.approved_by_name,
+            })
+        : undefined;
+
+      // The passphrase is delivered inside render(), before the job is marked
+      // completed. Delivered after — as it was — a sink that failed left a
+      // completed, downloadable bundle whose passphrase existed nowhere.
+      const result = await exports.render(
+        actor,
+        {
+          exportJobId: job.export_job_id,
+          organizationId: job.organization_id,
+          kind: job.kind,
+          format: job.format,
+          includeSecrets: job.include_secrets,
+          scope: job.scope ?? {},
+          reason: job.reason,
+          requestedByName: job.requested_by_name,
+          requestedBy: job.requested_by,
+          approvedByName: job.approved_by_name,
+        },
+        deliver,
+      );
 
       if (!result.rendered) {
         log.debug('another worker claimed this export');
         continue;
-      }
-
-      if (result.passphrase && sink) {
-        await sink.deliver({
-          tenantId: job.tenant_id,
-          exportJobId: job.export_job_id,
-          organizationId: job.organization_id,
-          kind: job.kind,
-          passphrase: result.passphrase,
-          requestedBy: job.requested_by_name,
-          approvedBy: job.approved_by_name,
-        });
       }
 
       rendered += 1;
@@ -247,16 +271,16 @@ async function markFailed(job: ExportBacklogRow, message: string): Promise<void>
  * the file is now orphaned and needs a human.
  */
 async function expireExports(ctx: JobContext): Promise<JobResult> {
-  // Reuses the alert enumerator: it lists every active tenant, which is the
-  // same set this job needs, rather than adding a fourth near-identical one.
+  // Through a SECURITY DEFINER backlog, like every other job. A plain query
+  // here sees no tenant at all — `tenant` is behind RLS and the worker has no
+  // context yet — which is why this job never expired anything before 0720.
   const tenants = await db('worker')<{ tenant_id: string; worker_actor_id: string }[]>`
-    SELECT h.tenant_id, helm.worker_actor(h.tenant_id, 'system_export') AS worker_actor_id
-    FROM audit_chain_head h
-    JOIN tenant t ON t.id = h.tenant_id AND t.status = 'active'
-    WHERE helm.worker_actor(h.tenant_id, 'system_export') IS NOT NULL
+    SELECT tenant_id, worker_actor_id FROM helm.export_expiry_backlog(50)
   `;
+  if (tenants.length === 0) return { idle: true };
 
   const storage = getExportStorage();
+  const sink = resolvePassphraseSink();
   let expired = 0;
   let orphaned = 0;
 
@@ -273,6 +297,14 @@ async function expireExports(ctx: JobContext): Promise<JobResult> {
 
     for (const row of rows) {
       expired += 1;
+      try {
+        await sink?.forget?.(row.export_job_id);
+      } catch (error) {
+        ctx.log.error('an expired export\'s passphrase file could not be deleted', {
+          export: row.export_job_id,
+          ...describeError(error),
+        });
+      }
       if (!row.storage_key) continue;
       try {
         await storage.remove(row.storage_key);

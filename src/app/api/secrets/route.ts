@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { getSecretService } from '@/lib/services';
 import { parseTotpEnrolment, TotpEnrolmentError } from '@/lib/secrets/totp-enrolment';
 
@@ -127,7 +127,7 @@ export const POST = tenantRoute(
         throw ApiError.invalid('invalid secret', {
           // Paths only. The issues array must never carry `i.input`, which for
           // the `value` field is the credential.
-          issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+          issues: zodIssues(result.error),
         });
       }
       return result.data;

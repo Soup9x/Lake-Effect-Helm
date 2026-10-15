@@ -1,5 +1,7 @@
+import { z } from 'zod';
 import { ApiError } from '@/lib/api/errors';
-import { tenantRoute } from '@/lib/api/handler';
+import { serviceRoute } from '@/lib/api/handler';
+import { readFormDataBounded } from '@/lib/api/body';
 import {
   getLogoService, LogoError, LOGO_CONTENT_TYPES, MAX_LOGO_BYTES,
 } from '@/lib/logos/service';
@@ -36,11 +38,11 @@ import {
  * happen is a file being treated as something executable because of a
  * Content-Type somebody claimed.
  */
-export const GET = tenantRoute(async ({ params, identity, request }) => {
-  const organizationId = String(params.organizationId);
+export const GET = serviceRoute(async ({ params, request, actor }) => {
+  const organizationId = organizationIdOf(params);
 
   const found = await getLogoService().open(
-    { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+    actor,
     organizationId,
   );
   if (!found) throw ApiError.notFound('this client has no logo');
@@ -79,9 +81,9 @@ export const GET = tenantRoute(async ({ params, identity, request }) => {
  * rather than assuming — see docs/itg-parity.md.
  */
 
-export const POST = tenantRoute(
-  async ({ request, params, identity }) => {
-    const organizationId = String(params.organizationId);
+export const POST = serviceRoute(
+  async ({ request, params, actor }) => {
+    const organizationId = organizationIdOf(params);
 
     // Before the body is read, from a header that is a claim; the real check is
     // on the buffer below. Same two-step the document upload route uses, for
@@ -95,8 +97,15 @@ export const POST = tenantRoute(
 
     let form: FormData;
     try {
-      form = await request.formData();
+      // Bounded while reading: the Content-Length check above is skipped by a
+      // chunked upload, and formData() buffers whatever arrives.
+      const bounded = await readFormDataBounded(request, MAX_LOGO_BYTES + 64 * 1024);
+      if (!bounded) {
+        throw ApiError.invalid('that upload is larger than the limit');
+      }
+      form = bounded;
     } catch (cause) {
+      if (cause instanceof ApiError) throw cause;
       throw ApiError.invalid('expected a multipart/form-data upload', {
         issues: [{ path: 'body', message: String((cause as Error).message).slice(0, 200) }],
       });
@@ -112,7 +121,7 @@ export const POST = tenantRoute(
     const bytes = Buffer.from(await file.arrayBuffer());
     try {
       const stored = await getLogoService().put(
-        { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+        actor,
         { organizationId, contentType: file.type, bytes },
       );
       return { logo: stored };
@@ -125,11 +134,11 @@ export const POST = tenantRoute(
   { permissions: ['organization:write'] },
 );
 
-export const DELETE = tenantRoute(
-  async ({ params, identity }) => {
-    const organizationId = String(params.organizationId);
+export const DELETE = serviceRoute(
+  async ({ params, actor }) => {
+    const organizationId = organizationIdOf(params);
     const removed = await getLogoService().remove(
-      { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+      actor,
       organizationId,
     );
     // Idempotent: "there is no logo" is the state the caller asked for, and a
@@ -138,6 +147,16 @@ export const DELETE = tenantRoute(
   },
   { permissions: ['organization:write'] },
 );
+
+/**
+ * Validated before it reaches a `::uuid` cast, where a malformed id was a
+ * Postgres syntax error and therefore a 500 rather than a 404.
+ */
+function organizationIdOf(params: Record<string, string>): string {
+  const parsed = z.guid().safeParse(params.organizationId);
+  if (!parsed.success) throw ApiError.notFound('no such client');
+  return parsed.data;
+}
 
 function translate(cause: unknown): unknown {
   if (cause instanceof LogoError) {

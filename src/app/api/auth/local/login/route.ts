@@ -17,6 +17,7 @@
  */
 import { NextResponse } from 'next/server';
 import { publicRoute } from '@/lib/api/handler';
+import { readJsonObjectOrEmpty } from '@/lib/api/body';
 import { attemptLocalLogin } from '@/lib/auth/local';
 import { clientIp } from '@/lib/auth/identity';
 import { setSessionCookie } from '@/lib/auth/session-cookie';
@@ -29,7 +30,7 @@ interface LoginBody {
 const INVALID = 'Those credentials are not valid.';
 
 export const POST = publicRoute(async (request) => {
-  const body = (await request.json().catch(() => ({}))) as LoginBody;
+  const body = (await readJsonObjectOrEmpty(request)) as LoginBody;
 
   if (typeof body.email !== 'string' || typeof body.password !== 'string') {
     return NextResponse.json(

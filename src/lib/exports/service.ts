@@ -228,6 +228,14 @@ export class ExportService {
   async render(
     actor: ActorRef,
     job: RenderableJob,
+    /**
+     * Hand the bundle's passphrase to whoever will give it to a person. Called
+     * after the bytes are stored and BEFORE the job is marked completed: the
+     * passphrase is stored nowhere, so a delivery that fails after "completed"
+     * left a downloadable bundle nobody could ever open. Failing here fails the
+     * export and deletes the bytes instead.
+     */
+    deliverPassphrase?: (passphrase: string) => Promise<void>,
   ): Promise<{ rendered: boolean; passphrase: string | null; omissions: ExportOmission[] }> {
     const claimed = await withTenant(
       actor,
@@ -242,6 +250,7 @@ export class ExportService {
 
     if (!claimed) return { rendered: false, passphrase: null, omissions: [] };
 
+    let storageKey: string | null = null;
     try {
       // Collected as the REQUESTER, not as the worker. See RenderableJob.
       //
@@ -307,7 +316,11 @@ export class ExportService {
       ];
 
       const packed = packBundle(entries, job.includeSecrets);
-      const storageKey = await getExportStorage().put(packed.bytes);
+      storageKey = await getExportStorage().put(packed.bytes);
+
+      if (packed.passphrase && deliverPassphrase) {
+        await deliverPassphrase(packed.passphrase);
+      }
 
       const recordCount =
         collected.assets.length +
@@ -333,6 +346,12 @@ export class ExportService {
       return { rendered: true, passphrase: packed.passphrase, omissions };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // Bytes stored for an export that is about to be marked failed are an
+      // orphan nobody can download — and, if the passphrase never arrived,
+      // nobody can open. Best effort: the failure below is what matters.
+      if (storageKey) {
+        await getExportStorage().remove(storageKey).catch(() => {});
+      }
       await withTenant(
         actor,
         async (tx) => tx`

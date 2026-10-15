@@ -6,7 +6,9 @@
  *   ANONYMOUS  Self-service. Emails a link, and answers identically whether or
  *              not the address exists. The answer is the security property:
  *              an endpoint that says "no account with that address" needs no
- *              password and no rate limit to be a user-enumeration tool.
+ *              password and no rate limit to be a user-enumeration tool. It
+ *              cannot cancel an administrator's code, and repeats within five
+ *              minutes issue nothing (0740).
  *
  *   ADMIN      An administrator issues a code for somebody else and the
  *              response CONTAINS it, once. That is not a lapse — it is the
@@ -16,8 +18,9 @@
  */
 import { NextResponse, type NextRequest } from 'next/server';
 import { publicRoute } from '@/lib/api/handler';
+import { readJsonObjectOrEmpty } from '@/lib/api/body';
 import { issuePasswordReset } from '@/lib/auth/local';
-import { getResetDelivery, ResetDeliveryUnavailable } from '@/lib/auth/reset-delivery';
+import { getResetDelivery, resetDeliveryAvailable } from '@/lib/auth/reset-delivery';
 import { clientIp } from '@/lib/auth/identity';
 import { getServerIdentity, NotAuthenticatedError } from '@/lib/auth/server-identity';
 import { withTenant } from '@/lib/db/client';
@@ -35,7 +38,7 @@ const ACKNOWLEDGED = {
 } as const;
 
 export const POST = publicRoute(async (request) => {
-  const body = (await request.json().catch(() => ({}))) as ResetBody;
+  const body = (await readJsonObjectOrEmpty(request)) as ResetBody;
 
   if (typeof body.email !== 'string' || body.email.length === 0) {
     return NextResponse.json(
@@ -50,12 +53,28 @@ export const POST = publicRoute(async (request) => {
     return issueOutOfBand(body.email, ip, request);
   }
 
+  // Decided before the address is looked up, so the answer is the same for
+  // every address. An operator who has not configured a channel needs to hear
+  // that from this endpoint rather than from a user who believes they are
+  // locked out — but it must not be the account's existence that decides it.
+  if (!resetDeliveryAvailable()) {
+    return NextResponse.json(
+      {
+        error: {
+          code: 'reset_delivery_unavailable',
+          message:
+            'Self-service reset is not available on this deployment. Ask an ' +
+            'administrator to issue a reset code.',
+        },
+      },
+      { status: 503 },
+    );
+  }
+
   const issued = await issuePasswordReset({ email: body.email, origin: 'self', ip });
 
-  // No account. Answer exactly as the success path does, and do not spend the
-  // time a delivery would have taken — the timing difference here is a round
-  // trip to a mail relay, which is not something an attacker can read reliably
-  // through a queue they cannot see.
+  // No account, or a link for this person already went out in the last five
+  // minutes (0740). Answer exactly as the success path does.
   if (!issued) {
     return NextResponse.json(ACKNOWLEDGED);
   }
@@ -69,23 +88,12 @@ export const POST = publicRoute(async (request) => {
       origin: 'self',
     });
   } catch (error) {
-    if (error instanceof ResetDeliveryUnavailable) {
-      // Do not claim to have sent something. An operator who has not configured
-      // a mail relay needs to hear that from this endpoint rather than from a
-      // user who believes they are locked out.
-      return NextResponse.json(
-        {
-          error: {
-            code: 'reset_delivery_unavailable',
-            message:
-              'Self-service reset is not available on this deployment. Ask an ' +
-              'administrator to issue a reset code.',
-          },
-        },
-        { status: 503 },
-      );
-    }
-    throw error;
+    // A configured channel that failed this time. Logged for the operator and
+    // answered as usual: a distinct response here would again be one only an
+    // address with an account can produce.
+    console.error('[reset] self-service delivery failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   return NextResponse.json(ACKNOWLEDGED);
@@ -94,9 +102,9 @@ export const POST = publicRoute(async (request) => {
 /**
  * An administrator issues a code for somebody else, and reads it back.
  *
- * Requires a signed-in administrator holding user:write, and the target must
- * share the administrator's current tenant — an MSP administrator must not be
- * able to mint a reset for a rival MSP's account.
+ * Requires a signed-in administrator holding user:write. The target must share
+ * the administrator's current tenant, must not outrank them, and must not
+ * belong to any other tenant — see db/sql/0710_reset_authority.sql.
  */
 async function issueOutOfBand(
   email: string,
@@ -116,41 +124,63 @@ async function issueOutOfBand(
     throw error;
   }
 
-  // The permission check and the shared-tenant check both happen inside a
-  // tenant context, so they are the database's answer rather than this file's.
-  const permitted = await withTenant(
+  // Every rule — the permission, the shared tenant, the caller's rank against
+  // the target's, and the target belonging to no other tenant — is decided by
+  // helm.authorise_out_of_band_reset() (0710). Issuing somebody's reset code is
+  // authority over their account, so it follows the same rank rule 0350
+  // applies to their membership: a tier3 must not be able to become the
+  // super_admin by resetting their password.
+  const [decision] = await withTenant(
     { tenantId: identity.tenantId, actorId: identity.actorId },
-    async (tx) => {
-      const [row] = await tx<{ id: string }[]>`
-        SELECT u.id
-        FROM app_user u
-        JOIN membership m ON m.user_id = u.id AND m.tenant_id = ${identity.tenantId}::uuid
-        WHERE u.email = ${email}::citext AND m.status = 'active'
-      `;
-
-      const [permission] = await tx<{ allowed: boolean }[]>`
-        SELECT helm.has_permission('user:write') AS allowed
-      `;
-
-      return { targetId: row?.id ?? null, allowed: permission?.allowed ?? false };
-    },
+    async (tx) => tx<{ user_id: string | null; refusal: string | null }[]>`
+      SELECT * FROM helm.authorise_out_of_band_reset(${email}::citext)
+    `,
   );
 
-  if (!permitted.allowed) {
-    return NextResponse.json(
-      { error: { code: 'forbidden', message: 'Issuing a reset code requires user:write.' } },
-      { status: 403 },
-    );
+  switch (decision?.refusal ?? null) {
+    case null:
+      break;
+    case 'forbidden':
+      return NextResponse.json(
+        { error: { code: 'forbidden', message: 'Issuing a reset code requires user:write.' } },
+        { status: 403 },
+      );
+    case 'not_found':
+      // An administrator inside their own tenant is allowed to know whether a
+      // colleague has an account — they can already see the membership list —
+      // so this branch answers honestly rather than acknowledging blindly.
+      return NextResponse.json(
+        { error: { code: 'not_found', message: 'No active member of this tenant with that address.' } },
+        { status: 404 },
+      );
+    case 'outranks_caller':
+      return NextResponse.json(
+        {
+          error: {
+            code: 'forbidden',
+            message: 'That person’s role outranks yours. Ask an administrator of equal or higher rank.',
+          },
+        },
+        { status: 403 },
+      );
+    case 'member_elsewhere':
+      return NextResponse.json(
+        {
+          error: {
+            code: 'forbidden',
+            message:
+              'That account also belongs to another tenant, so its password is not this ' +
+              'tenant’s to reset. The person can use self-service reset instead.',
+          },
+        },
+        { status: 403 },
+      );
+    default:
+      throw new Error(`unrecognised reset refusal: ${String(decision?.refusal)}`);
   }
 
-  // An administrator inside their own tenant is allowed to know whether a
-  // colleague has an account — they can already see the membership list — so
-  // this branch answers honestly rather than acknowledging blindly.
-  if (!permitted.targetId) {
-    return NextResponse.json(
-      { error: { code: 'not_found', message: 'No active member of this tenant with that address.' } },
-      { status: 404 },
-    );
+  if (!decision?.user_id) {
+    throw new Error('authorise_out_of_band_reset returned neither a user nor a refusal');
   }
 
   const issued = await issuePasswordReset({

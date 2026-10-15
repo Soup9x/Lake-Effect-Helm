@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 
 interface MemberRow {
   user_id: string;
@@ -131,7 +131,7 @@ export const POST = tenantRoute(
       const result = inviteSchema.safeParse(raw);
       if (!result.success) {
         throw ApiError.invalid('invalid invitation', {
-          issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+          issues: zodIssues(result.error),
         });
       }
       return result.data;

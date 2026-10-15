@@ -1,16 +1,18 @@
 import Link from 'next/link';
 import {
-  Activity, Boxes, Globe, KeyRound, PanelLeft, Plug, ShieldCheck, Bot, Building,
+  Activity, Boxes, Bot, Building, CalendarClock, Globe, KeyRound, PanelLeft, ShieldCheck,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { RenameTenant } from '@/components/rename-tenant';
+import { InlineRename } from '@/components/inline-rename';
 import { SidebarCustomise } from '@/components/sidebar-customise';
 import { ExternalChecksForm } from '@/components/external-checks-form';
 import { HealthWindowForm } from '@/components/health-window-form';
+import { ExpiryAlertForm } from '@/components/expiry-alert-form';
+import { readExpiryAlertSetting } from '@/lib/alerts/queries';
 import { readHealthSetting } from '@/lib/health/queries';
 import { readSmtpSetting } from '@/lib/email/settings';
 import { SmtpSettingsCard } from '@/components/smtp-settings';
@@ -31,9 +33,9 @@ import {
 } from '@/components/unifi-settings';
 import { redirectUri } from '@/lib/auth/oidc';
 import { headers } from 'next/headers';
-import { Badge, type BadgeTone } from '@/components/ui/badge';
+import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { formatDateTime, humanise } from '@/lib/ui/format';
+import { formatDateTime } from '@/lib/ui/format';
 
 interface KeyRow {
   generation: number;
@@ -45,28 +47,9 @@ interface KeyRow {
   activated_at: Date | null;
 }
 
-interface IntegrationRow {
-  id: string; provider: string; display_name: string; status: string;
-  sync_enabled: boolean; last_sync_at: Date | null; last_success_at: Date | null;
-  consecutive_failures: number; last_error: string | null; respect_manual_edits: boolean;
-}
-
 interface WorkerRow {
   id: string; name: string; role_key: string;
   allowed_reveal_purposes: string[] | null; disabled_at: Date | null;
-}
-
-function integrationTone(status: string): BadgeTone {
-  switch (status) {
-    case 'active':
-      return 'ok';
-    case 'degraded':
-      return 'warning';
-    case 'error':
-      return 'danger';
-    default:
-      return 'neutral';
-  }
 }
 
 interface RadiusRow {
@@ -296,7 +279,7 @@ function toRadiusSettings(row: RadiusRow | null): RadiusSettings | null {
 
 /**
  * Deployment-wide settings: how people sign in, where the keys are, what the
- * integrations are doing, and what the background workers may decrypt.
+ * network integrations are doing, and what the background workers may decrypt.
  *
  * The key custody panel exists because "could someone with root on the app
  * server read this client's credentials" is the first question of any breach
@@ -316,21 +299,16 @@ export default async function SettingsPage() {
   const identity = await getServerIdentity();
 
   const {
-    keys, integrations, workers, tenant, radius, oidc, destinations, deliveries,
+    keys, workers, tenant, radius, oidc, destinations, deliveries,
     unifi, organizations, canManageNetwork, flexibleTypeCount,
     sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow, smtp,
+    expiryAlerts, canManageAlerts,
   } = await withTenant(actorOf(identity), async (tx) => {
-    const [keyRows, integrationRows, workerRows, tenantRows, radiusRows, oidcRows,
+    const [keyRows, workerRows, tenantRows, radiusRows, oidcRows,
            destinationRows, deliveryRows, unifiRows, organizationRows, networkRows,
            flexibleTypeRows, sidebarDefaultRow, externalCheckRow,
-           healthWindowRow, smtpRow] = await Promise.all([
+           healthWindowRow, smtpRow, expiryAlertRow, alertPermissionRows] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
-      tx<IntegrationRow[]>`
-        SELECT id, provider::text, display_name, status::text, sync_enabled,
-               last_sync_at, last_success_at, consecutive_failures, last_error,
-               respect_manual_edits
-        FROM integration_connection WHERE disabled_at IS NULL ORDER BY display_name
-      `,
       tx<WorkerRow[]>`
         SELECT id, name, role_key, allowed_reveal_purposes, disabled_at
         FROM service_account WHERE is_system ORDER BY name
@@ -390,10 +368,11 @@ export default async function SettingsPage() {
       // The mail relay, without its password: helm_app has no privilege on the
       // envelope columns, so `passwordSet` is a boolean the database computed.
       readSmtpSetting(tx),
+      readExpiryAlertSetting(tx),
+      tx<{ allowed: boolean }[]>`SELECT helm.has_permission('alert:manage') AS allowed`,
     ]);
     return {
       keys: keyRows,
-      integrations: integrationRows,
       workers: workerRows,
       tenant: tenantRows[0] ?? null,
       radius: radiusRows[0] ?? null,
@@ -409,6 +388,8 @@ export default async function SettingsPage() {
       externalChecks: externalCheckRow,
       healthWindow: healthWindowRow,
       smtp: smtpRow,
+      expiryAlerts: expiryAlertRow,
+      canManageAlerts: alertPermissionRows[0]?.allowed ?? false,
     };
   });
 
@@ -436,7 +417,21 @@ export default async function SettingsPage() {
             </CardHeader>
             <CardContent>
               {tenant.can_write_tenant ? (
-                <RenameTenant currentName={tenant.name} slug={tenant.slug} />
+                <InlineRename
+                  currentName={tenant.name}
+                  slug={tenant.slug}
+                  endpoint="/api/tenant"
+                  inputId="rename-tenant"
+                  label="MSP name"
+                  // The slug is what memberships and audit rows resolve
+                  // through; a rebrand must not invalidate a year of history.
+                  hint={
+                    <>
+                      The identifier <code className="font-mono">{tenant.slug}</code> stays as it
+                      is — memberships and audit history resolve through it.
+                    </>
+                  }
+                />
               ) : (
                 <div>
                   <div className="text-ink">{tenant.name}</div>
@@ -531,67 +526,6 @@ export default async function SettingsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-ink-muted">{formatDateTime(key.activated_at)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Plug className="size-4 text-ink-faint" aria-hidden /> Integrations
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead>Connection</TableHead>
-                  <TableHead>Provider</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Last run</TableHead>
-                  <TableHead>Manual edits</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {integrations.length === 0 && (
-                  <TableEmpty colSpan={5}>No integrations configured.</TableEmpty>
-                )}
-                {integrations.map((integration) => (
-                  <TableRow key={integration.id}>
-                    <TableCell className="font-medium">{integration.display_name}</TableCell>
-                    <TableCell className="text-ink-muted">
-                      {humanise(integration.provider)}
-                    </TableCell>
-                    <TableCell>
-                      <Badge tone={integrationTone(integration.status)}>{integration.status}</Badge>
-                      {integration.consecutive_failures > 0 && (
-                        <div className="mt-0.5 text-xs text-ink-faint">
-                          {integration.consecutive_failures} consecutive failures — retries are
-                          backing off
-                        </div>
-                      )}
-                      {integration.last_error && (
-                        <div className="mt-0.5 max-w-sm truncate text-xs text-danger" title={integration.last_error}>
-                          {integration.last_error}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-xs text-ink-muted">
-                      {formatDateTime(integration.last_sync_at)}
-                      {integration.last_success_at && (
-                        <div className="text-ink-faint">
-                          last success {formatDateTime(integration.last_success_at)}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Badge tone={integration.respect_manual_edits ? 'ok' : 'warning'}>
-                        {integration.respect_manual_edits ? 'Preserved' : 'Overwritten'}
-                      </Badge>
-                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -759,6 +693,40 @@ export default async function SettingsPage() {
               />
             ) : (
               <p className="text-xs text-ink-faint">Requires tenant settings access.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CalendarClock className="size-4 text-ink-faint" aria-hidden /> Expiry warnings
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div className="max-w-xl space-y-1">
+              <p className="text-ink-muted">
+                When the team hears that a certificate, domain, warranty or contract is about
+                to expire. Sent to every notification destination subscribed to
+                &ldquo;Expiring soon&rdquo;.
+              </p>
+              <p className="text-ink-faint">
+                {expiryAlerts.enabled
+                  ? `On: ${expiryAlerts.leadDays.join(', ')} days before expiry.`
+                  : 'Off: nothing is raised, whatever is subscribed.'}
+              </p>
+            </div>
+            {canManageAlerts ? (
+              <ExpiryAlertForm
+                setting={expiryAlerts}
+                trigger={
+                  <Button variant="secondary" size="sm">
+                    Edit
+                  </Button>
+                }
+              />
+            ) : (
+              <p className="text-xs text-ink-faint">Requires alert management access.</p>
             )}
           </CardContent>
         </Card>

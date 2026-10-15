@@ -36,8 +36,13 @@ async function main(): Promise<void> {
   const runtime = new WorkerRuntime(allJobs(), { logger: log });
 
   if (once) {
-    await runtime.runOnce();
+    const { failed } = await runtime.runOnce();
     await closeAllPools();
+    // Non-zero when any job failed, so a CronJob or systemd timer reports it.
+    if (failed > 0) {
+      log.error('one or more jobs failed', { failed });
+      process.exitCode = 1;
+    }
     return;
   }
 

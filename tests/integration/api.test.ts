@@ -407,6 +407,44 @@ describe('secret reveal endpoint', () => {
       { params: Promise.resolve({ secretId }) },
     );
 
+  it('records the request it came from on the reveal audit row', async () => {
+    // Under tenantRoute the reveal ran in the SERVICE's own transaction, opened
+    // with only {tenantId, actorId, actorType}: the one audit row that matters
+    // most had no request id, IP or user agent. serviceRoute hands the service
+    // the full request context instead.
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const response = await revealRoute(
+      request(`/api/secrets/${standardSecretId}/reveal`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-request-id': 'req-audit-context-1',
+          'x-forwarded-for': '203.0.113.7',
+          'user-agent': 'helm-test-agent/1.0',
+        },
+        body: JSON.stringify({}),
+      }),
+      { params: Promise.resolve({ secretId: standardSecretId }) },
+    );
+    expect(response.status).toBe(200);
+    const { auditEventUid } = await body(response);
+
+    const sql = superuserSql();
+    try {
+      const [row] = await sql<{ request_id: string | null; ip: string | null; user_agent: string | null }[]>`
+        SELECT request_id, host(ip) AS ip, user_agent FROM audit_log
+        WHERE event_uid = ${auditEventUid as string}::uuid
+      `;
+      expect(row).toEqual({
+        request_id: 'req-audit-context-1',
+        ip: '203.0.113.7',
+        user_agent: 'helm-test-agent/1.0',
+      });
+    } finally {
+      await sql.end();
+    }
+  });
+
   it('returns the plaintext and the audit event id', async () => {
     asUser(IDS.admin1, 'admin@northwind.test');
     const response = await reveal(standardSecretId);

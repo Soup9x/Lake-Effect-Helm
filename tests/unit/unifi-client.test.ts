@@ -192,3 +192,32 @@ describe('talking to the Integration API', () => {
     ).rejects.toBeInstanceOf(UnifiError);
   });
 });
+
+describe('a controller that accepts TCP and never completes TLS', () => {
+  it('fails within the timeout instead of hanging the sync', async () => {
+    const { createServer } = await import('node:net');
+    // Accepts the connection, then says nothing — no ServerHello, ever.
+    const sockets: import('node:net').Socket[] = [];
+    const server = createServer((socket) => { sockets.push(socket); });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as import('node:net').AddressInfo;
+
+    try {
+      const started = Date.now();
+      await expect(
+        listSites({
+          controllerUrl: `https://127.0.0.1:${port}`,
+          apiKey: 'unused',
+          // The pinned path builds its own TLS socket, which is where the
+          // request's own timeout never applied.
+          pinnedSha256: 'aa'.repeat(32),
+          timeoutMs: 300,
+        }),
+      ).rejects.toThrow(/TLS handshake/);
+      expect(Date.now() - started).toBeLessThan(3_000);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});

@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import { isUuid } from '@/lib/ids';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { categoryBySlug } from '@/lib/nav/org-categories';
@@ -35,6 +36,7 @@ export default async function CategoryPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { organizationId, category: slug } = await params;
+  if (!isUuid(organizationId)) notFound();
   const search = await searchParams;
   const category = categoryBySlug(slug);
   if (!category) notFound();

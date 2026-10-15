@@ -180,6 +180,12 @@ export function OidcSettingsCard({ initial }: { initial: OidcSettings | null }) 
   }
 
   async function forget() {
+    // Destructive and one click away: say what goes with it before doing it.
+    const confirmed = window.confirm(
+      'Remove this sign-in provider and its client secret? Nobody will be ' +
+      'able to sign in through it until it is set up again.',
+    );
+    if (!confirmed) return;
     setSaving(true);
     setFeedback(null);
     try {
@@ -193,6 +199,8 @@ export function OidcSettingsCard({ initial }: { initial: OidcSettings | null }) 
       setScopeText(BLANK.scopes.join(' '));
       setFeedback({ ok: true, message: 'Provider removed, and its client secret with it.' });
       router.refresh();
+    } catch {
+      setFeedback({ ok: false, message: 'The request did not reach the server. Nothing was changed.' });
     } finally {
       setSaving(false);
     }

@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import type { ReactNode } from 'react';
-import { THEME_SCRIPT } from '@/components/theme-toggle';
+import { THEME_SCRIPT } from '@/lib/ui/theme';
 
 export const metadata: Metadata = {
   title: 'Lake Effect Helm',

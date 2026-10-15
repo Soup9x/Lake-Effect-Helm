@@ -19,9 +19,22 @@ coverage
 # Deployment state: generated keys, TLS material, database volumes.
 deploy/secrets
 deploy/data
+# An operator's own certificate and key go in deploy/tls (see the Caddyfile).
+# `COPY . .` in the builder stage would otherwise carry the private key into
+# the build context and the layer cache. The same for key material anywhere.
+deploy/tls
+*.pem
+*.key
+*.crt
+helm-master-key*
+helm-root.crt
 
 # Test and tooling surface the image has no use for.
 tests
+db/tests
+docs
+.github
+.githooks
 .vscode
 .idea
 *.tsbuildinfo

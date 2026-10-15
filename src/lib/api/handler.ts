@@ -17,12 +17,13 @@
 import { randomUUID } from 'node:crypto';
 import type { NextRequest } from 'next/server';
 import { withTenant, type DbRole, type HelmTx } from '../db/client';
-import type { ResolvedSessionContext } from '../db/context';
+import type { ResolvedSessionContext, SessionContextRequest } from '../db/context';
 import { SecretAccessDeniedError, StaleSecretVersionError } from '../secrets/errors';
 import { HelmCryptoError } from '../crypto/errors';
 import { ApiError, toErrorBody, type ErrorCode } from './errors';
 import { resolveIdentity, type RequestIdentity } from '../auth/identity';
 import { installSessionResolver } from '../auth/bootstrap';
+import { readTextBounded } from './body';
 
 export interface RouteContext {
   /** Tenant-scoped transaction. The only database handle a route ever sees. */
@@ -85,15 +86,7 @@ export function tenantRoute<T>(
       const params = args?.params ? await args.params : {};
 
       const result = await withTenant(
-        {
-          tenantId: identity.tenantId,
-          actorId: identity.actorId,
-          actorType: identity.actorType,
-          requestId,
-          ...(identity.ip ? { ip: identity.ip } : {}),
-          ...(identity.userAgent ? { userAgent: identity.userAgent } : {}),
-          ...(identity.apiTokenId ? { apiTokenId: identity.apiTokenId } : {}),
-        },
+        actorFor(identity, requestId),
         async (tx, session) => {
           assertPermitted(session, options);
           return handler({ tx, session, identity, request, requestId, params });
@@ -115,6 +108,85 @@ export function tenantRoute<T>(
     } catch (error) {
       return errorResponse(error, requestId);
     }
+  };
+}
+
+export interface ServiceRouteContext {
+  /**
+   * The caller's full session-context request — tenant, actor, request id, IP,
+   * user agent and API token. Pass it to a service, which opens its own
+   * transaction with it, so the audit row that transaction writes carries the
+   * request it came from and an API token's scopes still narrow it.
+   */
+  actor: SessionContextRequest;
+  /** Role, rank, scope and permissions as the DATABASE resolved them. */
+  session: ResolvedSessionContext;
+  identity: RequestIdentity;
+  request: NextRequest;
+  requestId: string;
+  params: Record<string, string>;
+}
+
+/**
+ * Wrap a handler whose work happens in services that manage their own
+ * transaction — SecretService, ExportService, DocumentService, LogoService,
+ * the link engine.
+ *
+ * WHY NOT tenantRoute. tenantRoute holds a transaction for the whole handler.
+ * A handler that ignored it and called such a service held that connection
+ * idle while the service checked out a SECOND one: at pool size N, N concurrent
+ * requests could each hold one and wait forever for another, taking
+ * /api/health down with them. The service's transaction was also opened with
+ * only {tenantId, actorId}, so reveal, rotate, copy and download audit rows
+ * lost the request id, IP and user agent, and an API token's scopes — which
+ * only narrow a session when the token id is passed — did not apply.
+ *
+ * Here the declared permissions are checked in a short transaction that is
+ * committed before the handler runs, and the handler gets no transaction at
+ * all, only `actor` to hand on. Same failure ordering as tenantRoute: an
+ * unauthenticated caller never reaches the database. A handler that needs its
+ * own reads opens them with `withTenant(actor, ...)`.
+ */
+export function serviceRoute<T>(
+  handler: (ctx: ServiceRouteContext) => Promise<T>,
+  options: Omit<TenantRouteOptions, 'role'> = {},
+): (request: NextRequest, args?: RouteArgs) => Promise<Response> {
+  return async (request: NextRequest, args?: RouteArgs) => {
+    const requestId = request.headers.get('x-request-id') ?? randomUUID();
+
+    try {
+      await installSessionResolver();
+      const identity = await resolveIdentity(request);
+      const params = args?.params ? await args.params : {};
+      const actor = actorFor(identity, requestId);
+
+      const session = await withTenant(actor, async (_tx, resolved) => {
+        assertPermitted(resolved, options);
+        return resolved;
+      });
+
+      const result = await handler({ actor, session, identity, request, requestId, params });
+      if (result instanceof Response) {
+        result.headers.set('x-request-id', requestId);
+        return result;
+      }
+      return json(result, 200, requestId);
+    } catch (error) {
+      return errorResponse(error, requestId);
+    }
+  };
+}
+
+/** Everything withTenant() can record about who is asking and from where. */
+function actorFor(identity: RequestIdentity, requestId: string): SessionContextRequest {
+  return {
+    tenantId: identity.tenantId,
+    actorId: identity.actorId,
+    actorType: identity.actorType,
+    requestId,
+    ...(identity.ip ? { ip: identity.ip } : {}),
+    ...(identity.userAgent ? { userAgent: identity.userAgent } : {}),
+    ...(identity.apiTokenId ? { apiTokenId: identity.apiTokenId } : {}),
   };
 }
 
@@ -180,6 +252,25 @@ function isStepUpRefusal(error: unknown): boolean {
     isInsufficientPrivilege(error) &&
     (error as { detail?: unknown }).detail === 'step_up_required'
   );
+}
+
+/**
+ * What a 403 from the database may say.
+ *
+ * Helm's own refusals are raised as `helm: <sentence>` and written to be read —
+ * "user:write is required to invite somebody" — so they pass through without
+ * the prefix. Anything else is Postgres's own wording: "permission denied for
+ * table secret_version", "new row violates row-level security policy for table
+ * membership". Those name the schema to a caller who may be a co-managed
+ * client, which errors.ts rule 1 forbids, so they become a plain refusal and
+ * the detail stays in the server log.
+ */
+function refusalMessage(error: unknown): string {
+  const message = (error as { message?: unknown }).message;
+  if (typeof message === 'string' && message.startsWith('helm: ')) {
+    return message.slice('helm: '.length);
+  }
+  return 'your role does not permit this operation';
 }
 
 function assertPermitted(session: ResolvedSessionContext, options: TenantRouteOptions): void {
@@ -259,13 +350,7 @@ export function errorResponse(error: unknown, requestId: string): Response {
 
   if (isInsufficientPrivilege(error)) {
     return json(
-      toErrorBody(
-        ApiError.forbidden(
-          (error as { message?: string }).message?.replace(/^helm: /, '') ??
-            'your role does not permit this operation',
-        ),
-        requestId,
-      ),
+      toErrorBody(ApiError.forbidden(refusalMessage(error)), requestId),
       403,
       requestId,
     );
@@ -390,14 +475,27 @@ function mapSecretDenial(error: SecretAccessDeniedError): ApiError {
 export async function readJson<T>(
   request: NextRequest,
   parse: (value: unknown) => T,
+  maxBytes = JSON_BODY_MAX_BYTES,
 ): Promise<T> {
+  // Bounded while reading: request.json() buffers any size of body first.
+  const text = await readTextBounded(request, maxBytes);
+  if (text === null) {
+    throw ApiError.invalid(`request body is larger than ${Math.floor(maxBytes / 1024)} KB`);
+  }
   let raw: unknown;
   try {
-    raw = await request.json();
+    raw = JSON.parse(text);
   } catch {
     throw ApiError.invalid('request body is not valid JSON');
   }
   return parse(raw);
 }
+
+/**
+ * The default cap for a JSON body. The largest legitimate one is a CSV import
+ * (2 MiB of text, which JSON escaping can roughly double); everything else is
+ * a few kilobytes.
+ */
+export const JSON_BODY_MAX_BYTES = 8 * 1024 * 1024;
 
 export type { ErrorCode };

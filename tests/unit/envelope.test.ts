@@ -12,7 +12,6 @@ import {
 } from '../../src/lib/crypto/envelope';
 import { HelmCryptoError } from '../../src/lib/crypto/errors';
 import {
-  AwsKmsKekProvider,
   LocalDevKekProvider,
   serialiseContext,
   tenantKeyContext,
@@ -240,73 +239,6 @@ describe('KEK wrapping', () => {
   });
 });
 
-describe('KMS provider', () => {
-  /** Minimal stand-in so the provider is testable without the AWS SDK. */
-  class FakeKms {
-    readonly calls: { type: string; input: Record<string, unknown> }[] = [];
-    constructor(private readonly dek = randomBytes(32)) {}
-    async send(command: unknown): Promise<unknown> {
-      const { type, input } = command as { type: string; input: Record<string, unknown> };
-      this.calls.push({ type, input });
-      if (type === 'generate') {
-        return {
-          Plaintext: this.dek,
-          CiphertextBlob: Buffer.concat([Buffer.from('wrapped:'), this.dek]),
-          KeyId: 'arn:aws:kms:us-east-2:1234:key/abcd-1234',
-        };
-      }
-      return { Plaintext: this.dek };
-    }
-  }
-
-  const commands = {
-    GenerateDataKeyCommand: class {
-      readonly type = 'generate';
-      constructor(readonly input: Record<string, unknown>) {}
-    },
-    DecryptCommand: class {
-      readonly type = 'decrypt';
-      constructor(readonly input: Record<string, unknown>) {}
-    },
-  } as never;
-
-  it('prefers the resolved key ARN over the configured alias', async () => {
-    // An alias moves during rotation; storing it would later name the wrong key.
-    const kms = new FakeKms();
-    const provider = new AwsKmsKekProvider(kms, commands, 'alias/helm-tenant-kek');
-    const { kekId } = await provider.generateDek(tenantKeyContext(TENANT, 1));
-    expect(kekId).toBe('arn:aws:kms:us-east-2:1234:key/abcd-1234');
-  });
-
-  it('passes the encryption context to KMS on both wrap and unwrap', async () => {
-    const kms = new FakeKms();
-    const provider = new AwsKmsKekProvider(kms, commands, 'alias/k');
-    const context = tenantKeyContext(TENANT, 1);
-    const { wrapped, kekId } = await provider.generateDek(context);
-    await provider.unwrapDek(wrapped, kekId, context);
-
-    expect(kms.calls).toHaveLength(2);
-    for (const call of kms.calls) {
-      expect(call.input.EncryptionContext).toEqual({
-        'helm:purpose': 'tenant-dek',
-        'helm:tenant': TENANT,
-        'helm:generation': '1',
-      });
-    }
-  });
-
-  it('surfaces a KMS outage as kek_unavailable, not a generic error', async () => {
-    const provider = new AwsKmsKekProvider(
-      { send: async () => Promise.reject(new Error('throttled')) },
-      commands,
-      'alias/k',
-    );
-    await expect(provider.generateDek(tenantKeyContext(TENANT, 1))).rejects.toMatchObject({
-      code: 'kek_unavailable',
-    });
-  });
-});
-
 describe('DEK cache', () => {
   /**
    * A KekProvider that delegates to a real one but counts unwraps.
@@ -402,21 +334,73 @@ describe('DEK cache', () => {
     expect(await cache.get(request)).toEqual(plaintext);
   });
 
-  it('zeroes and drops a key on invalidate', async () => {
+  it('drops a key on invalidate, so the next get unwraps again', async () => {
     const { kek, spy, provider } = makeProvider();
     const context = tenantKeyContext(TENANT, 1);
     const { wrapped, kekId } = await kek.generateDek(context);
     const cache = new DekCache(provider);
     const request = { dataKeyId: 'key-1', wrappedDek: wrapped, kekId, context };
 
-    const first = await cache.get(request);
+    await cache.get(request);
     cache.invalidate('key-1');
-    // The cache's copy is zeroed on eviction; a caller that squirrelled it away
-    // sees that, which is the intended signal not to hold DEKs.
-    expect(first.every((b) => b === 0)).toBe(true);
-
     await cache.get(request);
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('never zeroes a key a request is still using when another request evicts it', async () => {
+    // The race this replays: writeVersion() fetches the DEK, then awaits a row
+    // lock in begin_secret_write(). Meanwhile the entry expires and another
+    // request's get() evicts it — which zeroes the cached bytes in place. When
+    // the cache handed out its own Buffer, the first request then sealed the
+    // secret under 32 zero bytes.
+    const { kek, provider } = makeProvider();
+    const context = tenantKeyContext(TENANT, 1);
+    const { wrapped, kekId, plaintext } = await kek.generateDek(context);
+
+    let now = 1_000_000;
+    const cache = new DekCache(provider, { ttlMs: 60_000, now: () => now });
+    const request = { dataKeyId: 'key-1', wrappedDek: wrapped, kekId, context };
+
+    const inFlight = await cache.get(request);
+    now += 61_000;
+    await cache.get(request); // evicts the expired entry
+    cache.clear(); // and KEK rotation clears everything
+
+    expect(inFlight).toEqual(plaintext);
+    expect(() =>
+      sealField(inFlight, Buffer.from('still the right key'), {
+        tenantId: TENANT, secretId: 'secret-1', field: 'value', version: 1,
+      }),
+    ).not.toThrow();
+  });
+
+  it('hands every caller its own copy', async () => {
+    const { kek, provider } = makeProvider();
+    const context = tenantKeyContext(TENANT, 1);
+    const { wrapped, kekId, plaintext } = await kek.generateDek(context);
+    const cache = new DekCache(provider);
+    const request = { dataKeyId: 'key-1', wrappedDek: wrapped, kekId, context };
+
+    const [a, b] = await Promise.all([cache.get(request), cache.get(request)]);
+    const c = await cache.get(request);
+    expect(a).not.toBe(b);
+    expect(b).not.toBe(c);
+
+    // A caller wiping its copy when done must not wipe anybody else's.
+    a.fill(0);
+    expect(c).toEqual(plaintext);
+    expect(await cache.get(request)).toEqual(plaintext);
+  });
+
+  it('refuses to seal under an all-zero key', () => {
+    // What a DEK looks like after eviction wiped it. Refused loudly rather than
+    // stored: a value sealed under zeros is unreadable to Helm and readable to
+    // anyone holding a dump.
+    expect(() =>
+      sealField(Buffer.alloc(32), Buffer.from('a password'), {
+        tenantId: TENANT, secretId: 'secret-1', field: 'value', version: 1,
+      }),
+    ).toThrow(/all-zero key/);
   });
 
   it('evicts the oldest entry when full', async () => {

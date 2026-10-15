@@ -18,7 +18,7 @@
  * functions below and cannot read a password hash by any path; that separation
  * is asserted by a guard in db/sql/0340_local_authentication.sql.
  */
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { db } from '../db/client';
 import { authenticate as radiusAuthenticate } from './radius';
 import { radiusForEmail } from './radius-config';
@@ -460,8 +460,9 @@ export interface IssueResetRequest {
 /**
  * Mint a single-use reset token.
  *
- * Returns null when the address has no account — and the CALLER MUST STILL
- * ANSWER THE SAME WAY it would have on success. "If an account exists for that
+ * Returns null when the address has no account, or when a self-service link
+ * for it is already outstanding from the last five minutes (0740) — and the
+ * CALLER MUST STILL ANSWER THE SAME WAY it would have on success. "If an account exists for that
  * address, a reset has been sent" is not a politeness; a reset form that
  * distinguishes the two is a user-enumeration endpoint that needs no password
  * and no rate limit to be useful.
@@ -493,6 +494,10 @@ export async function issuePasswordReset(request: IssueResetRequest): Promise<Is
       ${request.issuedBy ?? null}::uuid, ${request.ip ?? null}::inet)
   `;
   if (!issued) throw new Error('helm.issue_password_reset returned no row');
+  // NULL: a self-service link for this person is already outstanding and was
+  // issued in the last five minutes (0740). Reported exactly as an unknown
+  // address is, so the caller cannot tell the two apart.
+  if (issued.issue_password_reset === null) return null;
 
   return {
     resetId: issued.issue_password_reset,
@@ -605,18 +610,4 @@ async function recordResetRefusal(sql: ReturnType<typeof db>, ip?: string): Prom
     SELECT helm.record_login_attempt(
       ${''}, NULL::uuid, 'reset_refused', ${ip ?? null}::inet, NULL)
   `;
-}
-
-/**
- * Compare a token against a stored digest without a timing signal.
- *
- * The lookup in redeemPasswordReset is an indexed equality on the digest, which
- * is already constant in the useful sense — the index tells an attacker nothing
- * about how many leading bytes matched. This exists for callers that have both
- * values in hand and would otherwise reach for `===`.
- */
-export function tokenMatches(token: string, storedSha256: Buffer): boolean {
-  const digest = createHash('sha256').update(token).digest();
-  if (digest.length !== storedSha256.length) return false;
-  return timingSafeEqual(digest, storedSha256);
 }

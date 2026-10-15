@@ -3,6 +3,11 @@
 Reference product: IT Glue. This is an information-architecture comparison, not a
 visual one: Helm keeps its own look, wording and assets.
 
+> **Historical.** Every group in this plan has landed or been dropped. The
+> document is kept for its decisions log (the "Decisions" section) and as the
+> record of why each feature looks the way it does; the counts and migration
+> numbers below are as they were when the plan was written, not now.
+
 Assessed against `main` at `0eebae3`. 76 tables, 61 migrations, next free
 migration number **0600** (the `09xx` range is seed data and stays last).
 

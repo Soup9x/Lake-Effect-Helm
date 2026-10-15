@@ -182,6 +182,7 @@ async function deliverNotifications(ctx: JobContext): Promise<JobResult> {
   let sent = 0;
   let failed = 0;
   let dead = 0;
+  let tenantsFailed = 0;
 
   for (const tenant of backlog) {
     if (ctx.stopping()) break;
@@ -192,12 +193,6 @@ async function deliverNotifications(ctx: JobContext): Promise<JobResult> {
       actorType: 'service_account' as const,
     };
 
-    const due = await withTenant(
-      actor,
-      async (tx) => tx<ClaimRow[]>`SELECT * FROM helm.claim_notifications(${DELIVER_BATCH})`,
-      { role: 'worker' },
-    );
-
     /*
      * One mail connection per tenant, opened only if this batch actually holds
      * an email destination and closed in the finally below. A tenant whose
@@ -206,16 +201,42 @@ async function deliverNotifications(ctx: JobContext): Promise<JobResult> {
      * a relay's rate limiter decides Helm is a spam source.
      */
     let mail: EmailBatch | null = null;
+    let mailOpened = false;
+    /*
+     * A relay that cannot be OPENED — most often an SMTP password that will not
+     * decrypt — is recorded against each email delivery as a failed attempt,
+     * not thrown. Thrown, it ended the whole run before anything was recorded:
+     * claim_notifications() leaves rows pending, so the same tenant headed the
+     * backlog again next tick and every tenant after it waited forever. Recorded,
+     * the deliveries back off and eventually go dead like any other failure,
+     * and this tenant's webhooks still go out.
+     */
+    let mailError: string | null = null;
 
     try {
+      const due = await withTenant(
+        actor,
+        async (tx) => tx<ClaimRow[]>`SELECT * FROM helm.claim_notifications(${DELIVER_BATCH})`,
+        { role: 'worker' },
+      );
+
       for (const delivery of due) {
         if (ctx.stopping()) break;
 
-        if (delivery.transport === 'email' && mail === null) {
-          mail = await EmailBatch.open(actor);
+        if (delivery.transport === 'email' && !mailOpened) {
+          mailOpened = true;
+          try {
+            mail = await EmailBatch.open(actor);
+          } catch (error) {
+            const described = describeError(error);
+            mailError = `the mail relay could not be opened: ${String(described.error)}`;
+            log.error('the mail relay could not be opened', described);
+          }
         }
 
-        const outcome = await deliverOne(tenant, delivery, log, mail);
+        const outcome: Outcome = delivery.transport === 'email' && mailError
+          ? { ok: false, responseCode: null, error: mailError }
+          : await deliverOne(tenant, delivery, log, mail);
         if (outcome.ok) sent += 1;
         else failed += 1;
 
@@ -248,12 +269,20 @@ async function deliverNotifications(ctx: JobContext): Promise<JobResult> {
           });
         }
       }
+    } catch (error) {
+      // One tenant's database or delivery fault must not abandon the tenants
+      // after it — the header's promise, which this loop did not keep.
+      tenantsFailed += 1;
+      log.error('notification delivery failed for this tenant; continuing', describeError(error));
     } finally {
       mail?.close();
     }
   }
 
-  return { counts: { sent, failed, dead }, idle: sent === 0 && failed === 0 };
+  return {
+    counts: { sent, failed, dead, tenantsFailed },
+    idle: sent === 0 && failed === 0 && tenantsFailed === 0,
+  };
 }
 
 interface Outcome {

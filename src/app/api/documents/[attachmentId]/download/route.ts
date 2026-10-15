@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { tenantRoute } from '@/lib/api/handler';
+import { serviceRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getDocumentService } from '@/lib/services';
 import { DocumentError } from '@/lib/documents/service';
@@ -35,15 +35,15 @@ import { safeContentType } from '@/lib/documents/limits';
  * event back rather than leaving a trail saying somebody received something
  * they did not.
  */
-export const GET = tenantRoute(
-  async ({ params, identity }) => {
+export const GET = serviceRoute(
+  async ({ params, actor }) => {
     const parsed = z.guid().safeParse(params.attachmentId);
     if (!parsed.success) throw ApiError.invalid('invalid document id');
 
     let opened;
     try {
       opened = await getDocumentService().download(
-        { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+        actor,
         parsed.data,
       );
     } catch (cause) {

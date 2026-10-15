@@ -15,24 +15,33 @@
 # =============================================================================
 set -eu
 
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-SQL
+# Passwords go in as psql variables and are quoted by psql (:'name'), not
+# spliced into the SQL text: init-secrets.sh generates hex, but an operator who
+# sets one by hand with a quote in it would otherwise break this script or
+# inject into it.
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  -v pw_app="${HELM_DB_PASSWORD_APP}" \
+  -v pw_auth="${HELM_DB_PASSWORD_AUTH}" \
+  -v pw_key_admin="${HELM_DB_PASSWORD_KEY_ADMIN}" \
+  -v pw_auditor="${HELM_DB_PASSWORD_AUDITOR}" \
+  -v pw_worker="${HELM_DB_PASSWORD_WORKER}" <<-SQL
 	-- helm_migrator is NOT created here. Migrations run as the superuser (see
 	-- the migrate service in docker-compose.yml), and a login role with no
 	-- password and no purpose is one more thing to have to think about.
 
 	CREATE ROLE helm_app        LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS
-	  PASSWORD '${HELM_DB_PASSWORD_APP}';
+	  PASSWORD :'pw_app';
 	CREATE ROLE helm_auth       LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS
-	  PASSWORD '${HELM_DB_PASSWORD_AUTH}';
+	  PASSWORD :'pw_auth';
 	CREATE ROLE helm_key_admin  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS
-	  PASSWORD '${HELM_DB_PASSWORD_KEY_ADMIN}';
+	  PASSWORD :'pw_key_admin';
 	CREATE ROLE helm_auditor    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS
-	  PASSWORD '${HELM_DB_PASSWORD_AUDITOR}';
+	  PASSWORD :'pw_auditor';
 
 	-- helm_worker is granted membership in helm_app by 0290_worker_identities.
 	-- Created here only so it has a password to connect with.
 	CREATE ROLE helm_worker     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS
-	  PASSWORD '${HELM_DB_PASSWORD_WORKER}';
+	  PASSWORD :'pw_worker';
 
 	-- Asserted rather than assumed. If a future edit to this file drops
 	-- NOBYPASSRLS from one line, the container fails to initialise instead of

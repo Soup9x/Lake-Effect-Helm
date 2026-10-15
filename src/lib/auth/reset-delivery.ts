@@ -153,6 +153,18 @@ export function getResetDelivery(): ResetDelivery {
   return delivery;
 }
 
+/**
+ * Whether self-service reset can deliver anything at all.
+ *
+ * Asked BEFORE looking the address up. Asked after — as the route used to, by
+ * catching the refusal from send() — it answered 503 for an address with an
+ * account and 200 for one without, which made the endpoint an account
+ * enumerator on every deployment that had not configured a channel.
+ */
+export function resetDeliveryAvailable(): boolean {
+  return !(getResetDelivery() instanceof RefusingDelivery);
+}
+
 /** Install a channel directly. For tests, and for deployments that wire their own. */
 export function setResetDelivery(next: ResetDelivery | null): void {
   delivery = next;

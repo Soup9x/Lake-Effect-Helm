@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { notFound } from 'next/navigation';
+import { isUuid } from '@/lib/ids';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { Sidebar } from '@/components/shell/sidebar';
@@ -31,6 +32,7 @@ export default async function OrganizationLayout({
   params: Promise<{ organizationId: string }>;
 }) {
   const { organizationId } = await params;
+  if (!isUuid(organizationId)) notFound();
   const identity = await getServerIdentity();
 
   const data = await withTenant(actorOf(identity), async (tx) => {

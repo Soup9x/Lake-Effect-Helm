@@ -11,6 +11,7 @@
  */
 import { NextResponse } from 'next/server';
 import { publicRoute } from '@/lib/api/handler';
+import { readJsonObjectOrEmpty } from '@/lib/api/body';
 import { redeemPasswordReset } from '@/lib/auth/local';
 import { clientIp } from '@/lib/auth/identity';
 
@@ -20,7 +21,7 @@ interface RedeemBody {
 }
 
 export const POST = publicRoute(async (request) => {
-  const body = (await request.json().catch(() => ({}))) as RedeemBody;
+  const body = (await readJsonObjectOrEmpty(request)) as RedeemBody;
 
   if (typeof body.token !== 'string' || typeof body.password !== 'string') {
     return NextResponse.json(

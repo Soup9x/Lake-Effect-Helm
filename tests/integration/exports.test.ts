@@ -8,7 +8,7 @@
  * that actually deletes the bytes, and an incomplete bundle that says so on its
  * cover page rather than being quietly short a password.
  */
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +18,8 @@ import { resetServices, setKekProvider } from '../../src/lib/services';
 import { getExportService } from '../../src/lib/exports/service';
 import { FilesystemExportStorage, setExportStorage } from '../../src/lib/exports/storage';
 import { isEncryptedBundle, unpackBundle } from '../../src/lib/exports/bundle';
+import { FilePassphraseSink, expireExportsJob, setPassphraseSink } from '../../src/workers/exports';
+import type { JobLogger } from '../../src/workers/runtime';
 import {
   IDS, actor, buildHarness, connectPools, disconnectPools, resetDatabase, superuserSql,
 } from './harness';
@@ -564,21 +566,114 @@ describe('export engine', () => {
                  WHERE id = ${request.exportJobId}::uuid`;
       });
 
-      const expired = await withTenant(
-        exportWorker(),
-        async (tx) => tx<{ export_job_id: string; storage_key: string }[]>`
-          SELECT * FROM helm.expire_exports()
-        `,
-        { role: 'worker' },
-      );
+      // The REAL job, tenant discovery included. Calling helm.expire_exports()
+      // inside withTenant() — as this test used to — skips the job's own
+      // enumeration, which is the part that returned zero tenants under RLS and
+      // left every export unexpired until 0720.
+      // And the passphrase file for it, which used to outlive the bundle forever.
+      const passphraseDir = mkdtempSync(join(tmpdir(), 'helm-passphrases-'));
+      const passphraseFile = join(passphraseDir, `${request.exportJobId}.passphrase`);
+      writeFileSync(passphraseFile, 'correct horse\n', { mode: 0o600 });
+      setPassphraseSink(new FilePassphraseSink(passphraseDir));
 
-      expect(expired.map((r) => r.export_job_id)).toContain(request.exportJobId);
+      const errors: string[] = [];
+      const log: JobLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: (message) => errors.push(message),
+        child: () => log,
+      };
+      const result = await expireExportsJob().run({ log, stopping: () => false });
+      setPassphraseSink(null);
+      expect(existsSync(passphraseFile)).toBe(false);
+
+      expect(errors).toEqual([]);
+      expect(result.counts?.expired).toBeGreaterThanOrEqual(1);
+
+      const [row] = await withTenant(ADMIN, async (tx) => {
+        return tx<{ status: string }[]>`
+          SELECT status FROM export_job WHERE id = ${request.exportJobId}::uuid
+        `;
+      });
+      expect(row?.status).toBe('expired');
 
       const storage = new FilesystemExportStorage(exportRoot);
-      await storage.remove(stored!.storage_key);
       await expect(storage.get(stored!.storage_key)).rejects.toThrow();
 
       await expect(getExportService().download(ADMIN, request.exportJobId)).rejects.toThrow(/expired/);
+    });
+
+    it('fails the export, and keeps no bytes, when the passphrase cannot be delivered', async () => {
+      // Before, render() marked the export completed and the worker delivered
+      // the passphrase afterwards. A sink that failed (EACCES, a full disk)
+      // left a completed, downloadable bundle whose passphrase existed nowhere.
+      const request = await getExportService().request(ADMIN, {
+        organizationId: IDS.orgAcme,
+        kind: 'ad_hoc',
+        format: 'zip',
+        reason: 'proves a failed passphrase delivery fails the export',
+        includeSecrets: true,
+      });
+      const job = (await backlog()).find((r) => r.export_job_id === request.exportJobId)!;
+
+      const before = new Set(await readdir(exportRoot, { recursive: true }));
+      await expect(
+        getExportService().render(exportWorker(), {
+          exportJobId: job.export_job_id,
+          organizationId: job.organization_id,
+          kind: job.kind,
+          format: job.format,
+          includeSecrets: job.include_secrets,
+          scope: job.scope,
+          reason: job.reason,
+          requestedByName: job.requested_by_name,
+          requestedBy: job.requested_by,
+          approvedByName: job.approved_by_name,
+        }, async () => { throw new Error('passphrase directory is read-only'); }),
+      ).rejects.toThrow(/read-only/);
+
+      const [row] = await withTenant(ADMIN, async (tx) => tx<{ status: string; storage_key: string | null }[]>`
+        SELECT status, storage_key FROM export_job WHERE id = ${request.exportJobId}::uuid
+      `);
+      expect(row).toMatchObject({ status: 'failed', storage_key: null });
+      const after = await readdir(exportRoot, { recursive: true });
+      expect(after.filter((f) => !before.has(f) && f.includes('.'))).toEqual([]);
+    });
+
+    it('delivers the passphrase before the export reads as completed', async () => {
+      const request = await getExportService().request(ADMIN, {
+        organizationId: IDS.orgAcme,
+        kind: 'ad_hoc',
+        format: 'zip',
+        reason: 'proves the passphrase arrives before completion',
+        includeSecrets: true,
+      });
+      const job = (await backlog()).find((r) => r.export_job_id === request.exportJobId)!;
+
+      let statusAtDelivery: string | undefined;
+      let delivered: string | undefined;
+      const result = await getExportService().render(exportWorker(), {
+        exportJobId: job.export_job_id,
+        organizationId: job.organization_id,
+        kind: job.kind,
+        format: job.format,
+        includeSecrets: job.include_secrets,
+        scope: job.scope,
+        reason: job.reason,
+        requestedByName: job.requested_by_name,
+        requestedBy: job.requested_by,
+        approvedByName: job.approved_by_name,
+      }, async (passphrase) => {
+        delivered = passphrase;
+        const [row] = await withTenant(ADMIN, async (tx) => tx<{ status: string }[]>`
+          SELECT status FROM export_job WHERE id = ${request.exportJobId}::uuid
+        `);
+        statusAtDelivery = row?.status;
+      });
+
+      expect(delivered).toBe(result.passphrase);
+      expect(statusAtDelivery).toBe('running');
     });
 
     it('refuses a storage key that escapes the storage root', async () => {

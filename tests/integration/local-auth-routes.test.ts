@@ -342,9 +342,62 @@ describe('POST /api/auth/local/reset', () => {
     expect(response.status).toBe(503);
     expect((await json(response)).error.code).toBe('reset_delivery_unavailable');
     // "Check your email" when nothing was sent produces somebody who believes
-    // they are locked out permanently.
+    // they are locked out permanently. And nothing is issued: there is no
+    // channel to send it through.
     const [row] = await db('auth')<{ n: number }[]>`SELECT count(*)::int AS n FROM password_reset`;
-    expect(row!.n).toBe(1); // issued, then found undeliverable — not silently claimed as sent
+    expect(row!.n).toBe(0);
+  });
+
+  it('gives that refusal for every address, so it says nothing about which exist', async () => {
+    // Before, the refusal came from send(), which only an address WITH an
+    // account ever reached: 503 meant "exists", 200 meant "does not".
+    const known = await observable(await resetRoute(post('/api/auth/local/reset', { email: ADMIN })));
+    const unknown = await observable(
+      await resetRoute(post('/api/auth/local/reset', { email: 'ghost@northwind.test' })),
+    );
+    expect(known).toEqual(unknown);
+    expect(known.status).toBe(503);
+  });
+
+  it('answers a failed delivery exactly as a successful one', async () => {
+    setResetDelivery({ name: 'broken', send: async () => { throw new Error('relay down'); } });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const known = await observable(await resetRoute(post('/api/auth/local/reset', { email: ADMIN })));
+      const unknown = await observable(
+        await resetRoute(post('/api/auth/local/reset', { email: 'ghost@northwind.test' })),
+      );
+      expect(known).toEqual(unknown);
+      expect(known.status).toBe(200);
+      expect(errors).toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('does not let an anonymous request cancel an administrator’s code (0740)', async () => {
+    currentUser = { id: IDS.admin1, email: ADMIN };
+    mocks.tenantCookie = IDS.tenant1;
+    const issued = await json(
+      await resetRoute(post('/api/auth/local/reset', { email: ADMIN, outOfBand: true })),
+    );
+    const adminToken = new URL(issued.resetUrl as string).searchParams.get('token')!;
+
+    // Anybody, repeatedly, during the outage the code exists for.
+    currentUser = null;
+    mocks.tenantCookie = undefined;
+    setResetDelivery({ name: 'capture', send: async (m) => { delivered.push(m); } });
+    for (let i = 0; i < 3; i += 1) {
+      expect((await resetRoute(post('/api/auth/local/reset', { email: ADMIN }))).status).toBe(200);
+    }
+    // ...and only the first of those produced a message: the rest were inside
+    // the five-minute window and issued nothing.
+    expect(delivered.length).toBe(1);
+
+    const redeemed = await redeemRoute(
+      post('/api/auth/local/reset/redeem', { token: adminToken, password: NEW_PASSWORD }),
+    );
+    expect(redeemed.status).toBe(200);
   });
 
   it('answers an unknown address exactly as a known one', async () => {
@@ -411,6 +464,78 @@ describe('POST /api/auth/local/reset', () => {
       post('/api/auth/local/reset', { email: 'admin@rival.test', outOfBand: true }),
     );
     expect(response.status).toBe(404);
+  });
+
+  /*
+   * 0710. A tier3 holds user:write, so before 0710 this path handed them the
+   * super_admin's reset link — and with it the super_admin's account, which
+   * 0350 exists to stop a tier3 from ever reaching.
+   */
+  describe('rank and scope (0710)', () => {
+    beforeEach(async () => {
+      await su`UPDATE membership SET role_key = 'tier3' WHERE user_id = ${IDS.tech1}::uuid`;
+    });
+
+    afterEach(async () => {
+      await su`UPDATE membership SET role_key = 'tier1' WHERE user_id = ${IDS.tech1}::uuid`;
+      await su`DELETE FROM membership WHERE tenant_id = ${IDS.tenant2}::uuid AND user_id = ${IDS.tech1}::uuid`;
+    });
+
+    it('refuses a tier3 issuing a code for the super_admin, and issues nothing', async () => {
+      currentUser = { id: IDS.tech1, email: 'tech1@northwind.test' };
+      mocks.tenantCookie = IDS.tenant1;
+
+      const response = await resetRoute(
+        post('/api/auth/local/reset', { email: ADMIN, outOfBand: true }),
+      );
+      expect(response.status).toBe(403);
+      expect((await json(response)).error.message).toMatch(/outranks yours/);
+
+      const [issued] = await su<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM password_reset WHERE user_id = ${IDS.admin1}::uuid
+      `;
+      expect(issued!.n).toBe(0);
+    });
+
+    it('still lets a tier3 issue a code for somebody they outrank', async () => {
+      currentUser = { id: IDS.tech1, email: 'tech1@northwind.test' };
+      mocks.tenantCookie = IDS.tenant1;
+
+      const response = await resetRoute(
+        post('/api/auth/local/reset', { email: 'viewer@acme.test', outOfBand: true }),
+      );
+      expect(response.status).toBe(200);
+      expect((await json(response)).resetUrl).toBeTruthy();
+    });
+
+    it('lets a super_admin issue a code for a peer of equal rank', async () => {
+      // Equal rank is the break-glass case: one super_admin recovering another.
+      await su`UPDATE membership SET role_key = 'super_admin' WHERE user_id = ${IDS.tech1}::uuid`;
+      currentUser = { id: IDS.admin1, email: ADMIN };
+      mocks.tenantCookie = IDS.tenant1;
+
+      const response = await resetRoute(
+        post('/api/auth/local/reset', { email: 'tech1@northwind.test', outOfBand: true }),
+      );
+      expect(response.status).toBe(200);
+    });
+
+    it('refuses an account that also belongs to another tenant', async () => {
+      // The password is one credential for every tenant the person is in;
+      // tenant 1's administrator has no authority over their way into tenant 2.
+      await su`
+        INSERT INTO membership (tenant_id, user_id, role_key, org_scope_all)
+        VALUES (${IDS.tenant2}::uuid, ${IDS.tech1}::uuid, 'tier1', true)
+      `;
+      currentUser = { id: IDS.admin1, email: ADMIN };
+      mocks.tenantCookie = IDS.tenant1;
+
+      const response = await resetRoute(
+        post('/api/auth/local/reset', { email: 'tech1@northwind.test', outOfBand: true }),
+      );
+      expect(response.status).toBe(403);
+      expect((await json(response)).error.message).toMatch(/another tenant/);
+    });
   });
 });
 

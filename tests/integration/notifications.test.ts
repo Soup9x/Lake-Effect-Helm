@@ -548,6 +548,53 @@ describe('an email destination', () => {
     expect(await claim()).toHaveLength(0);
   });
 
+  it('records a relay that cannot be opened as a failed attempt instead of ending the run', async () => {
+    await configureRelay();
+    asUser(IDS.admin1, 'admin@northwind.test');
+    expect((await putNotification(request('PUT', emailDestination()))).status).toBe(200);
+    await requestAnExport('contractual handover of all documentation');
+    expect((await fanOut()).queued).toBe(1);
+
+    // A relay password that will not decrypt — a restored backup under the
+    // wrong master key, say. EmailBatch.open() throws on it. Before, that
+    // escaped the per-tenant loop, nothing was recorded, the tenant headed the
+    // backlog again next tick, and every tenant after it waited forever.
+    const sql = superuserSql();
+    try {
+      await sql`
+        UPDATE smtp_setting SET
+          username = 'relay-user', password_set = true,
+          wrap_provider = 'local-dev', kek_id = 'local-dev/v1',
+          wrapped_dek = ${Buffer.alloc(60, 1)}, secret_ciphertext = ${Buffer.alloc(16, 2)},
+          secret_nonce = ${Buffer.alloc(12, 3)}, secret_tag = ${Buffer.alloc(16, 4)},
+          secret_aad = 'not a real binding'
+        WHERE tenant_id = ${IDS.tenant1}::uuid
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+
+    const context = jobContext();
+    const result = await deliverNotificationsJob().run(context);
+    expect(result.counts).toMatchObject({ sent: 0, failed: 1, tenantsFailed: 0 });
+    expect(context.lines.some((l) => l.includes('mail relay could not be opened'))).toBe(true);
+    expect(theRelay().received).toHaveLength(0);
+
+    const check = superuserSql();
+    try {
+      const [row] = await check<{ status: string; attempts: number; error: string | null; due_later: boolean }[]>`
+        SELECT status, attempts, error, next_attempt_at > now() AS due_later FROM webhook_delivery
+      `;
+      // Recorded, so it backs off like any other failure rather than being
+      // re-claimed at the head of the queue every tick.
+      expect(row!.attempts).toBe(1);
+      expect(row!.due_later).toBe(true);
+      expect(row!.error).toMatch(/mail relay could not be opened/);
+    } finally {
+      await check.end({ timeout: 5 });
+    }
+  });
+
   it('is refused before a relay exists, naming what is missing', async () => {
     await forgetRelay();
     asUser(IDS.admin1, 'admin@northwind.test');

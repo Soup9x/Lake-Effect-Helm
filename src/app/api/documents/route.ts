@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import { tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { serviceRoute } from '@/lib/api/handler';
+import { readFormDataBounded } from '@/lib/api/body';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { getDocumentService } from '@/lib/services';
 import { DocumentError } from '@/lib/documents/service';
 import { checkUpload, maxUploadBytes } from '@/lib/documents/limits';
@@ -29,8 +30,8 @@ const uploadSchema = z.object({
   isInternalOnly: z.boolean().default(false),
 });
 
-export const POST = tenantRoute(
-  async ({ request, identity }) => {
+export const POST = serviceRoute(
+  async ({ request, actor }) => {
     const limit = maxUploadBytes();
 
     // Before the body is read at all.
@@ -43,8 +44,15 @@ export const POST = tenantRoute(
 
     let form: FormData;
     try {
-      form = await request.formData();
+      // Bounded while reading: the Content-Length check above is skipped by a
+      // chunked upload, and formData() buffers whatever arrives.
+      const bounded = await readFormDataBounded(request, limit + 64 * 1024);
+      if (!bounded) {
+        throw ApiError.invalid('that upload is larger than the limit');
+      }
+      form = bounded;
     } catch (cause) {
+      if (cause instanceof ApiError) throw cause;
       throw ApiError.invalid('expected a multipart/form-data upload', {
         issues: [{ path: 'body', message: String((cause as Error).message).slice(0, 200) }],
       });
@@ -64,7 +72,7 @@ export const POST = tenantRoute(
     });
     if (!parsed.success) {
       throw ApiError.invalid('invalid upload', {
-        issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        issues: zodIssues(parsed.error),
       });
     }
 
@@ -87,7 +95,7 @@ export const POST = tenantRoute(
 
     try {
       const stored = await getDocumentService().upload(
-        { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+        actor,
         {
           organizationId: parsed.data.organizationId,
           folderId: parsed.data.folderId,

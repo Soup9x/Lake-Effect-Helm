@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { getTenantSidebarDefault, setTenantSidebarDefault } from '@/lib/nav/sidebar-queries';
 import { SIDEBAR_MAX, SIDEBAR_SLUGS } from '@/lib/nav/sidebar-layout';
 
@@ -44,7 +44,7 @@ export const PUT = tenantRoute(
       const result = schema.safeParse(raw);
       if (!result.success) {
         throw ApiError.invalid('a layout of known category slugs', {
-          issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+          issues: zodIssues(result.error),
         });
       }
       return result.data;

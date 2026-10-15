@@ -17,18 +17,20 @@
  * a migration guard in 0910, not by this comment. Alert payloads are built in
  * SQL from the expiration projection, which never contains secret material.
  *
- * SINCE 0420 delivery prefers the shared notification queue, which gives an
- * expiry warning the same Discord/Teams formatting and the same enveloped
- * destination URL as every other event. The original alert_rule.target path is
- * kept as a fallback for deployments configured before that existed; see
- * deliverExpiryAlerts.
+ * DELIVERY IS THE SHARED NOTIFICATION QUEUE, and only that. Each alert is
+ * queued as `expiration.warning` for every destination subscribed to it, which
+ * gives an expiry warning the same Discord/Teams/email formatting, retry and
+ * enveloped destination as every other event. The original alert_rule.target
+ * notifier (workers/notifiers.ts) was removed: its "email" channel only wrote a
+ * log line yet recorded the alert as sent, and no rule ever used it.
+ *
+ * Every tenant has a default rule since 0730 — before that nothing created one,
+ * so both jobs here were idle on every deployment.
  */
 import { withTenant, type HelmTx } from '../lib/db/client';
 import { db } from '../lib/db/client';
 import type { Job, JobContext, JobResult } from './runtime';
 import { describeError } from './runtime';
-import type { AlertNotifier, AlertMessage } from './notifiers';
-import { resolveNotifier } from './notifiers';
 
 interface AlertBacklogRow {
   tenant_id: string;
@@ -40,12 +42,7 @@ interface AlertBacklogRow {
 interface PendingAlertRow {
   alert_id: string;
   rule_id: string;
-  rule_name: string;
-  channel: string;
-  target: string;
-  severity: AlertMessage['severity'];
   lead_day: number;
-  fired_at: Date;
   payload: Record<string, unknown>;
 }
 
@@ -115,117 +112,97 @@ async function deliverExpiryAlerts(ctx: JobContext): Promise<JobResult> {
   const backlog = await db('worker')<AlertBacklogRow[]>`SELECT * FROM helm.alert_backlog()`;
   if (backlog.length === 0) return { idle: true };
 
-  const notifier = resolveNotifier();
-  let sent = 0;
-  let failed = 0;
+  let queued = 0;
+  let unrouted = 0;
+  let tenantsFailed = 0;
 
   for (const tenant of backlog) {
     if (ctx.stopping()) break;
     const log = ctx.log.child({ tenant: tenant.tenant_name });
+    const actor = {
+      tenantId: tenant.tenant_id,
+      actorId: tenant.worker_actor_id,
+      actorType: 'service_account' as const,
+    };
 
-    const pending = await withTenant(
-      { tenantId: tenant.tenant_id, actorId: tenant.worker_actor_id, actorType: 'service_account' },
-      async (tx) => tx<PendingAlertRow[]>`
-        SELECT * FROM helm.pending_alerts(${MAX_PER_TENANT_PER_RUN})
-      `,
-      { role: 'worker' },
-    );
+    let tenantUnrouted = 0;
 
-    for (const alert of pending) {
-      if (ctx.stopping()) break;
-
-      /*
-       * 0420 gave Helm one outbound queue, with per-destination formatting and
-       * an enveloped URL. An expiry warning belongs on it like any other event.
-       *
-       * Queued rather than sent here: delivery, retry and backoff are the
-       * notification worker's job, and having two things POST to chat platforms
-       * is how one of them ends up with the retry bug.
-       *
-       * The LEGACY PATH BELOW IS KEPT and is not dead code. alert_rule.target
-       * predates webhook destinations and a deployment may still be using it;
-       * silently dropping those alerts because somebody has not yet configured
-       * a destination would be the worst possible way to migrate. So: if a
-       * destination took it, the queue owns it. If none did, the old notifier
-       * still runs.
-       */
-      const queued = await withTenant(
-        { tenantId: tenant.tenant_id, actorId: tenant.worker_actor_id, actorType: 'service_account' },
-        async (tx) => {
-          const [row] = await tx<{ enqueue_notification: number }[]>`
-            SELECT helm.enqueue_notification(
-              'expiration.warning',
-              ${alert.alert_id}::uuid,
-              ${(alert.payload.organization_id as string | undefined) ?? null}::uuid,
-              ${tx.json(toJson(alert.payload))}::jsonb)
-          `;
-          return Number(row?.enqueue_notification ?? 0);
-        },
-        { role: 'worker' },
-      );
-
-      if (queued > 0) {
-        // Handed off. Recorded as sent against the alert_event so tomorrow's
-        // evaluation does not re-fire it; whether it reached the channel is now
-        // webhook_delivery's record to keep.
-        sent += 1;
-        await withTenant(
-          { tenantId: tenant.tenant_id, actorId: tenant.worker_actor_id, actorType: 'service_account' },
-          async (tx) => tx`
-            SELECT helm.record_alert_delivery(${alert.alert_id}::uuid, 'sent', NULL)
-          `,
-          { role: 'worker' },
-        );
-        continue;
-      }
-
-      const outcome = await deliverOne(notifier, tenant, alert, log);
-      if (outcome.status === 'sent') sent += 1;
-      else failed += 1;
-
-      // Recorded in its own transaction, deliberately. Batching the whole
-      // tenant's results into one transaction would mean a crash after sending
-      // twenty emails rolls back the record that they were sent — and the next
-      // run sends them again.
-      await withTenant(
-        { tenantId: tenant.tenant_id, actorId: tenant.worker_actor_id, actorType: 'service_account' },
-        async (tx) => tx`
-          SELECT helm.record_alert_delivery(
-            ${alert.alert_id}::uuid, ${outcome.status}, ${outcome.error ?? null}
-          )
+    try {
+      const pending = await withTenant(
+        actor,
+        async (tx) => tx<PendingAlertRow[]>`
+          SELECT * FROM helm.pending_alerts(${MAX_PER_TENANT_PER_RUN})
         `,
         { role: 'worker' },
       );
+
+      for (const alert of pending) {
+        if (ctx.stopping()) break;
+
+        /*
+         * Queued rather than sent here: delivery, retry and backoff are the
+         * notification worker's job, and two things POSTing to chat platforms
+         * is how one of them ends up with the retry bug.
+         *
+         * Queue and record in ONE transaction. Recorded as sent without the
+         * queue row, the warning would be lost; queued without the record, the
+         * next run would queue it again — the queue's (endpoint, event_uid)
+         * conflict guard would absorb that, but only for destinations that
+         * still exist.
+         */
+        const delivered = await withTenant(
+          actor,
+          async (tx) => {
+            const [row] = await tx<{ enqueue_notification: number }[]>`
+              SELECT helm.enqueue_notification(
+                'expiration.warning',
+                ${alert.alert_id}::uuid,
+                ${(alert.payload.organization_id as string | undefined) ?? null}::uuid,
+                ${tx.json(toJson(alert.payload))}::jsonb)
+            `;
+            const count = Number(row?.enqueue_notification ?? 0);
+            // No destination subscribes to expiry warnings. Recorded as
+            // suppressed, with the reason, rather than left pending: a pending
+            // alert would be re-examined every five minutes forever, and an
+            // expiry warning that turns up weeks late is worse than none — the
+            // next, more urgent threshold fires on its own.
+            await tx`
+              SELECT helm.record_alert_delivery(
+                ${alert.alert_id}::uuid,
+                ${count > 0 ? 'sent' : 'suppressed'},
+                ${count > 0 ? null : 'no notification destination subscribes to expiration.warning'})
+            `;
+            return count;
+          },
+          { role: 'worker' },
+        );
+
+        if (delivered > 0) {
+          queued += 1;
+        } else {
+          unrouted += 1;
+          tenantUnrouted += 1;
+        }
+      }
+
+      if (tenantUnrouted > 0) {
+        log.info('expiry warnings had nowhere to go', {
+          unrouted: tenantUnrouted,
+          hint: 'subscribe a destination to "Expiring soon" under Settings',
+        });
+      }
+    } catch (error) {
+      // One tenant's failure must not abandon the rest — the same promise the
+      // evaluation half above already keeps.
+      tenantsFailed += 1;
+      log.error('alert delivery failed for this tenant; continuing', describeError(error));
     }
   }
 
-  return { counts: { sent, failed }, idle: sent === 0 && failed === 0 };
-}
-
-async function deliverOne(
-  notifier: AlertNotifier,
-  tenant: AlertBacklogRow,
-  alert: PendingAlertRow,
-  log: JobContext['log'],
-): Promise<{ status: 'sent' | 'failed'; error?: string }> {
-  try {
-    await notifier.send({
-      tenantId: tenant.tenant_id,
-      tenantName: tenant.tenant_name,
-      channel: alert.channel,
-      target: alert.target,
-      ruleName: alert.rule_name,
-      severity: alert.severity,
-      leadDay: alert.lead_day,
-      firedAt: alert.fired_at,
-      payload: alert.payload,
-    });
-    return { status: 'sent' };
-  } catch (error) {
-    const described = describeError(error);
-    log.warn('alert delivery failed', { alert: alert.alert_id, channel: alert.channel, ...described });
-    return { status: 'failed', error: String(described.error ?? 'delivery failed') };
-  }
+  return {
+    counts: { queued, unrouted, tenantsFailed },
+    idle: queued === 0 && unrouted === 0 && tenantsFailed === 0,
+  };
 }
 
 /**

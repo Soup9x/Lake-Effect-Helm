@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import { isUuid } from '@/lib/ids';
 import { Network } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -67,6 +68,7 @@ interface ExpiryRow {
 export default async function AssetPage({ params }: { params: Promise<{ nodeId: string }> }) {
   const identity = await getServerIdentity();
   const { nodeId } = await params;
+  if (!isUuid(nodeId)) notFound();
 
   const data = await withTenant(actorOf(identity), async (tx) => {
     const [node] = await tx<NodeRow[]>`

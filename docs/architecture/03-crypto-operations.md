@@ -350,8 +350,8 @@ window, not as making key material unrecoverable.
 ## 8. Verification
 
 ```bash
-pnpm verify              # typecheck + 151 vitest tests + schema drift
-pnpm test:sql            # 142 SQL assertions incl. tamper detection
+pnpm test:sql    # the SQL security suite, against a real Postgres 16 cluster
+pnpm verify      # typecheck + migration manifest + every vitest suite + schema drift
 ```
 
 | Suite | Covers |

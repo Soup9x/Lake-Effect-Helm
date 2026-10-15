@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import {
-  AlertTriangle, Building2, CalendarClock, FileDown, KeyRound, ListChecks, Plug,
+  AlertTriangle, Building2, CalendarClock, FileDown, KeyRound, ListChecks,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -25,7 +25,6 @@ interface Counts {
   secrets: string;
   expiring_30: string;
   expired: string;
-  degraded_integrations: string;
   secret_exports_7d: string;
 }
 
@@ -97,8 +96,6 @@ export default async function DashboardPage() {
         (SELECT count(*) FROM v_expiration_dashboard
           WHERE days_remaining BETWEEN 0 AND 30) AS expiring_30,
         (SELECT count(*) FROM v_expiration_dashboard WHERE days_remaining < 0) AS expired,
-        (SELECT count(*) FROM integration_connection
-          WHERE status IN ('degraded', 'error') AND disabled_at IS NULL) AS degraded_integrations,
         -- Credential exports produced in the last week. Two-person approval
         -- was removed in 0400, so this is no longer "somebody needs to act" —
         -- it is "this happened, and somebody should have noticed". A banner
@@ -303,7 +300,7 @@ export default async function DashboardPage() {
           </Link>
         )}
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <Stat icon={Building2} label="Clients" value={counts?.organizations} href="/organizations" />
           <Stat icon={KeyRound} label="Assets" value={counts?.assets} />
           <Stat icon={KeyRound} label="Credentials" value={counts?.secrets} />
@@ -312,12 +309,6 @@ export default async function DashboardPage() {
             label="Expiring in 30 days"
             value={counts?.expiring_30}
             href="/expirations"
-          />
-          <Stat
-            icon={Plug}
-            label="Integrations degraded"
-            value={counts?.degraded_integrations}
-            href="/settings"
           />
           <Stat
             icon={ListChecks}

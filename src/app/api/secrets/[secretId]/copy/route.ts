@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { readJson, tenantRoute } from '@/lib/api/handler';
+import { readJson, serviceRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getSecretService } from '@/lib/services';
 
@@ -15,8 +15,8 @@ const bodySchema = z.object({ field: z.string().max(64).default('password') });
  * trail showing only the reveal understates what happened. A clipboard is also
  * readable by every other application on the machine.
  */
-export const POST = tenantRoute(
-  async ({ request, params, identity }) => {
+export const POST = serviceRoute(
+  async ({ request, params, actor }) => {
     const secretId = params.secretId;
     if (!secretId || !z.guid().safeParse(secretId).success) {
       throw ApiError.invalid('secretId must be a UUID');
@@ -28,8 +28,10 @@ export const POST = tenantRoute(
       return result.data;
     });
 
+    // The full actor, actorType included: without it a service-account token
+    // was resolved as a user and refused with a raw 42501.
     const auditEventUid = await getSecretService().recordCopy(
-      { tenantId: identity.tenantId, actorId: identity.actorId },
+      actor,
       secretId,
       body.field,
     );

@@ -25,7 +25,6 @@
  * and a bad secret are deliberately indistinguishable from outside, so this
  * endpoint cannot be used to discover which mapping ids exist.
  */
-import { createHash } from 'node:crypto';
 import { db, withTenant } from '../db/client';
 import { getBlindIndex, getKekProvider } from '../services';
 import { activeDataKey } from '../secrets/keys';
@@ -76,8 +75,12 @@ const consoleLog: ReceiverLog = {
   error: (m, f) => console.error(JSON.stringify({ level: 'error', msg: m, ...f })),
 };
 
-/** A body larger than this is refused unread. A console sends kilobytes. */
-const MAX_BODY_BYTES = 1_000_000;
+/**
+ * A body larger than this is refused unread. A console sends kilobytes. The
+ * route enforces it while reading (lib/api/body.ts); the check below is the
+ * second lock, for any other caller of receiveWebhook.
+ */
+export const MAX_WEBHOOK_BODY_BYTES = 1_000_000;
 
 export async function receiveWebhook(
   mappingId: string,
@@ -85,7 +88,7 @@ export async function receiveWebhook(
   headers: Headers,
   log: ReceiverLog = consoleLog,
 ): Promise<WebhookOutcome> {
-  if (rawBody.length > MAX_BODY_BYTES) {
+  if (Buffer.byteLength(rawBody, 'utf8') > MAX_WEBHOOK_BODY_BYTES) {
     return refuse('body too large');
   }
 
@@ -333,9 +336,4 @@ function sealThreatField(
     version: 1,
   });
   return Buffer.concat([envelope.nonce, envelope.authTag, envelope.ciphertext]);
-}
-
-/** A stable digest of a body, for logging a rejection without logging the body. */
-export function bodyDigest(body: string): string {
-  return createHash('sha256').update(body, 'utf8').digest('hex').slice(0, 12);
 }

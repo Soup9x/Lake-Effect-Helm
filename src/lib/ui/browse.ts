@@ -74,3 +74,20 @@ export function facetValues(rows: readonly Browsable[], key: string): string[] {
   }
   return [...seen].sort();
 }
+
+/**
+ * The selected ids that are still visible, or null when nothing was dropped.
+ *
+ * A row the filter hides is no longer selected — otherwise a bulk action
+ * reaches rows nobody can see. Null lets the caller skip a state update (and a
+ * selection-change callback) when the filter hid nothing that was ticked.
+ */
+export function retainVisible(
+  selected: ReadonlySet<string>,
+  visibleIds: Iterable<string>,
+): Set<string> | null {
+  if (selected.size === 0) return null;
+  const live = new Set(visibleIds);
+  const kept = new Set([...selected].filter((id) => live.has(id)));
+  return kept.size === selected.size ? null : kept;
+}

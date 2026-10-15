@@ -146,6 +146,8 @@ export interface ActorRef {
   requestId?: string;
   ip?: string;
   userAgent?: string;
+  /** Narrows the session to the token's scopes; see serviceRoute in api/handler.ts. */
+  apiTokenId?: string;
 }
 
 export class SecretService {

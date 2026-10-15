@@ -146,6 +146,13 @@ export function RadiusSettingsCard({ initial }: { initial: RadiusSettings | null
   }
 
   async function forget() {
+    // Destructive and one click away: say what goes with it before doing it.
+    const confirmed = window.confirm(
+      'Remove the RADIUS configuration and its shared secret? Anybody signing' +
+      ' in through RADIUS will fall back to their local password, or be ' +
+      'refused.',
+    );
+    if (!confirmed) return;
     setSaving(true);
     setFeedback(null);
     try {
@@ -158,6 +165,8 @@ export function RadiusSettingsCard({ initial }: { initial: RadiusSettings | null
       setSecret('');
       setFeedback({ ok: true, message: 'RADIUS configuration removed.' });
       router.refresh();
+    } catch {
+      setFeedback({ ok: false, message: 'The request did not reach the server. Nothing was changed.' });
     } finally {
       setSaving(false);
     }

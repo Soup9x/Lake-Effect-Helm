@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { readJson, serviceRoute } from '@/lib/api/handler';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { getSecretService } from '@/lib/services';
 
 /**
@@ -43,8 +43,8 @@ const rotateSchema = z.object({
   reason: z.string().trim().min(10).max(500),
 });
 
-export const POST = tenantRoute(
-  async ({ request, identity, params }) => {
+export const POST = serviceRoute(
+  async ({ request, actor, params }) => {
     const secretId = z.guid().safeParse(params.secretId);
     if (!secretId.success) throw ApiError.invalid('not a credential id');
 
@@ -52,7 +52,7 @@ export const POST = tenantRoute(
       const result = rotateSchema.safeParse(raw);
       if (!result.success) {
         throw ApiError.invalid('invalid rotation', {
-          issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+          issues: zodIssues(result.error),
         });
       }
       return result.data;
@@ -63,7 +63,7 @@ export const POST = tenantRoute(
     // carries the new version number and the audit event id, which is all a
     // caller legitimately needs.
     const result = await getSecretService().rotate(
-      { tenantId: identity.tenantId, actorId: identity.actorId, actorType: identity.actorType },
+      actor,
       secretId.data,
       body.value,
       body.reason,

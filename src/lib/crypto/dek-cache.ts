@@ -18,6 +18,10 @@
  * making key material unrecoverable.
  */
 import type { EncryptionContext, KekProvider } from './kek';
+import { envInt } from '../env';
+
+/** Callers get their own bytes, so evicting the cached ones cannot reach them. */
+const copyOf = (dek: Buffer): Buffer => Buffer.from(dek);
 
 interface CacheEntry {
   dek: Buffer;
@@ -53,7 +57,12 @@ export class DekCache {
 
   constructor(provider: KekProvider, options: DekCacheOptions = {}) {
     this.#provider = provider;
-    this.#ttlMs = options.ttlMs ?? Number(process.env.HELM_DEK_CACHE_TTL_SECONDS ?? 300) * 1000;
+    this.#ttlMs =
+      options.ttlMs ??
+      envInt('HELM_DEK_CACHE_TTL_SECONDS', process.env.HELM_DEK_CACHE_TTL_SECONDS, 300, {
+        min: 1,
+        max: 3600,
+      }) * 1000;
     this.#maxEntries = options.maxEntries ?? 256;
     this.#now = options.now ?? Date.now;
   }
@@ -65,9 +74,15 @@ export class DekCache {
   /**
    * Returns the unwrapped DEK, unwrapping via the KEK provider on a miss.
    *
-   * The returned Buffer is the cache's own copy. Callers must not mutate it,
-   * and must not hold it past the operation that needed it — copying it into a
-   * long-lived structure defeats the TTL entirely.
+   * The returned Buffer is a PRIVATE COPY, never the cached one. It used to be
+   * the cached Buffer itself, and eviction zeroes that in place — so a request
+   * that fetched the DEK, then awaited a row lock in begin_secret_write(), could
+   * have it zeroed underneath it by another request evicting the expired entry,
+   * and sealField() then encrypted under 32 zero bytes: a secret unreadable to
+   * Helm and recoverable by anyone holding a database dump.
+   *
+   * Callers must still not hold the copy past the operation that needed it —
+   * keeping it in a long-lived structure defeats the TTL entirely.
    */
   async get(request: DekRequest): Promise<Buffer> {
     const now = this.#now();
@@ -78,11 +93,11 @@ export class DekCache {
         // Another caller is already unwrapping this exact key. Join them rather
         // than firing a second KMS call for the same answer.
         this.#hits += 1;
-        return existing.pending;
+        return existing.pending.then(copyOf);
       }
       if (existing.expiresAt > now) {
         this.#hits += 1;
-        return existing.dek;
+        return copyOf(existing.dek);
       }
       this.#evict(request.dataKeyId);
     }
@@ -108,7 +123,7 @@ export class DekCache {
       pending,
     });
 
-    return pending;
+    return pending.then(copyOf);
   }
 
   /**

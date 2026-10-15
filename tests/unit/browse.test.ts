@@ -6,7 +6,7 @@
  * "next 30 days" window that hides what already expired.
  */
 import { describe, expect, it } from 'vitest';
-import { facetValues, filterBrowse, matchesBrowse, type Browsable } from '../../src/lib/ui/browse';
+import { facetValues, filterBrowse, matchesBrowse, retainVisible, type Browsable } from '../../src/lib/ui/browse';
 
 const row = (search: string, over: Partial<Browsable> = {}): Browsable => ({ search, ...over });
 
@@ -92,5 +92,32 @@ describe('facetValues', () => {
 
   it('is empty when no row carries the facet', () => {
     expect(facetValues([row('a'), row('b')], 'type')).toEqual([]);
+  });
+});
+
+describe('retainVisible', () => {
+  it('drops a selected row the filter has hidden', () => {
+    // Tick A, filter A out, tick B: the bulk bar must act on B alone.
+    expect(retainVisible(new Set(['a', 'b']), ['b', 'c'])).toEqual(new Set(['b']));
+  });
+
+  it('reports no change when everything selected is still visible', () => {
+    expect(retainVisible(new Set(['a']), ['a', 'b'])).toBeNull();
+    expect(retainVisible(new Set(), ['a'])).toBeNull();
+  });
+
+  it('can drop everything', () => {
+    expect(retainVisible(new Set(['a']), [])).toEqual(new Set());
+  });
+});
+
+describe('the table filter', () => {
+  it('matches terms in any order, as the section browser does', () => {
+    // DataTable used one contiguous substring, so this failed in the clients
+    // list and the category grids while passing in SectionBrowser.
+    const row = { search: 'acme-fw-01 acme corp firewall sonicwall' };
+    expect(matchesBrowse(row, { text: 'acme firewall' })).toBe(true);
+    expect(matchesBrowse(row, { text: 'firewall acme' })).toBe(true);
+    expect(matchesBrowse(row, { text: 'acme router' })).toBe(false);
   });
 });

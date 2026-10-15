@@ -115,7 +115,7 @@ function sniFor(host: string | undefined): string | undefined {
  * Checking on a 'secureConnect' listener after the request was created would
  * race the request body.
  */
-function agentFor(target: UnifiTarget): Agent {
+function agentFor(target: UnifiTarget, handshakeTimeoutMs = 15_000): Agent {
   if (!target.pinnedSha256) {
     // The ordinary path: a controller with a certificate that chains to a CA
     // this host trusts, whether public or added through NODE_EXTRA_CA_CERTS.
@@ -148,6 +148,7 @@ function agentFor(target: UnifiTarget): Agent {
         rejectUnauthorized: false,
       },
       () => {
+        clearTimeout(handshake);
         const cert = socket.getPeerCertificate();
         const actual = cert?.fingerprint256 ? normaliseFingerprint(cert.fingerprint256) : null;
 
@@ -182,7 +183,27 @@ function agentFor(target: UnifiTarget): Agent {
       },
     );
 
-    socket.on('error', (error) => callback(error));
+    /*
+     * The request's own `timeout` only starts once this callback hands over a
+     * socket, which is after the handshake. A controller that accepts TCP and
+     * never completes TLS therefore hung the sync forever — holding its
+     * advisory lock, so polling stopped for every tenant on every replica.
+     */
+    const handshake = setTimeout(() => {
+      socket.destroy(
+        new UnifiError(
+          `no TLS handshake within ${handshakeTimeoutMs / 1000}s`,
+          'unreachable',
+          'Something accepted the connection but did not complete TLS. Check the ' +
+            'address and port point at the console itself.',
+        ),
+      );
+    }, handshakeTimeoutMs);
+
+    socket.on('error', (error) => {
+      clearTimeout(handshake);
+      callback(error);
+    });
   };
 
   return agent;
@@ -210,8 +231,8 @@ async function get<T>(target: UnifiTarget, path: string): Promise<T> {
     throw new UnifiError(`${target.controllerUrl} is not a URL`, 'malformed');
   }
 
-  const agent = agentFor(target);
   const timeoutMs = target.timeoutMs ?? 15_000;
+  const agent = agentFor(target, timeoutMs);
 
   return new Promise<T>((resolve, reject) => {
     const req = httpsRequest(
@@ -326,6 +347,14 @@ async function get<T>(target: UnifiTarget, path: string): Promise<T> {
       }
       reject(new UnifiError(`could not reach the controller: ${error.message}`, 'unreachable'));
     });
+
+    // An absolute bound as well. `timeout` above is an idle timer, and a
+    // controller (or something in front of it) that drips a byte every few
+    // seconds never trips it.
+    const deadline = setTimeout(() => {
+      req.destroy(new UnifiError(`no complete response within ${(timeoutMs * 2) / 1000}s`, 'unreachable'));
+    }, timeoutMs * 2);
+    req.on('close', () => clearTimeout(deadline));
 
     req.end();
   });
@@ -527,8 +556,8 @@ export async function registerWebhook(
     events: ['device.connected', 'device.disconnected', 'client.connected', 'client.disconnected', 'ids.alert'],
   });
 
-  const agent = agentFor(target);
   const timeoutMs = target.timeoutMs ?? 15_000;
+  const agent = agentFor(target, timeoutMs);
 
   return new Promise<WebhookRegistration>((resolve, reject) => {
     const req = httpsRequest(

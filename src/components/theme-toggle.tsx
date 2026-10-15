@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { cn } from '@/lib/ui/cn';
+import { THEME_STORAGE_KEY as STORAGE_KEY } from '@/lib/ui/theme';
 
 /**
  * Light, dark, or whatever the operating system says.
@@ -24,7 +25,6 @@ import { cn } from '@/lib/ui/cn';
  */
 type Choice = 'light' | 'dark' | 'system';
 
-const STORAGE_KEY = 'helm.theme';
 
 export function applyTheme(choice: Choice): void {
   const root = document.documentElement;
@@ -98,17 +98,3 @@ export function ThemeToggle() {
     </div>
   );
 }
-
-/**
- * Applied before first paint, in the document head.
- *
- * Without this the page renders light, then the effect above runs and flips it
- * to dark — a white flash on every navigation for anybody who chose dark, which
- * is exactly the thing dark mode is meant to avoid. It has to be a blocking
- * inline script for the same reason: anything deferred is already too late.
- *
- * Wrapped in try/catch because reading localStorage throws outright in some
- * privacy configurations, and a theme preference must never be the reason a
- * credential vault fails to render.
- */
-export const THEME_SCRIPT = `(function(){try{var t=localStorage.getItem('${STORAGE_KEY}');if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t)}}catch(e){}})();`;

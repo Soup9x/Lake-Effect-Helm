@@ -18,7 +18,8 @@
  */
 import { NextResponse } from 'next/server';
 import { publicRoute } from '@/lib/api/handler';
-import { receiveWebhook } from '@/lib/unifi/webhook';
+import { MAX_WEBHOOK_BODY_BYTES, receiveWebhook } from '@/lib/unifi/webhook';
+import { readTextBounded } from '@/lib/api/body';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -46,7 +47,15 @@ export const POST = publicRoute(async (request, requestId) => {
    * receiver that verifies a round-tripped body verifies something the sender
    * never signed.
    */
-  const rawBody = await request.text();
+  // Bounded while reading: this route is public, and request.text() would
+  // buffer any size of body before the receiver's own check could refuse it.
+  const rawBody = await readTextBounded(request, MAX_WEBHOOK_BODY_BYTES);
+  if (rawBody === null) {
+    return NextResponse.json(
+      { accepted: false, reason: 'body too large' },
+      { status: 413, headers: { 'x-request-id': requestId, 'cache-control': 'no-store' } },
+    );
+  }
 
   const outcome = await receiveWebhook(mappingId, rawBody, request.headers);
 

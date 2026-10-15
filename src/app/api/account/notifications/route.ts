@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
-import { ApiError } from '@/lib/api/errors';
+import { ApiError, zodIssues } from '@/lib/api/errors';
 import { NOTIFICATION_KINDS } from '@/lib/notifications/kinds';
 import { readMyNotificationKinds, writeMyNotificationKinds } from '@/lib/email/preferences';
 
@@ -41,7 +41,7 @@ export const PUT = tenantRoute(async ({ tx, request }) => {
     const result = schema.safeParse(raw);
     if (!result.success) {
       throw ApiError.invalid('a list of known notification kinds', {
-        issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+        issues: zodIssues(result.error),
       });
     }
     return result.data;
