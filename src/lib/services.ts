@@ -14,7 +14,7 @@
 import { BlindIndex } from './crypto/blind-index';
 import { DekCache } from './crypto/dek-cache';
 import { HelmCryptoError } from './crypto/errors';
-import { AwsKmsKekProvider, LocalDevKekProvider, type KekProvider, type WrapProvider } from './crypto/kek';
+import { LocalDevKekProvider, type KekProvider, type WrapProvider } from './crypto/kek';
 import { LocalMasterKekProvider } from './crypto/kek-local';
 import { VaultTransitKekProvider } from './crypto/kek-vault';
 import { DocumentService } from './documents/service';
@@ -164,16 +164,11 @@ export function getKekProvider(): KekProvider {
       return kekProvider;
     }
 
+    // Helm is on-premises: the master key lives in Vault transit or a key file
+    // on the host. The schema still recognises the cloud providers' names, and
+    // an AwsKmsKekProvider existed until it was removed as unreachable — this
+    // switch had always refused 'aws-kms' and nothing else constructed it.
     case 'aws-kms':
-      // The SDK is not a dependency of this package — see crypto/kek.ts. Wiring
-      // it is a deployment decision, made here rather than scattered through routes.
-      throw new HelmCryptoError(
-        'kek_unavailable',
-        'the AWS KMS provider needs @aws-sdk/client-kms wired in at the composition ' +
-          'root: setKekProvider(new AwsKmsKekProvider(new KMSClient({}), ' +
-          '{ GenerateDataKeyCommand, DecryptCommand }, process.env.HELM_KEK_ID!))',
-      );
-
     case 'gcp-kms':
     case 'azure-keyvault':
       throw new HelmCryptoError(
@@ -281,4 +276,4 @@ export function resetServices(): void {
   validator = null;
 }
 
-export { AwsKmsKekProvider, LocalMasterKekProvider, VaultTransitKekProvider };
+export { LocalMasterKekProvider, VaultTransitKekProvider };

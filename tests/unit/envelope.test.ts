@@ -12,7 +12,6 @@ import {
 } from '../../src/lib/crypto/envelope';
 import { HelmCryptoError } from '../../src/lib/crypto/errors';
 import {
-  AwsKmsKekProvider,
   LocalDevKekProvider,
   serialiseContext,
   tenantKeyContext,
@@ -237,73 +236,6 @@ describe('KEK wrapping', () => {
     const a: EncryptionContext = { b: '2', a: '1', c: '3' };
     const b: EncryptionContext = { c: '3', a: '1', b: '2' };
     expect(serialiseContext(a)).toEqual(serialiseContext(b));
-  });
-});
-
-describe('KMS provider', () => {
-  /** Minimal stand-in so the provider is testable without the AWS SDK. */
-  class FakeKms {
-    readonly calls: { type: string; input: Record<string, unknown> }[] = [];
-    constructor(private readonly dek = randomBytes(32)) {}
-    async send(command: unknown): Promise<unknown> {
-      const { type, input } = command as { type: string; input: Record<string, unknown> };
-      this.calls.push({ type, input });
-      if (type === 'generate') {
-        return {
-          Plaintext: this.dek,
-          CiphertextBlob: Buffer.concat([Buffer.from('wrapped:'), this.dek]),
-          KeyId: 'arn:aws:kms:us-east-2:1234:key/abcd-1234',
-        };
-      }
-      return { Plaintext: this.dek };
-    }
-  }
-
-  const commands = {
-    GenerateDataKeyCommand: class {
-      readonly type = 'generate';
-      constructor(readonly input: Record<string, unknown>) {}
-    },
-    DecryptCommand: class {
-      readonly type = 'decrypt';
-      constructor(readonly input: Record<string, unknown>) {}
-    },
-  } as never;
-
-  it('prefers the resolved key ARN over the configured alias', async () => {
-    // An alias moves during rotation; storing it would later name the wrong key.
-    const kms = new FakeKms();
-    const provider = new AwsKmsKekProvider(kms, commands, 'alias/helm-tenant-kek');
-    const { kekId } = await provider.generateDek(tenantKeyContext(TENANT, 1));
-    expect(kekId).toBe('arn:aws:kms:us-east-2:1234:key/abcd-1234');
-  });
-
-  it('passes the encryption context to KMS on both wrap and unwrap', async () => {
-    const kms = new FakeKms();
-    const provider = new AwsKmsKekProvider(kms, commands, 'alias/k');
-    const context = tenantKeyContext(TENANT, 1);
-    const { wrapped, kekId } = await provider.generateDek(context);
-    await provider.unwrapDek(wrapped, kekId, context);
-
-    expect(kms.calls).toHaveLength(2);
-    for (const call of kms.calls) {
-      expect(call.input.EncryptionContext).toEqual({
-        'helm:purpose': 'tenant-dek',
-        'helm:tenant': TENANT,
-        'helm:generation': '1',
-      });
-    }
-  });
-
-  it('surfaces a KMS outage as kek_unavailable, not a generic error', async () => {
-    const provider = new AwsKmsKekProvider(
-      { send: async () => Promise.reject(new Error('throttled')) },
-      commands,
-      'alias/k',
-    );
-    await expect(provider.generateDek(tenantKeyContext(TENANT, 1))).rejects.toMatchObject({
-      code: 'kek_unavailable',
-    });
   });
 });
 

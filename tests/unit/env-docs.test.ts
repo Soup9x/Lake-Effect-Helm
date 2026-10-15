@@ -52,6 +52,9 @@ const INDIRECT: Record<string, string> = {
   HELM_VAULT_TIMEOUT_MS: 'kek-vault.ts env.HELM_VAULT_TIMEOUT_MS',
   HELM_KEK_B64: 'kek-local.ts',
   HELM_KEK_FILE: 'kek-local.ts',
+  // Missing until the AWS KMS provider was removed: its error message contained
+  // the literal `process.env.HELM_KEK_ID`, which satisfied the scan by accident.
+  HELM_KEK_ID: 'kek-local.ts env.HELM_KEK_ID',
 };
 
 /** Read by a dependency or by the runtime, never by Helm's own code. */
