@@ -18,6 +18,8 @@ import { resetServices, setKekProvider } from '../../src/lib/services';
 import { getExportService } from '../../src/lib/exports/service';
 import { FilesystemExportStorage, setExportStorage } from '../../src/lib/exports/storage';
 import { isEncryptedBundle, unpackBundle } from '../../src/lib/exports/bundle';
+import { expireExportsJob } from '../../src/workers/exports';
+import type { JobLogger } from '../../src/workers/runtime';
 import {
   IDS, actor, buildHarness, connectPools, disconnectPools, resetDatabase, superuserSql,
 } from './harness';
@@ -564,18 +566,31 @@ describe('export engine', () => {
                  WHERE id = ${request.exportJobId}::uuid`;
       });
 
-      const expired = await withTenant(
-        exportWorker(),
-        async (tx) => tx<{ export_job_id: string; storage_key: string }[]>`
-          SELECT * FROM helm.expire_exports()
-        `,
-        { role: 'worker' },
-      );
+      // The REAL job, tenant discovery included. Calling helm.expire_exports()
+      // inside withTenant() — as this test used to — skips the job's own
+      // enumeration, which is the part that returned zero tenants under RLS and
+      // left every export unexpired until 0720.
+      const errors: string[] = [];
+      const log: JobLogger = {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: (message) => errors.push(message),
+        child: () => log,
+      };
+      const result = await expireExportsJob().run({ log, stopping: () => false });
 
-      expect(expired.map((r) => r.export_job_id)).toContain(request.exportJobId);
+      expect(errors).toEqual([]);
+      expect(result.counts?.expired).toBeGreaterThanOrEqual(1);
+
+      const [row] = await withTenant(ADMIN, async (tx) => {
+        return tx<{ status: string }[]>`
+          SELECT status FROM export_job WHERE id = ${request.exportJobId}::uuid
+        `;
+      });
+      expect(row?.status).toBe('expired');
 
       const storage = new FilesystemExportStorage(exportRoot);
-      await storage.remove(stored!.storage_key);
       await expect(storage.get(stored!.storage_key)).rejects.toThrow();
 
       await expect(getExportService().download(ADMIN, request.exportJobId)).rejects.toThrow(/expired/);

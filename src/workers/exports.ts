@@ -247,14 +247,13 @@ async function markFailed(job: ExportBacklogRow, message: string): Promise<void>
  * the file is now orphaned and needs a human.
  */
 async function expireExports(ctx: JobContext): Promise<JobResult> {
-  // Reuses the alert enumerator: it lists every active tenant, which is the
-  // same set this job needs, rather than adding a fourth near-identical one.
+  // Through a SECURITY DEFINER backlog, like every other job. A plain query
+  // here sees no tenant at all — `tenant` is behind RLS and the worker has no
+  // context yet — which is why this job never expired anything before 0720.
   const tenants = await db('worker')<{ tenant_id: string; worker_actor_id: string }[]>`
-    SELECT h.tenant_id, helm.worker_actor(h.tenant_id, 'system_export') AS worker_actor_id
-    FROM audit_chain_head h
-    JOIN tenant t ON t.id = h.tenant_id AND t.status = 'active'
-    WHERE helm.worker_actor(h.tenant_id, 'system_export') IS NOT NULL
+    SELECT tenant_id, worker_actor_id FROM helm.export_expiry_backlog(50)
   `;
+  if (tenants.length === 0) return { idle: true };
 
   const storage = getExportStorage();
   let expired = 0;
