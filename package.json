@@ -51,7 +51,7 @@
     "lucide-react": "^1.52.0",
     "next": "^16.3.8",
     "next-auth": "5.0.0-beta.32",
-    "nodemailer": "^8.0.11",
+    "nodemailer": "^10.1.1",
     "postgres": "^3.4.7",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -78,6 +78,12 @@
     ],
     "overrides": {
       "@esbuild-kit/core-utils>esbuild": "^0.25.0"
+    },
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "@auth/core>nodemailer": "10",
+        "next-auth>nodemailer": "10"
+      }
     }
   }
 }

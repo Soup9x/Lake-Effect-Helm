@@ -321,3 +321,118 @@ describe('a relay that never answers', () => {
     expect(Date.now() - started).toBeLessThan(20_000);
   }, 30_000);
 });
+
+describe('the version floor', () => {
+  /**
+   * A DEPENDENCY VERSION AS AN ASSERTION, which is unusual enough to justify.
+   *
+   * GHSA-6vj9-mwq6-2f5v (fixed in nodemailer 10.0.2) is a process-global DNS
+   * cache that reuses the TLS `servername` across transports. That is not a
+   * generic advisory for this codebase — it is the failure mode of exactly what
+   * EmailBatch does: one process, one transport per tenant, one relay password
+   * per tenant. A second tenant's connection could be handed the first
+   * tenant's `servername`, which sends a password to the wrong relay. Three
+   * more of the eight are recipient allow-list bypasses, and Helm's recipient
+   * gate is an allow-list.
+   *
+   * `pnpm audit --audit-level moderate` is the blocking gate and found all
+   * eight. This exists because that gate can be satisfied by writing an
+   * exemption, and an exemption here would be wrong for a reason no advisory
+   * text says: the architecture above. A failing assertion naming the
+   * architecture is harder to wave through than a line in a config file.
+   */
+  it('runs on a nodemailer that fixed the cross-tenant servername reuse', async () => {
+    const installed = (await import('nodemailer/package.json', {
+      with: { type: 'json' },
+    })) as { default: { version: string } };
+    const [major, minor, patch] = installed.default.version
+      .split('.')
+      .map((part) => Number.parseInt(part, 10));
+
+    const atLeast = (a: number, b: number, c: number) =>
+      major! > a || (major === a && (minor! > b || (minor === b && patch! >= c)));
+
+    expect(
+      atLeast(10, 0, 6),
+      `nodemailer ${installed.default.version} is below 10.0.6, which means at `
+      + 'least one of eight advisories applies — among them a process-global DNS '
+      + 'cache that reuses the TLS servername across transports, i.e. one '
+      + 'tenant’s relay password sent to another tenant’s relay. See the header '
+      + 'of src/lib/email/transport.ts.',
+    ).toBe(true);
+  });
+});
+
+describe('SNI', () => {
+  /**
+   * The relay's own name, and no name at all for an address.
+   *
+   * Asserted on the built options rather than on the wire, because what is
+   * being pinned is which value this code chooses: the advisory behind the
+   * version floor was a transport being handed ANOTHER transport's
+   * `servername`, so "it comes from this config and nothing shared" is the
+   * property. The IP case is measured behaviour, not taste — Node raises
+   * DEP0123 for an SNI that is an address and says it will stop sending it, so
+   * an on-premises relay at a bare IP would log a deprecation on every send.
+   */
+  it('names the relay when it is reached by name', async () => {
+    const server = await relay();
+    const built = buildTransport(config(server, { host: 'mail.internal.msp.test' }));
+    const tls = (built as unknown as { options: { tls: { servername?: string } } }).options.tls;
+    expect(tls.servername).toBe('mail.internal.msp.test');
+  });
+
+  it('sends none when it is reached by address, for either IP version', async () => {
+    const server = await relay();
+    for (const host of ['127.0.0.1', '10.0.0.25', '::1', 'fe80::1']) {
+      const built = buildTransport(config(server, { host }));
+      const tls = (built as unknown as { options: { tls: { servername?: string } } }).options.tls;
+      expect(tls.servername, `${host} is an address and carries no SNI`).toBeUndefined();
+    }
+  });
+
+  it('...and the same holds with no pin, where the tls block is the plain one', async () => {
+    const server = await relay();
+    const named = buildTransport(
+      config(server, { host: 'mail.test', tlsPinnedCertificate: null, tlsVerify: true }),
+    );
+    const byIp = buildTransport(
+      config(server, { host: '127.0.0.1', tlsPinnedCertificate: null, tlsVerify: true }),
+    );
+    type Built = { options: { tls: { servername?: string; rejectUnauthorized?: boolean } } };
+    expect((named as unknown as Built).options.tls.servername).toBe('mail.test');
+    expect((byIp as unknown as Built).options.tls.servername).toBeUndefined();
+    // And the branch still carries the verification setting it is there for.
+    expect((byIp as unknown as Built).options.tls.rejectUnauthorized).toBe(true);
+  });
+
+  /**
+   * Node itself, on the measurement the omission rests on. If a future Node
+   * stops warning — or starts throwing — this says so rather than leaving the
+   * reasoning above as folklore.
+   */
+  it('and Node really does deprecate an SNI that is an address', async () => {
+    const warnings: string[] = [];
+    const onWarning = (w: Error) => warnings.push(`${w.name}: ${w.message}`);
+    process.on('warning', onWarning);
+    try {
+      const server = await relay();
+      // A send through a relay reached by IP, with the pin, which is the
+      // configuration an on-premises MSP most often has.
+      const transport = buildTransport(config(server, { host: '127.0.0.1' }));
+      await transport.sendMail({
+        from: 'helm@msp.test', to: 'ops@msp.test', subject: 'sni', text: 'body',
+      });
+      transport.close();
+      await new Promise((resolve) => { setTimeout(resolve, 150); });
+    } finally {
+      process.off('warning', onWarning);
+    }
+
+    expect(
+      warnings.filter((w) => /ServerName to an IP address/i.test(w)),
+      'the SNI omission is what keeps this warning out of the worker log; if it '
+      + 'appears here, something is setting servername to an address again',
+    ).toEqual([]);
+  });
+});

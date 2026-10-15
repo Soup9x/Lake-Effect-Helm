@@ -14,6 +14,30 @@
  * silently, and 0400's bargain was that detection replaces prevention — a
  * channel that drops messages is the control being gone.
  *
+ * NODEMAILER 10 IS A FLOOR, NOT A PREFERENCE, and a downgrade reintroduces a
+ * cross-tenant disclosure in exactly this file's design. GHSA-6vj9-mwq6-2f5v
+ * (fixed in 10.0.2) is a PROCESS-GLOBAL DNS cache that reuses the TLS
+ * `servername` across transports: one process, one transport per tenant, one
+ * relay password per tenant — which is precisely what EmailBatch does — and a
+ * second tenant's connection could be handed the first tenant's `servername`,
+ * so a password goes to the wrong relay. Three more (GHSA-cc9r-2j5m-2m83,
+ * GHSA-wmmp-3585-3rmp, GHSA-8m3c-c648-2xjj) are recipient allow-list bypasses,
+ * and Helm's recipient gate is an allow-list. `>=10.0.6` clears all eight;
+ * package.json asks for ^10.1.1 and the audit job is blocking.
+ *
+ * `@types/nodemailer` only goes to 8.x and nodemailer ships no types of its
+ * own, so the declarations describe a major this code does not run on. The
+ * surface used here — createTransport, SMTPTransport.Options, sendMail, close —
+ * is unchanged across both, and the tests are what actually establish it: they
+ * speak to a real SMTP server over a real STARTTLS handshake rather than to a
+ * mock, so a behavioural change would fail them whatever the .d.ts believes.
+ *
+ * next-auth and @auth/core declare `nodemailer@^7 || ^8` as an OPTIONAL peer.
+ * The exemption in package.json's peerDependencyRules is deliberate: that peer
+ * is about their own Email provider, which Helm never instantiates —
+ * `src/app/api/auth/oidc/route.ts` lists 'nodemailer' only as a reserved
+ * provider slug.
+ *
  * THE RELAY'S PASSWORD NEVER PASSES THROUGH helm_app. 0690 grants the six
  * envelope columns to helm_worker alone, per column, and the only way to them
  * is helm.smtp_transport(). The plaintext exists for the length of one
@@ -60,6 +84,7 @@ import { createTransport, type Transporter } from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 import type { PeerCertificate } from 'node:tls';
 import { X509Certificate } from 'node:crypto';
+import { isIP } from 'node:net';
 
 export type SmtpSecurity = 'starttls' | 'tls' | 'plaintext';
 
@@ -111,6 +136,31 @@ export function fingerprintOfPem(pem: string): string {
   return new X509Certificate(pem).fingerprint256.replace(/:/g, '').toLowerCase();
 }
 
+/**
+ * The SNI name for this relay, or nothing when it is reached by address.
+ *
+ * STATED PER TRANSPORT rather than left to be resolved, because that is the
+ * axis GHSA-6vj9-mwq6-2f5v failed on: a process-global cache reused one
+ * transport's `servername` for another's. 10.0.2 fixed it and the version
+ * floor holds it; this makes the binding independent of anything shared,
+ * because the value comes from this tenant's own row and nowhere else. For a
+ * single-certificate relay it changes nothing; for one serving several by SNI
+ * it is the difference between the right certificate and whichever was asked
+ * for last.
+ *
+ * OMITTED FOR AN IP ADDRESS, which is not a style preference — measured: Node
+ * raises DEP0123 ("Setting the TLS ServerName to an IP address is not
+ * permitted by RFC 6066. This will be ignored in a future version") and sends
+ * it anyway for now. An on-premises MSP pointing Helm at 10.0.0.25 is an
+ * ordinary configuration, so an unconditional servername means a deprecation
+ * warning in the worker log on every send, about something nobody configured
+ * wrongly. RFC 6066 says SNI carries names, so a host that is an address
+ * simply has none to send.
+ */
+function sni(host: string): { servername?: string } {
+  return isIP(host) === 0 ? { servername: host } : {};
+}
+
 export function buildTransport(config: RelayConfig, timeoutMs = 20_000): Transporter {
   if (config.security === 'plaintext' && config.tlsPinnedCertificate) {
     // Not a refusal the database can express, and worth saying rather than
@@ -140,8 +190,9 @@ export function buildTransport(config: RelayConfig, timeoutMs = 20_000): Transpo
         ca: [config.tlsPinnedCertificate],
         rejectUnauthorized: true,
         checkServerIdentity: () => undefined,
+        ...sni(config.host),
       }
-    : { rejectUnauthorized: config.tlsVerify };
+    : { rejectUnauthorized: config.tlsVerify, ...sni(config.host) };
 
   /*
    * Typed as SMTPTransport.Options explicitly. createTransport is overloaded
