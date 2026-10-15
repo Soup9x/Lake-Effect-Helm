@@ -28,6 +28,9 @@ import type { Job, JobContext, JobResult } from './runtime';
 import { describeError } from './runtime';
 import { formatPayload, type NotificationEvent, type WebhookFormat } from '../lib/notifications/format';
 import { isDeliverable, openWebhook, type SealedColumns } from '../lib/notifications/config';
+import { EmailBatch } from '../lib/email/sender';
+import { notificationBody } from '../lib/email/render';
+import { describeTransportError } from '../lib/email/transport';
 
 interface BacklogRow {
   tenant_id: string;
@@ -41,6 +44,9 @@ interface ClaimRow extends SealedColumns {
   endpoint_id: string;
   endpoint_name: string;
   format: WebhookFormat;
+  /** 0690. 'email' takes the SMTP path below instead of a POST. */
+  transport: 'webhook' | 'email';
+  email_address: string | null;
   event_type: string;
   subject: string;
   payload: Record<string, unknown>;
@@ -165,40 +171,58 @@ async function deliverNotifications(ctx: JobContext): Promise<JobResult> {
       { role: 'worker' },
     );
 
-    for (const delivery of due) {
-      if (ctx.stopping()) break;
+    /*
+     * One mail connection per tenant, opened only if this batch actually holds
+     * an email destination and closed in the finally below. A tenant whose
+     * destinations are all webhooks never opens a socket to the relay, and a
+     * tenant with twenty email deliveries opens one — not twenty, which is how
+     * a relay's rate limiter decides Helm is a spam source.
+     */
+    let mail: EmailBatch | null = null;
 
-      const outcome = await deliverOne(tenant, delivery, log);
-      if (outcome.ok) sent += 1;
-      else failed += 1;
+    try {
+      for (const delivery of due) {
+        if (ctx.stopping()) break;
 
-      // Recorded in its own transaction, deliberately. Batching a tenant's
-      // results would mean a crash after twenty successful POSTs rolls back the
-      // record that they happened — and the next run sends them again.
-      const status = await withTenant(
-        actor,
-        async (tx) => {
-          const [row] = await tx<{ record_notification_delivery: string }[]>`
-            SELECT helm.record_notification_delivery(
-              ${delivery.delivery_id}::uuid, ${outcome.ok},
-              ${outcome.responseCode}, ${outcome.error ?? null})
-          `;
-          return row?.record_notification_delivery ?? 'unknown';
-        },
-        { role: 'worker' },
-      );
+        if (delivery.transport === 'email' && mail === null) {
+          mail = await EmailBatch.open(actor);
+        }
 
-      if (status === 'dead') {
-        dead += 1;
-        // Worth a log line of its own. A dead delivery is not retried, so this
-        // is the last time anything says the notification did not arrive.
-        log.warn('notification gave up', {
-          destination: delivery.endpoint_name,
-          event: delivery.event_type,
-          attempts: delivery.attempts + 1,
-          ...(outcome.error ? { error: outcome.error } : {}),
-        });
+        const outcome = await deliverOne(tenant, delivery, log, mail);
+        if (outcome.ok) sent += 1;
+        else failed += 1;
+
+        // Recorded in its own transaction, deliberately. Batching a tenant's
+        // results would mean a crash after twenty successful sends rolls back
+        // the record that they happened — and the next run sends them again.
+        const status = await withTenant(
+          actor,
+          async (tx) => {
+            const [row] = await tx<{ record_notification_delivery: string }[]>`
+              SELECT helm.record_notification_delivery(
+                ${delivery.delivery_id}::uuid, ${outcome.ok},
+                ${outcome.responseCode}, ${outcome.error ?? null})
+            `;
+            return row?.record_notification_delivery ?? 'unknown';
+          },
+          { role: 'worker' },
+        );
+
+        if (status === 'dead') {
+          dead += 1;
+          // Worth a log line of its own. A dead delivery is not retried, so
+          // this is the last time anything says the notification did not
+          // arrive.
+          log.warn('notification gave up', {
+            destination: delivery.endpoint_name,
+            event: delivery.event_type,
+            attempts: delivery.attempts + 1,
+            ...(outcome.error ? { error: outcome.error } : {}),
+          });
+        }
       }
+    } finally {
+      mail?.close();
     }
   }
 
@@ -215,7 +239,54 @@ async function deliverOne(
   tenant: BacklogRow,
   delivery: ClaimRow,
   log: JobContext['log'],
+  mail: EmailBatch | null,
 ): Promise<Outcome> {
+  /*
+   * EMAIL TAKES THE SAME QUEUE AND A DIFFERENT WIRE. The payload was already
+   * filtered by helm.notification_payload()'s allow-list and the subject built
+   * by helm.notification_subject(), so this renders exactly what the other four
+   * formats render — §2's rule that formatting differs between platforms and
+   * facts do not.
+   *
+   * No envelope to open: an email destination has no URL and no signing secret,
+   * and the relay's own password is read once per batch by EmailBatch.
+   */
+  if (delivery.transport === 'email') {
+    if (!delivery.email_address) {
+      // The transport CHECK makes this unreachable; reported rather than
+      // crashing the batch if a row ever gets there another way.
+      return { ok: false, responseCode: null, error: 'an email destination with no address' };
+    }
+    if (!mail) {
+      return {
+        ok: false,
+        responseCode: null,
+        error: 'outbound email is not configured for this tenant',
+      };
+    }
+    try {
+      await mail.send({
+        to: delivery.email_address,
+        subject: delivery.subject,
+        text: notificationBody({
+          subject: delivery.subject,
+          eventType: delivery.event_type,
+          organizationName: delivery.organization_name,
+          occurredAt: delivery.occurred_at,
+          payload: delivery.payload,
+        }),
+      });
+      return { ok: true, responseCode: null };
+    } catch (error) {
+      const described = describeTransportError(error);
+      log.warn('a notification could not be emailed', {
+        destination: delivery.endpoint_name,
+        reason: described.reason,
+      });
+      return { ok: false, responseCode: null, error: described.message };
+    }
+  }
+
   let url: string;
   let signingSecret: string | undefined;
 

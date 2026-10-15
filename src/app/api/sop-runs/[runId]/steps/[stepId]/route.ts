@@ -130,6 +130,30 @@ export const PATCH = tenantRoute(
     `;
     if (!updated) throw ApiError.notFound('no such step on that run');
 
+    /*
+     * 0690's reminders, on both edges of this one UPDATE.
+     *
+     * BEING GIVEN WORK IS AN ACT, NOT A STATE, so it is raised here rather
+     * than swept for: an hourly sweep cannot tell a step assigned yesterday
+     * from one assigned a moment ago, and a step with no due date would
+     * otherwise never produce anything at all. The function is a no-op when
+     * mail is off, when the person has turned that kind off, and when somebody
+     * assigns a step to themselves.
+     *
+     * FINISHING IT STOPS THE REMINDERS, and suppressing rather than deleting
+     * is what keeps the unique key doing its job — a deleted row would let the
+     * next sweep raise the same reminder again for a step that is already done.
+     *
+     * Both are inside this transaction, so a reminder is never queued for an
+     * assignment that rolled back.
+     */
+    if (body.assignedTo) {
+      await tx`SELECT helm.raise_assignment_reminder(${updated.id}::uuid)`;
+    }
+    if (body.status !== undefined && body.status !== 'pending') {
+      await tx`SELECT helm.suppress_reminders_for_step(${updated.id}::uuid)`;
+    }
+
     return { stepId: updated.id, status: updated.status };
   },
   { permissions: ['sop:execute'] },

@@ -157,7 +157,7 @@ export const POST = tenantRoute(
      * which is K's territory.
      */
     for (const step of steps) {
-      await tx`
+      const [inserted] = await tx<{ id: string }[]>`
         INSERT INTO sop_run_step (
           tenant_id, run_id, position, title, body, kind, status, assigned_to, due_at
         )
@@ -166,7 +166,26 @@ export const POST = tenantRoute(
           ${step.title}, ${step.body}, 'manual', 'pending',
           ${body.assignedTo ?? null}::uuid, ${body.dueAt ?? null}::timestamptz
         )
+        RETURNING id
       `;
+
+      /*
+       * 0690's "you have been given this" reminder, raised per step.
+       *
+       * PER STEP RATHER THAN PER RUN, which is a real choice: starting a run
+       * with an assignee hands that person every step, and the thing they act
+       * on is a step. A single run-level message would then have to list them,
+       * and the due-date reminders are per step anyway — so one shape for both
+       * beats two.
+       *
+       * A no-op when mail is off for the tenant, when the person has turned
+       * that kind off, and when somebody started the run for themselves, which
+       * is the common case and must not produce three emails to the person who
+       * just pressed the button.
+       */
+      if (inserted && body.assignedTo) {
+        await tx`SELECT helm.raise_assignment_reminder(${inserted.id}::uuid)`;
+      }
     }
 
     return {

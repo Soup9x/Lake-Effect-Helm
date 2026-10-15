@@ -732,6 +732,58 @@ $$;
 -- -----------------------------------------------------------------------------
 -- Draining the queue. Same shape as helm.claim_notifications().
 -- -----------------------------------------------------------------------------
+-- -----------------------------------------------------------------------------
+-- The notification queue, taught about the second transport.
+--
+-- Reissued whole because an applied migration is immutable; the only changes
+-- are `transport` and `email_address` in the RETURNS TABLE and the SELECT, so
+-- the delivery worker can tell a webhook row from an email row without a
+-- second query per delivery. Everything else is 0420's, verbatim.
+--
+-- DROPPED FIRST, because CREATE OR REPLACE cannot change a function's OUT
+-- parameters — "Row type defined by OUT parameters is different" — and two
+-- added columns do exactly that. The drop and the create are in one migration,
+-- so there is no window where the worker's function is missing.
+-- -----------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS helm.claim_notifications(integer);
+
+CREATE OR REPLACE FUNCTION helm.claim_notifications(p_limit integer DEFAULT 50)
+  RETURNS TABLE (
+    delivery_id uuid, endpoint_id uuid, endpoint_name text, format webhook_format,
+    transport notification_transport, email_address text,
+    event_type text, subject text, payload jsonb, occurred_at timestamptz,
+    organization_name text, attempts smallint, max_attempts smallint,
+    timeout_ms integer, custom_headers jsonb,
+    wrap_provider text, kek_id text, wrapped_dek bytea,
+    secret_ciphertext bytea, secret_nonce bytea, secret_tag bytea, secret_aad text
+  )
+  LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = public, helm, extensions, pg_catalog, pg_temp
+AS $$
+  SELECT d.id, e.id, e.name, e.format,
+         e.transport, e.email_address::text,
+         d.event_type, d.subject, d.payload, d.occurred_at,
+         o.name, d.attempts, e.max_attempts, e.timeout_ms, e.custom_headers,
+         e.wrap_provider, e.kek_id, e.wrapped_dek,
+         e.secret_ciphertext, e.secret_nonce, e.secret_tag, e.secret_aad
+  FROM webhook_delivery d
+  JOIN webhook_endpoint e ON e.id = d.endpoint_id AND e.tenant_id = d.tenant_id
+  LEFT JOIN organization o ON o.id = d.organization_id AND o.tenant_id = d.tenant_id
+  WHERE d.tenant_id = helm.require_tenant_id()
+    AND d.status = 'pending'
+    AND d.next_attempt_at <= now()
+    -- An email destination with no relay configured is not deliverable, and
+    -- claiming it would mean failing it once a minute forever. Left pending so
+    -- it goes out when somebody sets the relay up.
+    AND (e.transport <> 'email' OR EXISTS (
+      SELECT 1 FROM smtp_setting s WHERE s.tenant_id = d.tenant_id AND s.enabled
+    ))
+  ORDER BY d.occurred_at
+  LIMIT greatest(p_limit, 1);
+$$;
+
+GRANT EXECUTE ON FUNCTION helm.claim_notifications(integer) TO helm_worker;
+
 CREATE OR REPLACE FUNCTION helm.email_backlog(p_limit integer DEFAULT 25)
   RETURNS TABLE (tenant_id uuid, tenant_name text, worker_actor_id uuid, due bigint)
   LANGUAGE sql STABLE SECURITY DEFINER

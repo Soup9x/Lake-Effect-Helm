@@ -130,7 +130,17 @@ const request = (method: string) => (url: string, payload?: unknown) =>
   }));
 const withParams = (params: Record<string, string>) => ({ params: Promise.resolve(params) });
 
-/** The fixture's published procedure, started and assigned. */
+/**
+ * The fixture's published procedure, started and assigned.
+ *
+ * DEFAULTS TO SELF-ASSIGNMENT, which is deliberate and is not a dodge.
+ * Starting a run for somebody else raises an "assigned to you" reminder per
+ * step straight away — that is the product behaviour and it has its own tests
+ * below. The due-date tests are about the SWEEP, and mixing six messages of
+ * two kinds into every assertion would hide which one broke. Assigning to the
+ * person pressing the button exercises a real rule ("nobody needs an email
+ * saying they gave themselves a job") and leaves the due path alone.
+ */
 async function startAssignedRun(options: {
   assignTo?: string; dueInDays?: number;
 } = {}): Promise<{ runId: string; steps: { id: string; position: number }[] }> {
@@ -142,7 +152,7 @@ async function startAssignedRun(options: {
   const response = await startRun(request('POST')('/api/sop-runs', {
     sopId: IDS.sopOffboard,
     organizationId: IDS.orgAcme,
-    assignedTo: options.assignTo ?? IDS.tech1,
+    assignedTo: options.assignTo ?? IDS.admin1,
     ...(due ? { dueAt: due } : {}),
   }));
   const payload = await response.json() as { runId?: string; error?: unknown };
@@ -236,7 +246,7 @@ describe('a step that is due', () => {
 
     const mail = theRelay().received.find((m) => subjectOf(m).includes('Disable the account'))!;
     expect(mail, 'no reminder named the first step').toBeTruthy();
-    expect(mail.to).toEqual(['tech1@northwind.test']);
+    expect(mail.to).toEqual(['admin@northwind.test']);
     expect(mail.from).toBe('helm@northwind.test');
     expect(mail.encrypted, 'a reminder was sent over an unencrypted connection').toBe(true);
   });
@@ -358,7 +368,7 @@ describe('what the person chose', () => {
     await configureRelay();
     await su((sql) => sql`
       INSERT INTO user_notification_preference (tenant_id, user_id, kinds)
-      VALUES (${IDS.tenant1}::uuid, ${IDS.tech1}::uuid, '["task_assigned"]'::jsonb)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.admin1}::uuid, '["task_assigned"]'::jsonb)
     `);
     await startAssignedRun({ dueInDays: 1 });
 
@@ -371,7 +381,7 @@ describe('what the person chose', () => {
     await configureRelay();
     await su((sql) => sql`
       INSERT INTO user_notification_preference (tenant_id, user_id, kinds)
-      VALUES (${IDS.tenant1}::uuid, ${IDS.tech1}::uuid, '[]'::jsonb)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.admin1}::uuid, '[]'::jsonb)
     `);
     await startAssignedRun({ dueInDays: 1 });
     expect((await raise()).counts?.raised).toBe(0);
@@ -419,14 +429,14 @@ describe('a step that stops needing a reminder', () => {
     await startAssignedRun({ dueInDays: 1 });
     await su((sql) => sql`
       UPDATE membership SET status = 'suspended'
-      WHERE tenant_id = ${IDS.tenant1}::uuid AND user_id = ${IDS.tech1}::uuid
+      WHERE tenant_id = ${IDS.tenant1}::uuid AND user_id = ${IDS.admin1}::uuid
     `);
     try {
       expect((await raise()).counts?.raised).toBe(0);
     } finally {
       await su((sql) => sql`
         UPDATE membership SET status = 'active'
-        WHERE tenant_id = ${IDS.tenant1}::uuid AND user_id = ${IDS.tech1}::uuid
+        WHERE tenant_id = ${IDS.tenant1}::uuid AND user_id = ${IDS.admin1}::uuid
       `);
     }
   });
@@ -597,5 +607,88 @@ describe('the worker"s own boundaries', () => {
       { role: 'worker' },
     );
     expect(theirs).toHaveLength(0);
+  });
+});
+
+describe('being given a step', () => {
+  it('sends one message per step when somebody else assigns it', async () => {
+    /*
+     * BEING GIVEN WORK IS AN ACT, so this is raised by the route at the moment
+     * of assignment rather than swept for — an hourly sweep cannot tell a step
+     * assigned yesterday from one assigned a moment ago, and a step with no due
+     * date would otherwise never produce anything.
+     *
+     * Per step rather than per run: the thing somebody acts on is a step, and
+     * the due reminders are per step anyway.
+     */
+    await configureRelay();
+    await startAssignedRun({ assignTo: IDS.tech1 });
+
+    const rows = await su((sql) => sql<{ kind: string; status: string; lead_day: number }[]>`
+      SELECT kind, status, lead_day FROM task_reminder
+    `);
+    expect(rows).toHaveLength(STEPS_PER_RUN);
+    expect(rows.every((r) => r.kind === 'assigned' && Number(r.lead_day) === -1)).toBe(true);
+
+    await deliver();
+    expect(theRelay().received).toHaveLength(STEPS_PER_RUN);
+    const mail = theRelay().received[0]!;
+    expect(mail.to).toEqual(['tech1@northwind.test']);
+    expect(subjectOf(mail)).toContain('Assigned to you');
+  });
+
+  it('sends nothing when somebody assigns a step to themselves', async () => {
+    // The common case, and three emails to the person who just pressed the
+    // button would be the fastest way to have this feature switched off.
+    await configureRelay();
+    await startAssignedRun({ assignTo: IDS.admin1 });
+
+    expect(await su((sql) => sql`SELECT 1 FROM task_reminder`)).toEqual([]);
+    await deliver();
+    expect(theRelay().received).toHaveLength(0);
+  });
+
+  it('sends nothing when the person turned that kind off', async () => {
+    await configureRelay();
+    await su((sql) => sql`
+      INSERT INTO user_notification_preference (tenant_id, user_id, kinds)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.tech1}::uuid, '["task_due"]'::jsonb)
+    `);
+    await startAssignedRun({ assignTo: IDS.tech1 });
+    expect(await su((sql) => sql`SELECT 1 FROM task_reminder`)).toEqual([]);
+  });
+
+  it('sends nothing when mail is not configured', async () => {
+    // The route calls the same function whether or not a relay exists, so the
+    // no-op has to be inside it rather than at the call site.
+    await startAssignedRun({ assignTo: IDS.tech1 });
+    expect(await su((sql) => sql`SELECT 1 FROM task_reminder`)).toEqual([]);
+  });
+
+  it('does not send a second message when the step is reassigned back', async () => {
+    // The unique key is (step, kind, lead_day) with lead -1 for an assignment,
+    // so a step passed back and forth produces one message per person at most
+    // once — not one per change of mind.
+    await configureRelay();
+    const { runId, steps } = await startAssignedRun({ assignTo: IDS.tech1 });
+    await deliver();
+    expect(theRelay().received).toHaveLength(STEPS_PER_RUN);
+
+    currentUser = USERS.admin;
+    for (const assignee of [IDS.admin1, IDS.tech1]) {
+      const response = await patchStep(
+        request('PATCH')(`/api/sop-runs/${runId}/steps/${steps[0]!.id}`, {
+          assignedTo: assignee,
+        }),
+        withParams({ runId, stepId: steps[0]!.id }),
+      );
+      expect(response.status, await response.text()).toBe(200);
+    }
+
+    await deliver();
+    expect(
+      theRelay().received,
+      'reassigning a step produced another message about it',
+    ).toHaveLength(STEPS_PER_RUN);
   });
 });
