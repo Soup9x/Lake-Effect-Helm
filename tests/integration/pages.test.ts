@@ -57,7 +57,9 @@ import {
 } from './harness';
 import { clientComponentNames, describeViolations, findBoundaryViolations } from '../support/rsc-boundary';
 import { datesDisagree, type ExternalCheckState } from '../../src/components/external-check-note';
-import { NOTIFICATION_KINDS } from '../../src/lib/notifications/kinds';
+import { DEFAULT_NOTIFICATION_KINDS } from '../../src/lib/notifications/kinds';
+import { importantContacts } from '../../src/lib/contacts/important';
+import type { ImportantContact } from '../../src/components/client-widgets';
 import { FakeSmtp } from '../support/fake-smtp';
 
 /**
@@ -414,6 +416,18 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
   {
     name: 'the account page',
     load: async () => (await import('../../src/app/(app)/account/page')).default(),
+  },
+  {
+    // 0700's two landing pages. Worth running here specifically because each
+    // collects reads that belonged to other pages — the task list, the inbox,
+    // the expiry view, the coverage floor — and a landing page that 500s takes
+    // a whole scope's tab with it.
+    name: 'personal',
+    load: async () => (await import('../../src/app/(app)/personal/page')).default(),
+  },
+  {
+    name: 'global',
+    load: async () => (await import('../../src/app/(app)/global/page')).default(),
   },
   {
     name: 'the per-category grid',
@@ -1210,9 +1224,10 @@ describe('the mail relay on the settings page, and the toggles on the account pa
     const initial = card!.initial as {
       kinds: string[]; configured: boolean; emailConfigured: boolean;
     };
-    // Both on by default, and `configured` false — the distinction the card
-    // needs in order not to read an unticked pair as a decision.
-    expect(initial.kinds).toEqual([...NOTIFICATION_KINDS]);
+    // The two task kinds on by default and the four oversight ones off (0700),
+    // with `configured` false — the distinction the card needs in order not to
+    // read an unticked set as a decision.
+    expect(initial.kinds).toEqual([...DEFAULT_NOTIFICATION_KINDS]);
     expect(initial.configured).toBe(false);
     expect(initial.emailConfigured).toBe(false);
   });
@@ -1233,5 +1248,91 @@ describe('the mail relay on the settings page, and the toggles on the account pa
     };
     expect(initial.kinds).toEqual([]);
     expect(initial.configured, 'an empty array is a decision somebody made').toBe(true);
+  });
+});
+
+describe('who to call, on the client page', () => {
+  /**
+   * The unit test covers the RANK. This covers the thing it cannot see: that
+   * the page reads the three flags the ranker needs. `is_technical`,
+   * `is_billing` and `is_authorised` were not in the client page's SELECT until
+   * group L, so a widget ranking them would have received `undefined` for every
+   * one and silently ranked nobody — which looks exactly like "no flags set".
+   *
+   * THE CONTACTS ARE CREATED HERE. The integration fixture documents none for
+   * Acme, which the first version of this block assumed it did; a test that
+   * passes because the empty state rendered is not a test of the widget.
+   */
+  const clientPage = async () =>
+    (await import('../../src/app/(app)/organizations/[organizationId]/page')).default({
+      params: p({ organizationId: IDS.orgAcme }),
+    });
+
+  async function seedContacts() {
+    const sql = superuserSql();
+    try {
+      await sql`
+        INSERT INTO contact (tenant_id, organization_id, first_name, last_name,
+                             title, email, phone,
+                             is_primary, is_technical, is_billing,
+                             is_emergency, is_authorised)
+        VALUES
+          (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'zz Pat', 'Primary',
+           'Office Manager', 'pat@acme.test', '+1 555 0100',
+           true, false, false, false, false),
+          (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'zz Erin', 'Emergency',
+           'Operations Lead', 'erin@acme.test', '+1 555 0199',
+           false, false, false, true, false),
+          (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'zz Bill', 'Billing',
+           'Accounts', 'bill@acme.test', '+1 555 0150',
+           false, false, true, false, false)
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  }
+
+  afterEach(async () => {
+    const sql = superuserSql();
+    try {
+      await sql`DELETE FROM contact WHERE first_name LIKE 'zz %'`;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('hands the widget every flag the ranker reads', async () => {
+    await seedContacts();
+    const card = propsOf(await clientPage(), 'ImportantContactsWidget');
+    expect(card, 'the client page should render an ImportantContactsWidget').toBeTruthy();
+
+    const contacts = card!.contacts as Record<string, unknown>[];
+    expect(contacts.length).toBeGreaterThanOrEqual(3);
+    for (const contact of contacts) {
+      // Boolean, not merely present: `undefined` is falsy, so a column missing
+      // from the page's SELECT would rank nobody and read as "no flags set".
+      for (const flag of ['isPrimary', 'isTechnical', 'isBilling', 'isEmergency',
+        'isAuthorised']) {
+        expect(typeof contact[flag], `${flag} did not reach the widget as a boolean`)
+          .toBe('boolean');
+      }
+      expect(typeof contact.name).toBe('string');
+    }
+    expect(card!.totalContacts).toBe(contacts.length);
+  });
+
+  it('ranks the emergency contact first and leaves billing out, end to end', async () => {
+    await seedContacts();
+    const card = propsOf(await clientPage(), 'ImportantContactsWidget');
+    const contacts = card!.contacts as ImportantContact[];
+
+    const ranked = importantContacts(contacts);
+    expect(ranked[0]!.contact.name).toBe('zz Erin Emergency');
+    expect(ranked[0]!.reason).toBe('emergency');
+    expect(ranked.map((r) => r.contact.name)).toContain('zz Pat Primary');
+    expect(
+      ranked.map((r) => r.contact.name),
+      'an accounts contact is not who you call when a server is down',
+    ).not.toContain('zz Bill Billing');
   });
 });

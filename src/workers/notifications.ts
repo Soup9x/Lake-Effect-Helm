@@ -104,18 +104,28 @@ interface TenantRow {
 }
 
 async function fanOutNotifications(ctx: JobContext): Promise<JobResult> {
+  /*
+   * THROUGH A DEFINER FUNCTION, and this was a bug for as long as it was not.
+   * The raw `SELECT ... FROM tenant` that used to be here ran on the bare
+   * worker pool, and `tenant` is behind RLS keyed on helm.current_tenant_id()
+   * — which a worker connection does not set. It returned ZERO ROWS on every
+   * tick, so this job never fanned anything out; 0400 traded two-person export
+   * approval for these notifications, so the control was not running.
+   *
+   * Nothing caught it because every test calls helm.fan_out_notifications()
+   * inside withTenant(), which is the right way to test the function and skips
+   * the enumeration. The deliver half beside this one always used
+   * helm.notification_backlog() — a definer function — which is why only the
+   * fan-out was affected. See 0700's header for the whole account.
+   */
   const tenants = await db('worker')<TenantRow[]>`
-    SELECT t.id AS tenant_id, t.name AS tenant_name,
-           helm.worker_actor(t.id, 'system_alerts') AS worker_actor_id
-    FROM tenant t
-    WHERE t.status = 'active'
-      AND helm.worker_actor(t.id, 'system_alerts') IS NOT NULL
-      AND EXISTS (SELECT 1 FROM webhook_endpoint e WHERE e.tenant_id = t.id AND e.is_active)
+    SELECT * FROM helm.notification_fanout_backlog(50)
   `;
   if (tenants.length === 0) return { idle: true };
 
   let examined = 0;
   let queued = 0;
+  let notified = 0;
   let failed = 0;
 
   for (const tenant of tenants) {
@@ -125,7 +135,9 @@ async function fanOutNotifications(ctx: JobContext): Promise<JobResult> {
     try {
       const [row] = await withTenant(
         { tenantId: tenant.tenant_id, actorId: tenant.worker_actor_id, actorType: 'service_account' },
-        async (tx) => tx<{ examined: number; queued: number; cursor_at: string }[]>`
+        async (tx) => tx<{
+          examined: number; queued: number; cursor_at: string; notified: number;
+        }[]>`
           SELECT * FROM helm.fan_out_notifications(${FANOUT_BATCH})
         `,
         { role: 'worker' },
@@ -133,8 +145,17 @@ async function fanOutNotifications(ctx: JobContext): Promise<JobResult> {
 
       examined += Number(row?.examined ?? 0);
       queued += Number(row?.queued ?? 0);
-      if (Number(row?.queued ?? 0) > 0) {
-        log.info('notifications queued', { queued: Number(row?.queued) });
+      // 0700. Counted separately rather than folded into `queued`, because
+      // `queued` means "outbound deliveries" in this job's log line and in
+      // 0420's tests — and quietly changing what a number means is worse than
+      // adding one. A tenant with no destination at all has queued 0 and
+      // notified n, which is the air-gapped install working as intended.
+      notified += Number(row?.notified ?? 0);
+      if (Number(row?.queued ?? 0) > 0 || Number(row?.notified ?? 0) > 0) {
+        log.info('notifications queued', {
+          queued: Number(row?.queued ?? 0),
+          notified: Number(row?.notified ?? 0),
+        });
       }
     } catch (error) {
       // One tenant's failure must not abandon the rest — the same rule the
@@ -145,7 +166,13 @@ async function fanOutNotifications(ctx: JobContext): Promise<JobResult> {
     }
   }
 
-  return { counts: { tenants: tenants.length, examined, queued, failed }, idle: queued === 0 };
+  return {
+    counts: { tenants: tenants.length, examined, queued, notified, failed },
+    // Idle means "this pass did nothing", and filling a bell is doing
+    // something: a tenant with no webhook destination would otherwise look
+    // idle forever while its in-app inbox was being written.
+    idle: queued === 0 && notified === 0,
+  };
 }
 
 async function deliverNotifications(ctx: JobContext): Promise<JobResult> {

@@ -1,0 +1,233 @@
+import Link from 'next/link';
+import {
+  Bell, CalendarClock, CheckCircle2, ClipboardList, KeyRound, MonitorSmartphone, UserCog,
+} from 'lucide-react';
+import { withTenant } from '@/lib/db/client';
+import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
+import { PageBody, PageHeader } from '@/components/app-shell';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { countMyOpenTasks, listMyTasks } from '@/lib/sops/queries';
+import { listInbox, unreadCount } from '@/lib/notifications/inbox';
+import { formatDateTime } from '@/lib/ui/format';
+
+export const dynamic = 'force-dynamic';
+
+/**
+ * Personal — the scope, and a real page rather than an alias.
+ *
+ * WHAT CHANGED. The Personal tab pointed at /account, which is one of its own
+ * sub-pages: a scope whose tab opens a sub-page has no landing page, so there
+ * was nowhere for the things it collects to appear together. That is why the
+ * parity table recorded "aliases, not sections" while every ingredient existed.
+ *
+ * FOUR THINGS, AND THREE OF THEM WERE ALREADY BUILT. My Tasks is F2's, the
+ * notification choices are K's, the profile and sessions are E's. This page is
+ * assembly, which is exactly why the plan put group L last — building it
+ * earlier would have meant shipping a page with one card on it and revisiting
+ * it three times.
+ *
+ * NO PERSONAL CREDENTIALS SECTION, and no placeholder or empty state for one
+ * either. Group J is dropped (decision 14) and a card reading "personal
+ * credentials are coming" is a promise the plan has stopped making — worse than
+ * an absence, because somebody would wait for it. When the
+ * Bitwarden/Vaultwarden integration happens it can add its own section.
+ *
+ * ONE TRANSACTION. Four reads that all resolve the acting user from
+ * helm.current_actor_id(), so they share a session context rather than opening
+ * a connection each.
+ */
+export default async function PersonalPage() {
+  const identity = await getServerIdentity();
+
+  const { counts, tasks, notifications, unread } = await withTenant(
+    actorOf(identity),
+    async (tx) => ({
+      counts: await countMyOpenTasks(tx),
+      // The same query My Tasks runs with its default filters, capped: this is
+      // a signpost to that page, not a second copy of it.
+      tasks: await listMyTasks(tx, { state: 'open', who: 'mine', limit: 5 }),
+      notifications: (await listInbox(tx, 5)),
+      unread: await unreadCount(tx),
+    }),
+  );
+
+  return (
+    <>
+      <PageHeader
+        title="Personal"
+        description="Your work, what you have been told about, and your own account."
+      />
+      <PageBody>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ClipboardList className="size-4 text-ink-faint" aria-hidden /> My tasks
+                {counts.open > 0 && (
+                  <Badge tone={counts.overdue > 0 ? 'danger' : 'neutral'}>
+                    {counts.open}
+                  </Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {tasks.length === 0 ? (
+                <p className="text-sm text-ink-muted">
+                  Nothing assigned to you is outstanding.
+                </p>
+              ) : (
+                <ul className="divide-y divide-border rounded-md border border-border">
+                  {tasks.map((task) => (
+                    <li key={task.stepId} className="px-3 py-2 text-sm">
+                      <Link
+                        href={`/runs/${task.runId}`}
+                        className="text-ink underline-offset-2 hover:underline"
+                      >
+                        {task.title}
+                      </Link>
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-ink-faint">
+                        <span>{task.organizationName}</span>
+                        {task.dueAt && (
+                          <span
+                            className={task.overdue ? 'text-danger' : undefined}
+                          >
+                            <CalendarClock className="mr-1 inline size-3" aria-hidden />
+                            {formatDateTime(task.dueAt)}
+                          </span>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-ink-faint">
+                {counts.overdue > 0 && (
+                  <span className="text-danger">{counts.overdue} overdue. </span>
+                )}
+                <Link href="/tasks" className="underline-offset-2 hover:underline">
+                  Every task, with filters
+                </Link>
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Bell className="size-4 text-ink-faint" aria-hidden /> Recent notifications
+                {unread > 0 && <Badge tone="brand">{unread} unread</Badge>}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {notifications.length === 0 ? (
+                /*
+                 * SAYS WHICH EMPTY IT IS, like the bell itself. "Nothing here"
+                 * could mean nothing happened or nothing is subscribed, and
+                 * those have different answers — the oversight kinds are off
+                 * until somebody asks for them, so a quiet page is the shipped
+                 * state rather than a fault.
+                 */
+                <p className="text-sm text-ink-muted">
+                  Nothing yet. You are told when a checklist step is assigned to you
+                  or falls due; exports, credential reveals and expiries are off
+                  until you ask for them below.
+                </p>
+              ) : (
+                <ul className="divide-y divide-border rounded-md border border-border">
+                  {notifications.map((item) => (
+                    <li key={item.id} className="flex items-start gap-2 px-3 py-2 text-sm">
+                      {!item.read && (
+                        <span aria-hidden className="mt-1.5 size-1.5 shrink-0 rounded-full bg-brand" />
+                      )}
+                      <span className="min-w-0">
+                        {item.href ? (
+                          <Link
+                            href={item.href}
+                            className="text-ink underline-offset-2 hover:underline"
+                          >
+                            {item.subject}
+                          </Link>
+                        ) : (
+                          <span className="text-ink">{item.subject}</span>
+                        )}
+                        <span className="mt-0.5 block text-xs text-ink-faint">
+                          {item.organizationName ? `${item.organizationName} · ` : ''}
+                          {formatDateTime(item.occurredAt)}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-ink-faint">
+                <Link href="/account" className="underline-offset-2 hover:underline">
+                  Choose what appears here
+                </Link>
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <UserCog className="size-4 text-ink-faint" aria-hidden /> My account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-3">
+            {/*
+              Signposts, not a second copy of the account page. Each one names
+              what is behind it rather than being a bare link, because "Account"
+              on its own does not tell somebody whether their password lives
+              there.
+            */}
+            <AccountLink
+              href="/account"
+              icon={KeyRound}
+              title="Password and profile"
+              detail="Your name, time zone, theme, and the password you sign in with."
+            />
+            <AccountLink
+              href="/account"
+              icon={MonitorSmartphone}
+              title="Active sessions"
+              detail="Every browser signed in as you, and how to end one."
+            />
+            <AccountLink
+              href="/account"
+              icon={CheckCircle2}
+              title="Notification choices"
+              detail="What you want to be emailed and shown about. Yours alone — no administrator can set them."
+            />
+          </CardContent>
+        </Card>
+      </PageBody>
+    </>
+  );
+}
+
+function AccountLink({
+  href,
+  icon: Icon,
+  title,
+  detail,
+}: {
+  href: string;
+  icon: typeof KeyRound;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="flex gap-2.5 rounded-md border border-border p-3 transition-colors hover:border-border-strong hover:bg-surface-sunken"
+    >
+      <Icon className="mt-0.5 size-4 shrink-0 text-ink-faint" aria-hidden />
+      <span>
+        <span className="block text-sm font-medium text-ink">{title}</span>
+        <span className="mt-0.5 block text-xs text-ink-muted">{detail}</span>
+      </span>
+    </Link>
+  );
+}

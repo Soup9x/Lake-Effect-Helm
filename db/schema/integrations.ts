@@ -272,3 +272,34 @@ export const taskReminder = pgTable('task_reminder', {
   createdAt: tstz('created_at').notNull().defaultNow(),
   sentAt: tstz('sent_at'),
 });
+
+/**
+ * 0700 — the per-person in-app inbox.
+ *
+ * The one notification table that points INWARDS. webhook_delivery belongs to
+ * a destination and task_reminder is a message about to be sent; neither can
+ * express "this person has not seen this", which is the whole of what a bell
+ * is — hence `readAt`.
+ *
+ * `dedupeKey` carries two shapes in one column: an audit event_uid, or
+ * 'step:<uuid>:<lead>' for a reminder. One column so the uniqueness is one
+ * constraint rather than a partial index per shape.
+ *
+ * Written only by SECURITY DEFINER functions and a trigger on task_reminder.
+ * helm_app holds SELECT, DELETE and UPDATE on `readAt` alone — a column grant,
+ * because RLS cannot restrict a column and rewriting the subject of a
+ * notification about an export would be putting words in Helm's mouth.
+ */
+export const userNotification = pgTable('user_notification', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  kind: text('kind').notNull(),
+  dedupeKey: text('dedupe_key').notNull(),
+  subject: text('subject').notNull(),
+  href: text('href'),
+  organizationId: uuid('organization_id'),
+  occurredAt: tstz('occurred_at').notNull(),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  readAt: tstz('read_at'),
+});

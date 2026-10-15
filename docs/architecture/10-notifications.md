@@ -286,6 +286,107 @@ belongs to a destination. Sharing the table would have meant a nullable
 
 ---
 
+## 11. The in-app inbox (0700)
+
+Sections 1 to 10 are about getting a notification OUT of Helm. This one is
+about one staying in it.
+
+`webhook_delivery` belongs to a destination. `task_reminder` is a message about
+to be sent. Neither can express **"this person has not seen this"**, which is
+the whole of what a bell is — so `user_notification` exists, with `read_at`,
+and is the first notification table in this schema addressed to a person.
+
+**Two sources, mirroring §5's two.**
+
+```
+audit_log ──▶ helm.fan_out_notifications()  ──┬──▶ webhook_delivery ──▶ worker ──▶ platform
+                                              └──▶ user_notification ──▶ the bell
+task_reminder ─(trigger)──────────────────────────▶ user_notification ──▶ the bell
+```
+
+The in-app INSERT is driven by the fan-out's `candidate` rows and is
+**deliberately not joined to `webhook_endpoint`**: a tenant with no destination
+and no mail relay still has a working bell, which is the air-gapped install
+every other part of this system is built for. A migration guard asserts the
+join is absent, and an integration test asserts the behaviour — because the
+guard cannot see the job's own tenant pre-filter, which is where this went
+wrong once (§12).
+
+Reminders arrive by a trigger on `task_reminder` rather than from the two
+functions that write it, so a third writer added later cannot forget. Only a
+`pending` row lights the bell: 0690 raises the earliest crossed lead as pending
+and the rest as `suppressed`, and lighting the bell for a suppressed row would
+undo that one-message rule.
+
+**Who receives an oversight notification** is `helm.notification_audience()`: a
+tenant-wide seat (`org_scope_all`) holding `audit:read` **that has opted into
+the kind**. The `org_scope_all` half is decision 31 — `client_admin` holds
+`audit:read` and is not tenant-wide, and leaning on the permission alone is the
+leak 0690 had to correct on `task_reminder`.
+
+**Custody.** `helm_app` holds `SELECT`, `DELETE`, and `UPDATE` on **`read_at`
+alone** — a column grant, because RLS cannot restrict a column and rewriting
+the subject of a notification about an export would be putting words in Helm's
+mouth. There is **no `audit:read` carve-out on the SELECT policy at all**:
+what somebody has and has not read is a record of their attention, and the
+oversight material itself is in the audit log.
+
+**Retention.** Read rows go after 30 days, unread after 180 — unread kept far
+longer because deleting something somebody has not seen is deleting the thing
+the table exists for. `helm.prune_notifications()` is called from the fan-out's
+own job rather than given a thirteenth lock key for a DELETE that runs in
+milliseconds.
+
+**Preference kinds.** One set governs both channels, because honouring a
+preference in email and not in the bell is a half-measure somebody has to
+discover. `task_assigned` and `task_due` are on by default; the four oversight
+kinds (`export_activity`, `credential_access`, `expiring_soon`, `operations`)
+are off. See decision 37 for why the split, including the part where defaulting
+them on would have emailed every administrator about every export the moment
+0700 applied.
+
+---
+
+## 12. The fan-out had never run
+
+Worth its own section, because the lesson is not about notifications.
+
+`fanOutNotifications` enumerated its tenants with a raw query on the bare
+worker pool:
+
+```sql
+SELECT ... FROM tenant t WHERE t.status = 'active' AND ...
+```
+
+`tenant` is behind RLS — `tenant_rls_select: id = helm.current_tenant_id()` —
+and a worker connection sets no tenant context. **Zero rows, every tick.** The
+audit fan-out never queued anything from the job; `0400` removed two-person
+approval from credential exports on the understanding that these notifications
+replace it, so the control it traded for was not running.
+
+Three things about why it survived so long:
+
+- **Every test called the function, not the job.** `helm.fan_out_notifications()`
+  inside `withTenant()` is the right way to test what the function does, and it
+  skips the enumeration completely. The job's tenant discovery had no test.
+- **The other half was always correct.** `deliverNotifications` uses
+  `helm.notification_backlog()`, a `SECURITY DEFINER` function, which is the
+  pattern `helm.alert_backlog()`, `helm.email_backlog()` and
+  `helm.external_check_backlog()` all follow. 0420's own comment two functions
+  below the defect states the rule: *"the worker holds no tenant context of its
+  own, so it asks which tenants to iterate and then enters each one."*
+- **A read fails silently.** This is the project's third zero-rows-under-RLS
+  defect — H's refresh worker reported success while writing nothing, and §49
+  and §50 of `db/tests/security.sql` hold the other two — and the first in a
+  READ, where there is no write to come back empty and nothing at all to
+  notice.
+
+The fix is `helm.notification_fanout_backlog()`, a definer function, with a
+guard asserting `prosecdef` rather than mere existence: a non-definer function
+of the same name would have the identical defect.
+
+---
+
 ## 9. Where it is tested
 
 | File | What it establishes |
@@ -296,3 +397,5 @@ belongs to a destination. Sharing the table would have meant a nullable
 | `tests/integration/notifications.test.ts`, `an email destination` | the second transport end to end — an export audit row reaching a real mailbox through the same fan-out, queue and worker; the relay and recipient-domain gates at configuration time; that a transport cannot be switched; that a rename keeps the delivery history and a readdress does not; that a delivery waits while the relay is off |
 | `db/tests/security.sql` §50 | the relay password unreachable from `helm_app` by any path including `SELECT *`, the recipient gate's answers, a preference readable only by its owner, and a reminder readable only by its owner or a tenant-wide seat |
 | `tests/unit/email-transport.test.ts` | that the pin is a certificate and that it pins — a different certificate is refused, over STARTTLS and implicit TLS alike |
+| `tests/integration/inapp-notifications.test.ts` | 16 — an audit row reaching a bell through the REAL job for a tenant with no destination and no relay (the test that found §12), the audience refusing a client administrator who holds audit:read, idempotency under a rewound cursor, a reminder's trigger and its suppressed-lead rule, and the column grant refusing a reword |
+| `db/tests/security.sql` §51 | the bell's custody from the helm_app seat: no INSERT, `read_at` writable and nothing else, a colleague's inbox invisible even to super_admin, and the audience rule from both seats |

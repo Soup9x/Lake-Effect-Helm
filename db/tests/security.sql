@@ -3938,5 +3938,108 @@ SELECT helm_test.check('...who can still see one addressed to themselves',
   helm_test.reminder_visible(:t1, :u_acme, :u_acme));
 ROLLBACK;
 
+\echo '== 51. A bell is private, and nothing can forge one =='
+-- 0700. The guards in that migration assert the SHAPE — helm_app holds no
+-- INSERT, UPDATE only on read_at, no audit:read carve-out on the policy. These
+-- assert what that shape DOES from the seat the request path runs in, and the
+-- one thing a guard cannot check: that the column grant actually stops the
+-- write rather than merely being absent from the catalogue.
+
+-- (a) THE INBOX CANNOT BE WRITTEN FROM HERE AT ALL, except read_at.
+--     Forging one matters because the subject line is Helm speaking: "X
+--     exported Acme's credentials" carries weight precisely because nobody can
+--     type it.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('helm_app cannot forge a notification',
+  $$INSERT INTO user_notification (tenant_id, user_id, kind, dedupe_key,
+                                   subject, occurred_at)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '1b000000-0000-0000-0000-000000000001', 'operations', 'forged',
+            'Helm says this is fine', now())$$);
+ROLLBACK;
+
+-- The behavioural half needs a row, and only a definer function can make one.
+-- Planted with the owner's rights, which is what the fan-out has.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.plant_notification(:t1, :u_admin1, 'operations', 'zz-own');
+
+SELECT helm_test.check('I can read my own bell',
+  EXISTS (SELECT 1 FROM user_notification WHERE dedupe_key = 'zz-own'));
+SELECT helm_test.check('...and the unread count counts it',
+  helm.unread_notification_count() >= 1);
+SELECT helm_test.check('...and my_notifications() returns it',
+  EXISTS (SELECT 1 FROM helm.my_notifications(20) WHERE subject LIKE 'zz %'));
+
+-- (b) THE COLUMN GRANT, which is the load-bearing control. read_at is
+--     writable; everything else is refused by the GRANT rather than by a
+--     policy, because RLS cannot restrict a column.
+UPDATE user_notification SET read_at = now() WHERE dedupe_key = 'zz-own';
+SELECT helm_test.check('marking read is allowed, and takes',
+  (SELECT read_at IS NOT NULL FROM user_notification WHERE dedupe_key = 'zz-own'));
+SELECT helm_test.check('...and the unread count drops',
+  helm.unread_notification_count() = 0);
+SELECT helm_test.check_raises('...while rewording it is refused',
+  $$UPDATE user_notification SET subject = 'nothing happened'$$);
+SELECT helm_test.check_raises('...and so is re-addressing it',
+  $$UPDATE user_notification
+      SET user_id = '1b000000-0000-0000-0000-000000000002'$$);
+SELECT helm_test.check_raises('...and changing where it points',
+  $$UPDATE user_notification SET href = '/elsewhere'$$);
+-- Deleting one's own IS allowed: it is the "clear" button, and the record of
+-- what happened lives in the audit log rather than here.
+DELETE FROM user_notification WHERE dedupe_key = 'zz-own';
+SELECT helm_test.check('clearing my own is allowed',
+  NOT EXISTS (SELECT 1 FROM user_notification WHERE dedupe_key = 'zz-own'));
+ROLLBACK;
+
+-- (c) AND NOBODY ELSE'S IS VISIBLE, with no audit:read carve-out — unlike
+--     task_reminder, which has one for a tenant-wide seat. 0690 shipped that
+--     carve-out and leaked to client_admin; this table does not have one at
+--     all, because what somebody has read is a record of their attention
+--     rather than oversight material.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.plant_notification(:t1, :u_tech1, 'task_due', 'zz-theirs');
+-- The planting bypasses RLS, as a fixture should; the READ below does not.
+SELECT helm_test.check('a colleague''s bell is invisible, even to super_admin',
+  NOT EXISTS (SELECT 1 FROM user_notification WHERE dedupe_key = 'zz-theirs'));
+SELECT helm_test.check('...and does not reach my unread count',
+  helm.unread_notification_count() = 0);
+-- The quiet refusal once more: an UPDATE whose USING clause excludes every row
+-- matches nothing and returns cleanly, so the assertion reads the value back.
+UPDATE user_notification SET read_at = now() WHERE dedupe_key = 'zz-theirs';
+SELECT helm_test.ctx(:t1, :u_tech1);
+SELECT helm_test.check('...and could not be marked read on their behalf',
+  (SELECT read_at IS NULL FROM user_notification WHERE dedupe_key = 'zz-theirs'));
+ROLLBACK;
+
+-- (d) THE AUDIENCE RULE, from both seats. A permission is not a scope
+--     (decision 31), and this is the second table where that distinction
+--     decides who sees a client's name.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('a client administrator holds audit:read',
+  helm.has_permission('audit:read'));
+SELECT helm_test.check('...and is not a tenant-wide seat',
+  NOT helm.is_tenant_wide());
+SELECT helm_test.check('...so the oversight audience excludes them',
+  NOT EXISTS (SELECT 1 FROM helm.notification_audience(:t1, 'export_activity') a
+               WHERE a.user_id = :u_acme));
+SELECT helm_test.ctx(:t1, :u_admin1);
+-- The oversight kinds default OFF, so even super_admin is outside the audience
+-- until it asks. A quiet bell on a fresh install is the shipped state.
+SELECT helm_test.check('a tenant-wide seat is NOT in it before opting in',
+  NOT EXISTS (SELECT 1 FROM helm.notification_audience(:t1, 'export_activity') a
+               WHERE a.user_id = :u_admin1));
+INSERT INTO user_notification_preference (tenant_id, user_id, kinds)
+VALUES (:t1, :u_admin1, '["export_activity"]'::jsonb)
+ON CONFLICT (tenant_id, user_id) DO UPDATE SET kinds = EXCLUDED.kinds;
+SELECT helm_test.check('...and opting in is what puts them there',
+  EXISTS (SELECT 1 FROM helm.notification_audience(:t1, 'export_activity') a
+           WHERE a.user_id = :u_admin1));
+ROLLBACK;
+
 \echo '== All security assertions passed =='
 

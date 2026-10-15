@@ -23,6 +23,18 @@ interface RecentItem {
  * history nobody relies on. It is also why this survives signing out — the rows
  * are in the database under an RLS policy naming the acting user, and a
  * colleague on the same machine sees their own list, not this one.
+ *
+ * THIS COMPONENT EXISTED AND NOTHING RENDERED IT until group L. The popover,
+ * the fetch-on-open, the dismiss handling and the per-type icons were all
+ * written; the header carried a History icon linking to /dashboard instead, so
+ * the control was unreachable and the parity table recorded "no header
+ * dropdown". The third thing in this codebase found built and unwired, after
+ * 0110's webhook tables and 0690's transport column — which is why L's PR says
+ * the pattern out loud rather than quietly fixing it.
+ *
+ * THE TRIGGER IS STYLED FOR THE NAV BAR, which is near-black: `text-nav-ink`
+ * with a white-wash hover, matching the icons beside it. It was styled for a
+ * light surface before, which is what a component with no home looks like.
  */
 export function RecentlyViewed() {
   const [open, setOpen] = useState(false);
@@ -62,10 +74,11 @@ export function RecentlyViewed() {
         onClick={toggle}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-ink-muted hover:bg-surface-sunken hover:text-ink"
+        aria-label="Recently viewed"
+        title="Recently viewed"
+        className="flex size-8 items-center justify-center rounded-md text-nav-ink transition-colors hover:bg-white/10 hover:text-nav-ink-active"
       >
         <Clock className="size-4 shrink-0" aria-hidden />
-        <span className="hidden sm:inline">Recent</span>
       </button>
 
       {open && (

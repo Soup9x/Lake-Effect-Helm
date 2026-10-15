@@ -25,7 +25,7 @@
  * them to the browser.
  */
 import Link from 'next/link';
-import { Clock, Flame, History, ScrollText, ShieldHalf } from 'lucide-react';
+import { Clock, Flame, History, PhoneCall, ScrollText, ShieldHalf } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { categoryBySource } from '@/lib/nav/org-categories';
@@ -34,6 +34,9 @@ import {
   STRENGTH_BUCKETS, STRENGTH_BUCKETS_UI, type StrengthBucket,
 } from '@/lib/ui/strength';
 import type { ClientActivityItem, UpdatedItem } from '@/lib/clients/activity';
+import {
+  importantContacts, REASON_LABEL, type ContactFlags,
+} from '@/lib/contacts/important';
 import type { RecentItem } from '@/lib/workspace/queries';
 import { cn } from '@/lib/ui/cn';
 
@@ -398,6 +401,105 @@ export function ActivityFeedWidget({
               <span className="shrink-0 text-xs tabular-nums text-ink-faint">
                 {formatDateTime(event.occurredAt)}
               </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Widget>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 6. Important contacts — group L
+// ---------------------------------------------------------------------------
+
+export interface ImportantContact extends ContactFlags {
+  id: string;
+  name: string;
+  title: string | null;
+  email: string | null;
+  phone: string | null;
+}
+
+/**
+ * Who to call, out of the flags the contact table already carries.
+ *
+ * NEAR THE TOP OF THE CLIENT PAGE, not in the contacts section further down,
+ * because that is the difference this widget makes: the full table has always
+ * been there and already badges Primary and Emergency, but it is below the
+ * assets and somebody on a call has to scroll past them to find a phone number.
+ *
+ * THE PHONE NUMBER IS THE PAYLOAD, so it is a `tel:` link and it is not
+ * truncated. An email address is secondary here — if email would do, this is
+ * not the moment this card is for.
+ *
+ * SAYS WHICH EMPTY IT IS. A client with contacts but no flags set is a
+ * different thing from a client with no contacts, and the first one has an
+ * action: go and tick the boxes. Decision 35 is why there is nothing to tick
+ * CALLED "important" — the flags are the ones that already existed.
+ */
+export function ImportantContactsWidget({
+  contacts,
+  totalContacts,
+  organizationId,
+}: {
+  contacts: readonly ImportantContact[];
+  totalContacts: number;
+  organizationId: string;
+}) {
+  const ranked = importantContacts(contacts);
+
+  return (
+    <Widget
+      icon={<PhoneCall className="size-4 text-ink-faint" aria-hidden />}
+      title="Who to call"
+      footer={
+        totalContacts > ranked.length ? (
+          <Link
+            href={`/organizations/${organizationId}/contacts`}
+            className="text-ink-muted hover:text-ink"
+          >
+            All {totalContacts} contacts
+          </Link>
+        ) : undefined
+      }
+    >
+      {ranked.length === 0 ? (
+        <Nothing>
+          {totalContacts === 0
+            ? 'No contacts documented for this client.'
+            : 'No contact is marked primary, emergency, authorised or technical.'}
+        </Nothing>
+      ) : (
+        <ul className="space-y-2">
+          {ranked.map(({ contact, reason }) => (
+            <li key={contact.id} className="space-y-0.5">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className="text-ink">{contact.name}</span>
+                <Badge tone={reason === 'emergency' ? 'critical' : 'neutral'}>
+                  {REASON_LABEL[reason]}
+                </Badge>
+                {contact.title && (
+                  <span className="text-xs text-ink-faint">{contact.title}</span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-x-3 text-xs">
+                {contact.phone ? (
+                  <a href={`tel:${contact.phone}`} className="text-brand hover:underline">
+                    {contact.phone}
+                  </a>
+                ) : (
+                  <span className="text-ink-faint">no number recorded</span>
+                )}
+                {contact.email && (
+                  <a
+                    href={`mailto:${contact.email}`}
+                    className="truncate text-ink-muted hover:text-ink"
+                  >
+                    {contact.email}
+                  </a>
+                )}
+              </div>
             </li>
           ))}
         </ul>
