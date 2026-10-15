@@ -253,6 +253,25 @@ function isStepUpRefusal(error: unknown): boolean {
   );
 }
 
+/**
+ * What a 403 from the database may say.
+ *
+ * Helm's own refusals are raised as `helm: <sentence>` and written to be read —
+ * "user:write is required to invite somebody" — so they pass through without
+ * the prefix. Anything else is Postgres's own wording: "permission denied for
+ * table secret_version", "new row violates row-level security policy for table
+ * membership". Those name the schema to a caller who may be a co-managed
+ * client, which errors.ts rule 1 forbids, so they become a plain refusal and
+ * the detail stays in the server log.
+ */
+function refusalMessage(error: unknown): string {
+  const message = (error as { message?: unknown }).message;
+  if (typeof message === 'string' && message.startsWith('helm: ')) {
+    return message.slice('helm: '.length);
+  }
+  return 'your role does not permit this operation';
+}
+
 function assertPermitted(session: ResolvedSessionContext, options: TenantRouteOptions): void {
   if (options.minRoleRank !== undefined && session.roleRank < options.minRoleRank) {
     throw ApiError.forbidden('your role does not permit this operation');
@@ -330,13 +349,7 @@ export function errorResponse(error: unknown, requestId: string): Response {
 
   if (isInsufficientPrivilege(error)) {
     return json(
-      toErrorBody(
-        ApiError.forbidden(
-          (error as { message?: string }).message?.replace(/^helm: /, '') ??
-            'your role does not permit this operation',
-        ),
-        requestId,
-      ),
+      toErrorBody(ApiError.forbidden(refusalMessage(error)), requestId),
       403,
       requestId,
     );
