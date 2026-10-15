@@ -28,6 +28,11 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
     "paths": {
       "@/*": [
         "./src/*"
@@ -37,11 +42,6 @@
       ]
     }
   },
-  "plugins": [
-    {
-      "name": "next"
-    }
-  ],
   "include": [
     "**/*.ts",
     "**/*.tsx",
