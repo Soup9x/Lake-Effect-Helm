@@ -281,10 +281,40 @@ ALTER TABLE webhook_endpoint
 -- "there is always an envelope" constraints become conditional on the
 -- transport. Reproduced rather than edited, because an applied migration is
 -- immutable.
+--
+-- BOTH OF THEM, and the second one is the one that actually bites. 0420's
+-- webhook_secret_present is `octet_length(secret_ciphertext) > 0`, which a NULL
+-- ciphertext satisfies — a CHECK passes on NULL — so by itself it would never
+-- have refused an email row. webhook_envelope_complete spells out IS NOT NULL
+-- seven times and refuses one outright. An integration test found it by trying
+-- to create an email destination through the route; neither the transport-shape
+-- CHECK nor any guard here would have.
 ALTER TABLE webhook_endpoint DROP CONSTRAINT IF EXISTS webhook_secret_present;
 ALTER TABLE webhook_endpoint
   ADD CONSTRAINT webhook_secret_present CHECK (
     transport <> 'webhook' OR octet_length(secret_ciphertext) > 0
+  );
+
+ALTER TABLE webhook_endpoint DROP CONSTRAINT IF EXISTS webhook_envelope_complete;
+ALTER TABLE webhook_endpoint
+  ADD CONSTRAINT webhook_envelope_complete CHECK (
+    CASE transport
+      -- 0420's rule, unchanged: the envelope is all-or-nothing, because a
+      -- half-written row is an endpoint that cannot be opened and cannot be
+      -- seen to be broken.
+      WHEN 'webhook' THEN
+        wrap_provider IS NOT NULL AND kek_id IS NOT NULL AND wrapped_dek IS NOT NULL
+        AND secret_ciphertext IS NOT NULL AND secret_nonce IS NOT NULL
+        AND secret_tag IS NOT NULL AND secret_aad IS NOT NULL
+      -- All-or-nothing the other way for email. Stated as "none of them"
+      -- rather than left unconstrained so that a row with envelope columns and
+      -- no URL to decrypt — which nothing can open and nothing would ever
+      -- read — cannot exist either.
+      WHEN 'email' THEN
+        wrap_provider IS NULL AND kek_id IS NULL AND wrapped_dek IS NULL
+        AND secret_ciphertext IS NULL AND secret_nonce IS NULL
+        AND secret_tag IS NULL AND secret_aad IS NULL
+    END
   );
 
 COMMENT ON COLUMN webhook_endpoint.transport IS
@@ -1007,10 +1037,22 @@ CREATE POLICY user_notification_preference_rls_delete ON user_notification_prefe
 -- A REMINDER IS ALSO PRIVATE, for the same reason and one more: the row names a
 -- step somebody has been asked to do, so a tenant-wide read would be a list of
 -- who is behind on what.
+--
+-- AND audit:read ALONE IS NOT ENOUGH, which the first draft of this policy got
+-- wrong. client_admin holds audit:read in the shipped catalogue, and this table
+-- carries no organisation to scope on — so `OR has_permission('audit:read')'
+-- let a client administrator at one client read reminders about another
+-- client's checklist steps, and learn that the other client exists. The MSP's
+-- own oversight is kept by requiring a tenant-wide seat for it; a client-side
+-- role sees its own reminders and nothing else, which in practice is none,
+-- because assigning a step is MSP-side work.
 CREATE POLICY task_reminder_rls_select ON task_reminder
   FOR SELECT USING (
     tenant_id = helm.current_tenant_id()
-    AND (user_id = helm.current_actor_id() OR helm.has_permission('audit:read'))
+    AND (
+      user_id = helm.current_actor_id()
+      OR (helm.is_tenant_wide() AND helm.has_permission('audit:read'))
+    )
   );
 CREATE POLICY task_reminder_rls_insert ON task_reminder
   FOR INSERT WITH CHECK (tenant_id = helm.current_tenant_id());
@@ -1021,6 +1063,29 @@ CREATE POLICY task_reminder_rls_delete ON task_reminder
   FOR DELETE USING (
     tenant_id = helm.current_tenant_id() AND helm.has_permission('asset:write')
   );
+
+-- -----------------------------------------------------------------------------
+-- The reminder queue is written by its functions and by nothing else.
+--
+-- 0220's ALTER DEFAULT PRIVILEGES grants helm_app full DML on every table a
+-- later migration creates, so the policies above are the ONLY thing standing
+-- between a signed-in member and an INSERT naming somebody else — the INSERT
+-- and UPDATE policies check the tenant and not the person, deliberately,
+-- because the writers are workers acting for other people. Revoked rather than
+-- policed: all five writers (raise_assignment_reminder,
+-- suppress_reminders_for_step, raise_task_reminders, claim_task_reminders,
+-- record_task_reminder) are SECURITY DEFINER, so nothing legitimate loses a
+-- privilege here, and "mark somebody else's reminder sent" stops being
+-- reachable at all.
+--
+-- The same correction 0680 had to make for node_view_stat, found the same way:
+-- by asking what a column-level GRANT actually restricts when the default
+-- privileges already granted everything.
+-- -----------------------------------------------------------------------------
+REVOKE INSERT, UPDATE, DELETE ON task_reminder FROM helm_app;
+REVOKE INSERT, UPDATE, DELETE ON task_reminder FROM helm_worker;
+GRANT SELECT ON task_reminder TO helm_app;
+GRANT SELECT ON task_reminder TO helm_worker;
 
 -- =============================================================================
 -- Guards
@@ -1087,6 +1152,44 @@ BEGIN
     RAISE EXCEPTION 'helm: the transport shape constraint is missing';
   END IF;
 
+  -- 5b. AND THE ENVELOPE RULE KNOWS ABOUT THEM. Asserted by its text, not its
+  --     existence: 0420's version is seven IS NOT NULLs that an email row
+  --     fails, and a later migration reissuing it from that text would make
+  --     every email destination unsaveable with no other symptom. That is how
+  --     this was found, so it gets a guard rather than a comment.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'webhook_envelope_complete'
+      AND pg_get_constraintdef(oid) LIKE '%transport%'
+  ) THEN
+    RAISE EXCEPTION
+      'helm: the webhook envelope constraint must be conditional on the transport';
+  END IF;
+
+  -- 5c. A REMINDER CANNOT BE FORGED OR SILENCED BY HAND. Its policies check the
+  --     tenant and not the person, because the writers act for other people —
+  --     so the revoke is what makes the definer functions the only way in.
+  IF has_table_privilege('helm_app', 'task_reminder', 'INSERT')
+    OR has_table_privilege('helm_app', 'task_reminder', 'UPDATE')
+    OR has_table_privilege('helm_worker', 'task_reminder', 'INSERT')
+    OR has_table_privilege('helm_worker', 'task_reminder', 'UPDATE') THEN
+    RAISE EXCEPTION
+      'helm: task_reminder must be written only through its SECURITY DEFINER functions';
+  END IF;
+
+  -- 5d. AND A CLIENT-SIDE ROLE CANNOT READ SOMEBODY ELSE'S. client_admin holds
+  --     audit:read, and this table has no organisation to scope on, so the
+  --     tenant-wide test is the whole of the boundary between one client and
+  --     another's checklist work.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid
+    WHERE c.relname = 'task_reminder' AND p.polname = 'task_reminder_rls_select'
+      AND pg_get_expr(p.polqual, p.polrelid) LIKE '%is_tenant_wide%'
+  ) THEN
+    RAISE EXCEPTION
+      'helm: audit:read alone must not open the reminder queue to a client-side role';
+  END IF;
+
   -- 6. A REMINDER FIRES ONCE. 0100's lead-day key, which is the whole reason a
   --    nightly job does not become a nightly nuisance.
   IF NOT EXISTS (
@@ -1130,3 +1233,216 @@ BEGIN
   END IF;
 END;
 $email_guard$;
+
+-- =============================================================================
+-- The destination surface, taught about the second transport
+--
+-- WITHOUT THIS THE transport COLUMN IS SCAFFOLDING, which is exactly what §1 of
+-- docs/architecture/10-notifications.md was written about: 0110 shipped
+-- webhook_endpoint and webhook_delivery with retry fields and a dedupe
+-- constraint, nothing was ever wired to them, and they sat in the schema dead
+-- and mirrored in Drizzle. A delivery branch for a row nothing can create would
+-- be the same mistake with a better comment.
+--
+-- Both functions are DROPped and recreated because CREATE OR REPLACE cannot
+-- change a function's OUT parameters or its argument list, and both change.
+-- Drop and create are in one migration, so there is no window where the
+-- settings page's reader is missing.
+-- =============================================================================
+DROP FUNCTION IF EXISTS helm.webhook_endpoints();
+
+CREATE OR REPLACE FUNCTION helm.webhook_endpoints()
+  RETURNS TABLE (
+    id uuid, name text, format webhook_format, is_active boolean,
+    transport notification_transport, email_address text,
+    organization_id uuid, organization_name text, events text[],
+    url_host text, url_digest text, signing_secret_set boolean,
+    max_attempts smallint, timeout_ms integer,
+    last_delivery_at timestamptz, last_delivery_ok boolean,
+    last_delivery_error text, consecutive_failures integer,
+    pending_count bigint, dead_count bigint, updated_at timestamptz
+  )
+  LANGUAGE plpgsql STABLE SECURITY DEFINER
+  SET search_path = public, helm, extensions, pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_tenant uuid := helm.require_tenant_id();
+BEGIN
+  IF NOT helm.is_tenant_wide() THEN
+    RAISE EXCEPTION 'helm: notification settings are not visible to a client-side role'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  RETURN QUERY
+    SELECT e.id, e.name, e.format, e.is_active,
+           -- The address is returned in full, unlike the URL beside it. For
+           -- Discord and Teams the URL IS the credential; an address is a
+           -- destination an administrator has to be able to read to know where
+           -- notifications are going, and every member's address is already on
+           -- the users screen.
+           e.transport, e.email_address::text,
+           e.organization_id, o.name, e.events,
+           e.url_host, e.url_digest, e.signing_secret_set,
+           e.max_attempts, e.timeout_ms,
+           e.last_delivery_at, e.last_delivery_ok,
+           e.last_delivery_error, e.consecutive_failures,
+           count(d.id) FILTER (WHERE d.status = 'pending'),
+           count(d.id) FILTER (WHERE d.status = 'dead'),
+           e.updated_at
+    FROM webhook_endpoint e
+    LEFT JOIN organization o ON o.id = e.organization_id AND o.tenant_id = v_tenant
+    LEFT JOIN webhook_delivery d
+      ON d.endpoint_id = e.id AND d.created_at > now() - interval '7 days'
+    WHERE e.tenant_id = v_tenant
+    GROUP BY e.id, o.name
+    ORDER BY e.name;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION helm.webhook_endpoints() TO helm_app;
+
+-- -----------------------------------------------------------------------------
+-- Creating or replacing one, now with a transport.
+--
+-- The envelope parameters stay, and stay NULLABLE: an email destination has no
+-- URL to seal and no HMAC to sign with, and 0690 made the
+-- "there is always an envelope" CHECK conditional on the transport for exactly
+-- that reason.
+--
+-- THE RECIPIENT GATE IS CHECKED HERE, not only at send time. An address outside
+-- the tenant's allowed domains is refused at the moment somebody types it,
+-- which is where an explanation is useful — the send-time check stays because a
+-- tenant can narrow its domains afterwards.
+-- -----------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS helm.set_webhook_endpoint(
+  uuid, text, webhook_format, boolean, uuid, text[], text, text, boolean,
+  smallint, integer, text, text, bytea, bytea, bytea, bytea, text);
+
+CREATE OR REPLACE FUNCTION helm.set_webhook_endpoint(
+  p_id              uuid,
+  p_name            text,
+  p_format          webhook_format,
+  p_is_active       boolean,
+  p_organization_id uuid,
+  p_events          text[],
+  p_url_host        text,
+  p_url_digest      text,
+  p_signing_secret_set boolean,
+  p_max_attempts    smallint,
+  p_timeout_ms      integer,
+  p_wrap_provider   text,
+  p_kek_id          text,
+  p_wrapped_dek     bytea,
+  p_ciphertext      bytea,
+  p_nonce           bytea,
+  p_tag             bytea,
+  p_aad             text,
+  p_transport       notification_transport DEFAULT 'webhook',
+  p_email_address   text DEFAULT NULL
+) RETURNS uuid
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+  SET search_path = public, helm, extensions, pg_catalog, pg_temp
+AS $$
+DECLARE
+  v_tenant uuid := helm.require_tenant_id();
+  v_actor  uuid := helm.current_actor_id();
+  v_id     uuid := coalesce(p_id, gen_random_uuid());
+BEGIN
+  IF NOT helm.has_permission('integration:manage') THEN
+    RAISE EXCEPTION 'helm: configuring notifications requires integration:manage'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  IF p_organization_id IS NOT NULL AND NOT helm.org_in_scope(p_organization_id) THEN
+    RAISE EXCEPTION 'helm: organisation % is not in scope', p_organization_id
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  IF p_transport = 'email' THEN
+    IF p_email_address IS NULL OR btrim(p_email_address) = '' THEN
+      RAISE EXCEPTION 'helm: an email destination needs an address'
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM smtp_setting WHERE tenant_id = v_tenant) THEN
+      RAISE EXCEPTION
+        'helm: configure a mail relay before adding an email destination'
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF NOT helm.email_recipient_allowed(v_tenant, p_email_address) THEN
+      RAISE EXCEPTION
+        'helm: % is outside the domains this tenant allows notifications to be sent to',
+        p_email_address
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+  END IF;
+
+  INSERT INTO webhook_endpoint (
+    id, tenant_id, name, format, is_active, organization_id, events,
+    url_host, url_digest, signing_secret_set, max_attempts, timeout_ms,
+    transport, email_address,
+    wrap_provider, kek_id, wrapped_dek,
+    secret_ciphertext, secret_nonce, secret_tag, secret_aad,
+    created_by, updated_by)
+  VALUES (
+    v_id, v_tenant, btrim(p_name),
+    -- `format` names a WEBHOOK PAYLOAD SHAPE — Slack's attachments, Discord's
+    -- embeds — and an email has none. Normalised rather than refused: the
+    -- format selector has no meaning once the transport is email, so a stale
+    -- 'discord' arriving from a form is a field nobody chose, not a mistake
+    -- worth a 400. The read-back reports 'generic', so nothing is hidden.
+    CASE WHEN p_transport = 'email' THEN 'generic'::webhook_format ELSE p_format END,
+    p_is_active, p_organization_id, p_events,
+    -- NULL rather than '' for the columns the other transport owns, because
+    -- 0690's CHECK ties each one to its transport and an empty string is not
+    -- the same as "this transport has no URL".
+    CASE WHEN p_transport = 'webhook' THEN btrim(p_url_host) END,
+    CASE WHEN p_transport = 'webhook' THEN p_url_digest END,
+    -- An email has no HMAC either: a signature proves a POST body came from
+    -- Helm, and a mailbox has the envelope sender for that.
+    CASE WHEN p_transport = 'webhook' THEN p_signing_secret_set ELSE false END,
+    p_max_attempts, p_timeout_ms,
+    p_transport,
+    CASE WHEN p_transport = 'email' THEN lower(btrim(p_email_address))::citext END,
+    p_wrap_provider, p_kek_id, p_wrapped_dek,
+    p_ciphertext, p_nonce, p_tag, p_aad, v_actor, v_actor)
+  ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    format = EXCLUDED.format,
+    is_active = EXCLUDED.is_active,
+    organization_id = EXCLUDED.organization_id,
+    events = EXCLUDED.events,
+    transport = EXCLUDED.transport,
+    email_address = EXCLUDED.email_address,
+    url_host = EXCLUDED.url_host,
+    url_digest = EXCLUDED.url_digest,
+    signing_secret_set = EXCLUDED.signing_secret_set,
+    max_attempts = EXCLUDED.max_attempts,
+    timeout_ms = EXCLUDED.timeout_ms,
+    wrap_provider = EXCLUDED.wrap_provider,
+    kek_id = EXCLUDED.kek_id,
+    wrapped_dek = EXCLUDED.wrapped_dek,
+    secret_ciphertext = EXCLUDED.secret_ciphertext,
+    secret_nonce = EXCLUDED.secret_nonce,
+    secret_tag = EXCLUDED.secret_tag,
+    secret_aad = EXCLUDED.secret_aad,
+    -- A changed destination invalidates what the last delivery proved about the
+    -- old one, whichever transport it used.
+    last_delivery_at = NULL,
+    last_delivery_ok = NULL,
+    last_delivery_error = NULL,
+    consecutive_failures = 0,
+    updated_by = v_actor
+  WHERE webhook_endpoint.tenant_id = v_tenant;
+
+  RETURN v_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION helm.set_webhook_endpoint(
+  uuid, text, webhook_format, boolean, uuid, text[], text, text, boolean,
+  smallint, integer, text, text, bytea, bytea, bytea, bytea, text,
+  notification_transport, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION helm.set_webhook_endpoint(
+  uuid, text, webhook_format, boolean, uuid, text[], text, text, boolean,
+  smallint, integer, text, text, bytea, bytea, bytea, bytea, text,
+  notification_transport, text) TO helm_app;

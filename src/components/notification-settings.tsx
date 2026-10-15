@@ -14,11 +14,15 @@ export interface NotificationDestination {
   name: string;
   format: 'generic' | 'slack' | 'discord' | 'teams';
   isActive: boolean;
+  transport: 'webhook' | 'email';
+  /** The full address, for an email destination. Null for a webhook. */
+  emailAddress: string | null;
   organizationId: string | null;
   organizationName: string | null;
   events: string[];
-  urlHost: string;
-  urlDigest: string;
+  /** Null for an email destination: there is no URL, set or otherwise. */
+  urlHost: string | null;
+  urlDigest: string | null;
   signingSecretSet: boolean;
   maxAttempts: number;
   timeoutMs: number;
@@ -73,9 +77,16 @@ const FORMAT_COPY: Record<string, string> = {
 };
 
 type DestinationFormat = NotificationDestination['format'];
+type DestinationTransport = NotificationDestination['transport'];
+
+const TRANSPORT_COPY: Record<DestinationTransport, string> = {
+  webhook: 'A POST to a URL. Discord, Teams, Slack, or a receiver you wrote.',
+  email: 'A plain-text message from this tenant’s mail relay to one address.',
+};
 
 const BLANK: {
   name: string;
+  transport: DestinationTransport;
   format: DestinationFormat;
   isActive: boolean;
   events: string[];
@@ -83,6 +94,7 @@ const BLANK: {
   timeoutMs: number;
 } = {
   name: '',
+  transport: 'webhook',
   format: 'discord',
   isActive: true,
   events: ['export.requested', 'export.downloaded'],
@@ -115,6 +127,17 @@ function statusTone(status: string): BadgeTone {
  * nothing like enough to be one. An empty URL box on a saved destination means
  * "leave it alone", which is why the placeholder says so.
  *
+ * AN EMAIL DESTINATION IS THE SAME ROW with a different transport — the queue,
+ * the backoff and the test button are shared, which is the point: §1 of
+ * 10-notifications.md is about scaffolding nothing was wired to, and a second
+ * delivery mechanism with its own queue would be a second thing to go wrong.
+ * The address is shown in full where the URL never is, because an address is a
+ * destination rather than a credential.
+ *
+ * THE TRANSPORT SELECTOR ONLY APPEARS WHEN ADDING ONE. The server refuses to
+ * change it on an existing destination, so offering the choice while editing
+ * would be offering a control that returns an error.
+ *
  * The test button QUEUES rather than sends; the result appears in the log
  * below. See the route for why that is the honest test.
  */
@@ -122,16 +145,25 @@ export function NotificationSettingsCard({
   destinations,
   history,
   events,
+  emailConfigured,
 }: {
   destinations: NotificationDestination[];
   history: NotificationDelivery[];
   events: readonly string[];
+  /**
+   * Whether the tenant has an enabled mail relay. Passed in rather than
+   * guessed from the destinations, because the useful case is the one where
+   * there are none yet: the email option is offered and says what is missing
+   * instead of failing at save time with a database error.
+   */
+  emailConfigured: boolean;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<typeof BLANK & { id?: string }>(BLANK);
   const [url, setUrl] = useState('');
   const [signingSecret, setSigningSecret] = useState('');
+  const [emailAddress, setEmailAddress] = useState('');
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
 
@@ -139,6 +171,7 @@ export function NotificationSettingsCard({
     setForm(BLANK);
     setUrl('');
     setSigningSecret('');
+    setEmailAddress('');
     setEditing('new');
     setFeedback(null);
   }
@@ -147,6 +180,7 @@ export function NotificationSettingsCard({
     setForm({
       id: destination.id,
       name: destination.name,
+      transport: destination.transport,
       format: destination.format,
       isActive: destination.isActive,
       events: destination.events,
@@ -155,6 +189,10 @@ export function NotificationSettingsCard({
     });
     setUrl('');
     setSigningSecret('');
+    // Seeded, unlike the URL, because the address came back from the server and
+    // an empty box would read as "there is no address". The route compares it
+    // with what is stored, so saving it unchanged keeps the delivery history.
+    setEmailAddress(destination.emailAddress ?? '');
     setEditing(destination.id);
     setFeedback(null);
   }
@@ -180,13 +218,21 @@ export function NotificationSettingsCard({
         body: JSON.stringify({
           ...(form.id ? { id: form.id } : {}),
           name: form.name,
+          transport: form.transport,
           format: form.format,
           isActive: form.isActive,
           events: form.events,
           maxAttempts: form.maxAttempts,
           timeoutMs: form.timeoutMs,
-          ...(url ? { url } : {}),
-          ...(signingSecret ? { signingSecret } : {}),
+          // Only ever the fields this transport owns: the route refuses a URL
+          // on an email destination and an address on a webhook, rather than
+          // ignoring whichever one does not apply.
+          ...(form.transport === 'email'
+            ? { emailAddress }
+            : {
+              ...(url ? { url } : {}),
+              ...(signingSecret ? { signingSecret } : {}),
+            }),
         }),
       });
 
@@ -199,7 +245,13 @@ export function NotificationSettingsCard({
       setEditing(null);
       setUrl('');
       setSigningSecret('');
-      setFeedback({ ok: true, message: 'Saved. Send a test to prove it reaches the channel.' });
+      setEmailAddress('');
+      setFeedback({
+        ok: true,
+        message: form.transport === 'email'
+          ? 'Saved. Send a test to prove it reaches the mailbox.'
+          : 'Saved. Send a test to prove it reaches the channel.',
+      });
       router.refresh();
     } catch {
       setFeedback({ ok: false, message: 'Could not reach the server.' });
@@ -236,7 +288,12 @@ export function NotificationSettingsCard({
         return;
       }
       setEditing(null);
-      setFeedback({ ok: true, message: 'Destination removed, and its webhook URL with it.' });
+      setFeedback({
+        ok: true,
+        message: form.transport === 'email'
+          ? 'Destination removed.'
+          : 'Destination removed, and its webhook URL with it.',
+      });
       router.refresh();
     } finally {
       setBusy(false);
@@ -255,17 +312,17 @@ export function NotificationSettingsCard({
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="max-w-3xl text-sm text-ink-muted">
-          Send events to Discord, Teams, Slack, or anything that accepts an incoming
-          webhook. Credential exports no longer require a second approver, so an export
-          notification is the main way anyone finds out one happened — point at least one
-          destination at a channel somebody reads.
+          Send events to Discord, Teams, Slack, anything that accepts an incoming
+          webhook, or an email address. Credential exports no longer require a second
+          approver, so an export notification is the main way anyone finds out one
+          happened — point at least one destination at a channel somebody reads.
         </p>
 
         <p className="max-w-3xl rounded-md border border-border bg-surface-sunken p-2.5 text-xs text-ink-muted">
           Notifications name <span className="text-ink">clients, assets and credentials</span> —
           &ldquo;ACME Domain Admin was revealed for export&rdquo; — but never their contents.
-          No password, key or ciphertext can reach a webhook payload. Choose a channel you
-          would be comfortable seeing those names in.
+          No password, key or ciphertext can reach a payload, by either transport. Choose a
+          channel or mailbox you would be comfortable seeing those names in.
         </p>
 
         {destinations.length > 0 && (
@@ -274,7 +331,11 @@ export function NotificationSettingsCard({
               <div key={destination.id} className="space-y-2 p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium text-ink">{destination.name}</span>
-                  <Badge tone="neutral">{destination.format}</Badge>
+                  {/* The format names a webhook payload shape, so for an email
+                      destination the transport is the useful word. */}
+                  <Badge tone="neutral">
+                    {destination.transport === 'email' ? 'Email' : destination.format}
+                  </Badge>
                   {!destination.isActive && <Badge tone="neutral">Off</Badge>}
                   {destination.consecutiveFailures > 0 && (
                     <Badge tone="danger">
@@ -308,12 +369,16 @@ export function NotificationSettingsCard({
                 </div>
 
                 <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-ink-faint">
-                  <div>
-                    {destination.urlHost}
-                    <span className="ml-1 font-mono text-ink-muted">
-                      …{destination.urlDigest}
-                    </span>
-                  </div>
+                  {destination.transport === 'email' ? (
+                    <div className="font-mono">{destination.emailAddress}</div>
+                  ) : (
+                    <div>
+                      {destination.urlHost}
+                      <span className="ml-1 font-mono text-ink-muted">
+                        …{destination.urlDigest}
+                      </span>
+                    </div>
+                  )}
                   <div>{destination.organizationName ?? 'Every client'}</div>
                   {destination.signingSecretSet && <div>Signed</div>}
                   {destination.lastDeliveryAt && (
@@ -367,63 +432,135 @@ export function NotificationSettingsCard({
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="destination-format">Platform</Label>
-                <select
-                  id="destination-format"
-                  value={form.format}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, format: e.target.value as DestinationFormat }))
-                  }
-                  className="h-9 w-full rounded-md border border-border bg-surface px-2.5 text-sm text-ink"
-                >
-                  <option value="discord">Discord</option>
-                  <option value="teams">Microsoft Teams</option>
-                  <option value="slack">Slack</option>
-                  <option value="generic">Generic JSON</option>
-                </select>
-                <FieldHint>{FORMAT_COPY[form.format]}</FieldHint>
+                <Label htmlFor="destination-transport">How it is sent</Label>
+                {form.id ? (
+                  /*
+                   * Reported rather than offered. The server refuses a change
+                   * of transport — switching one would mean clearing the other
+                   * transport's columns and deciding what the delivery history
+                   * now describes, to save one click — so a selector here would
+                   * be a control whose only outcome is an error.
+                   */
+                  <>
+                    <div className="flex h-9 items-center text-sm text-ink">
+                      {form.transport === 'email' ? 'Email' : 'Webhook'}
+                    </div>
+                    <FieldHint>
+                      Fixed once a destination exists. Add another one to send the same
+                      events by the other route.
+                    </FieldHint>
+                  </>
+                ) : (
+                  <>
+                    <select
+                      id="destination-transport"
+                      value={form.transport}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          transport: e.target.value as DestinationTransport,
+                        }))
+                      }
+                      className="h-9 w-full rounded-md border border-border bg-surface px-2.5 text-sm text-ink"
+                    >
+                      <option value="webhook">Webhook</option>
+                      <option value="email">Email</option>
+                    </select>
+                    <FieldHint>{TRANSPORT_COPY[form.transport]}</FieldHint>
+                  </>
+                )}
               </div>
 
-              <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="destination-url">Webhook URL</Label>
-                <Input
-                  id="destination-url"
-                  type="password"
-                  autoComplete="off"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder={
-                    form.id ? 'Stored — leave blank to keep it' : 'https://…'
-                  }
-                  maxLength={2048}
-                />
-                <FieldHint>
-                  https only. Treated as a credential and stored the way one is: encrypted
-                  with this deployment&rsquo;s master key, readable only by the background
-                  worker that delivers, and never sent back to this page. For Discord and
-                  Teams the URL <em>is</em> the authentication — anyone holding it can post
-                  to that channel as Helm.
-                </FieldHint>
-              </div>
+              {form.transport === 'email' ? (
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label htmlFor="destination-email">Address</Label>
+                  <Input
+                    id="destination-email"
+                    type="email"
+                    autoComplete="off"
+                    value={emailAddress}
+                    onChange={(e) => setEmailAddress(e.target.value)}
+                    placeholder="alerts@example.com"
+                    required
+                    maxLength={320}
+                  />
+                  <FieldHint>
+                    Shown in full, unlike a webhook URL: an address is where notifications
+                    go, not the thing that authorises sending them. It has to be in a domain
+                    this tenant allows — set that under <strong>Mail relay</strong>, which
+                    also decides who the message comes from.
+                  </FieldHint>
+                  {!emailConfigured && (
+                    <FieldHint>
+                      <span className="text-sev-warning">
+                        No mail relay is configured and enabled yet, so this cannot be saved.
+                        Set one up under Mail relay first.
+                      </span>
+                    </FieldHint>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="destination-format">Platform</Label>
+                    <select
+                      id="destination-format"
+                      value={form.format}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, format: e.target.value as DestinationFormat }))
+                      }
+                      className="h-9 w-full rounded-md border border-border bg-surface px-2.5 text-sm text-ink"
+                    >
+                      <option value="discord">Discord</option>
+                      <option value="teams">Microsoft Teams</option>
+                      <option value="slack">Slack</option>
+                      <option value="generic">Generic JSON</option>
+                    </select>
+                    <FieldHint>{FORMAT_COPY[form.format]}</FieldHint>
+                  </div>
 
-              <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="destination-signing">Signing secret (optional)</Label>
-                <Input
-                  id="destination-signing"
-                  type="password"
-                  autoComplete="off"
-                  value={signingSecret}
-                  onChange={(e) => setSigningSecret(e.target.value)}
-                  placeholder="At least 16 characters"
-                  maxLength={256}
-                />
-                <FieldHint>
-                  For a receiver you wrote yourself. Helm sends{' '}
-                  <code>x-helm-signature</code> as an HMAC-SHA256 over the timestamp and the
-                  body, so a receiver can tell a real notification from anyone who found the
-                  URL. Discord, Teams and Slack ignore it.
-                </FieldHint>
-              </div>
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label htmlFor="destination-url">Webhook URL</Label>
+                    <Input
+                      id="destination-url"
+                      type="password"
+                      autoComplete="off"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      placeholder={
+                        form.id ? 'Stored — leave blank to keep it' : 'https://…'
+                      }
+                      maxLength={2048}
+                    />
+                    <FieldHint>
+                      https only. Treated as a credential and stored the way one is: encrypted
+                      with this deployment&rsquo;s master key, readable only by the background
+                      worker that delivers, and never sent back to this page. For Discord and
+                      Teams the URL <em>is</em> the authentication — anyone holding it can post
+                      to that channel as Helm.
+                    </FieldHint>
+                  </div>
+
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label htmlFor="destination-signing">Signing secret (optional)</Label>
+                    <Input
+                      id="destination-signing"
+                      type="password"
+                      autoComplete="off"
+                      value={signingSecret}
+                      onChange={(e) => setSigningSecret(e.target.value)}
+                      placeholder="At least 16 characters"
+                      maxLength={256}
+                    />
+                    <FieldHint>
+                      For a receiver you wrote yourself. Helm sends{' '}
+                      <code>x-helm-signature</code> as an HMAC-SHA256 over the timestamp and the
+                      body, so a receiver can tell a real notification from anyone who found the
+                      URL. Discord, Teams and Slack ignore it.
+                    </FieldHint>
+                  </div>
+                </>
+              )}
             </div>
 
             <fieldset className="space-y-2">
@@ -466,7 +603,18 @@ export function NotificationSettingsCard({
             </label>
 
             <div className="flex flex-wrap items-center gap-2">
-              <Button type="submit" variant="primary" disabled={busy || form.events.length === 0}>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={
+                  busy
+                  || form.events.length === 0
+                  // Not merely discouraged: set_webhook_endpoint() refuses an
+                  // email destination with no relay row, so the button would
+                  // only produce an error.
+                  || (form.transport === 'email' && !emailConfigured)
+                }
+              >
                 {busy && <Loader2 aria-hidden className="animate-spin" />}
                 Save
               </Button>

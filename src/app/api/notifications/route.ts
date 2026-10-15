@@ -17,6 +17,19 @@ import { sealWebhook, isDeliverable } from '@/lib/notifications/config';
  * `integration:manage`, which tier3 holds — a notification destination is an
  * integration, and unlike RADIUS or OIDC it does not change how anybody
  * authenticates.
+ *
+ * TWO TRANSPORTS, AND THE ADDRESS IS NOT A SECRET. 0690 gave a destination a
+ * `transport`: a webhook POST or an email to a fixed address. The address is
+ * returned in full where the URL never is, because for Discord and Teams the
+ * URL *is* the credential, while an address is a destination somebody has to be
+ * able to read to know where notifications are going.
+ *
+ * A TRANSPORT IS FIXED ONCE THE DESTINATION EXISTS. Switching one would have to
+ * clear the envelope columns of the transport being left behind, re-validate
+ * against the other transport's rules, and decide what the delivery history
+ * now describes — for a saving of one "new destination" click. Refused with an
+ * explanation instead, which is also why the stored transport is compared here
+ * rather than passed blindly to the database.
  */
 
 /** Kept in step with helm.notification_events(); the database refuses the rest. */
@@ -35,7 +48,22 @@ const EVENTS = [
 const destinationSchema = z.object({
   id: z.guid().optional(),
   name: z.string().trim().min(1).max(80),
-  format: z.enum(['generic', 'slack', 'discord', 'teams']),
+  /**
+   * Defaulted rather than required, so every caller written against 0420 still
+   * means what it meant. A transport cannot be changed afterwards — see the
+   * header — so the default only ever decides what a NEW destination is.
+   */
+  transport: z.enum(['webhook', 'email']).default('webhook'),
+  /**
+   * The payload shape, which only a webhook has.
+   *
+   * Optional HERE rather than defaulted, so the handler can tell "an email
+   * caller left out a field that has no meaning for it" from "a webhook caller
+   * forgot the platform". A webhook still has to name one, as it did before
+   * 0690; `set_webhook_endpoint` stores 'generic' for an email destination
+   * whatever arrives.
+   */
+  format: z.enum(['generic', 'slack', 'discord', 'teams']).optional(),
   isActive: z.boolean(),
   /** Null means every client in the tenant. */
   organizationId: z.guid().nullable().optional(),
@@ -50,6 +78,16 @@ const destinationSchema = z.object({
   url: z.string().url().optional(),
   /** Optional HMAC key, so a bespoke receiver can verify the body is Helm's. */
   signingSecret: z.string().min(16).max(256).optional(),
+  /**
+   * Where an email destination sends. Required to create one; on a save of an
+   * existing one it may be omitted, and omitting it is what keeps the delivery
+   * history — see the PUT.
+   *
+   * The database checks it against the tenant's allowed recipient domains, and
+   * checks it AGAIN at send time, because a tenant can narrow those domains
+   * after a destination was added.
+   */
+  emailAddress: z.string().trim().email().max(320).optional(),
 });
 
 interface DestinationRow {
@@ -57,11 +95,13 @@ interface DestinationRow {
   name: string;
   format: string;
   is_active: boolean;
+  transport: 'webhook' | 'email';
+  email_address: string | null;
   organization_id: string | null;
   organization_name: string | null;
   events: string[];
-  url_host: string;
-  url_digest: string;
+  url_host: string | null;
+  url_digest: string | null;
   signing_secret_set: boolean;
   max_attempts: number;
   timeout_ms: number;
@@ -80,9 +120,13 @@ function present(row: DestinationRow) {
     name: row.name,
     format: row.format,
     isActive: row.is_active,
+    transport: row.transport,
+    emailAddress: row.email_address,
     organizationId: row.organization_id,
     organizationName: row.organization_name,
     events: row.events,
+    // Null for an email destination rather than '' — there is no URL, which is
+    // a different thing from a URL nobody has set.
     urlHost: row.url_host,
     urlDigest: row.url_digest,
     signingSecretSet: row.signing_secret_set,
@@ -156,11 +200,82 @@ export const PUT = tenantRoute(
       throw ApiError.notFound('there is no such notification destination');
     }
 
-    if (!current && body.url === undefined) {
-      throw ApiError.invalid('a webhook URL is required the first time a destination is created');
+    if (current && current.transport !== body.transport) {
+      // Refused rather than quietly ignored, which is what would happen
+      // otherwise: an email destination saved as a webhook with no URL takes
+      // the update path, and that function does not touch `transport`, so the
+      // screen would report a change that never happened.
+      throw ApiError.invalid(
+        `this destination sends by ${current.transport} and that cannot be `
+        + 'changed. Add a new destination and remove this one.',
+        { issues: [{ path: 'transport', message: 'fixed once the destination exists' }] },
+      );
     }
 
-    if (body.url !== undefined) {
+    if (body.transport === 'email') {
+      if (body.url !== undefined || body.signingSecret !== undefined) {
+        throw ApiError.invalid(
+          'an email destination has no URL and nothing to sign: a signature '
+          + 'proves a POST body came from Helm, and a mailbox has the envelope '
+          + 'sender for that.',
+          { issues: [{ path: 'url', message: 'not used by an email destination' }] },
+        );
+      }
+      if (!current && body.emailAddress === undefined) {
+        throw ApiError.invalid('an email destination needs an address');
+      }
+    } else {
+      if (body.emailAddress !== undefined) {
+        throw ApiError.invalid(
+          'a webhook destination posts to a URL; it has no recipient address.',
+          { issues: [{ path: 'emailAddress', message: 'not used by a webhook destination' }] },
+        );
+      }
+      // Required for a webhook, exactly as it was before 0690: a Discord
+      // destination quietly saved as generic JSON would POST a body Discord
+      // refuses, and the first sign of it would be a delivery log nobody is
+      // watching.
+      if (body.format === undefined) {
+        throw ApiError.invalid('a webhook destination needs a platform', {
+          issues: [{ path: 'format', message: 'required for a webhook destination' }],
+        });
+      }
+    }
+
+    /*
+     * WHICH FUNCTION, AND WHY THE ADDRESS IS COMPARED FIRST.
+     *
+     * `set_webhook_endpoint` writes the whole row and clears the delivery
+     * history, because a destination whose target changed has not proved
+     * anything by what the old one did. `update_webhook_endpoint` leaves the
+     * target and the history alone.
+     *
+     * For a webhook the choice is simply whether a URL was supplied, since the
+     * URL never comes back to the browser and so is only ever sent when it is
+     * being set. An address DOES come back, so a form will send the same one on
+     * every save — comparing it is what stops "rename this destination" from
+     * silently resetting its failure count.
+     */
+    const addressChanged = body.transport === 'email'
+      && body.emailAddress !== undefined
+      && body.emailAddress.toLowerCase() !== (current?.email_address ?? '').toLowerCase();
+
+    if (addressChanged) {
+      // NO ENVELOPE AT ALL: nothing to seal and no HMAC key. 0690 made 0420's
+      // "there is always an envelope" CHECK conditional on the transport for
+      // exactly this call, and the id is left to the database because without
+      // an AAD there is nothing it has to be chosen early for.
+      await tx`
+        SELECT helm.set_webhook_endpoint(
+          ${body.id ?? null}::uuid, ${body.name}, ${body.format ?? 'generic'}::webhook_format,
+          ${body.isActive}, ${body.organizationId ?? null}::uuid,
+          ${body.events}::text[],
+          NULL, NULL, false,
+          ${body.maxAttempts}::smallint, ${body.timeoutMs},
+          NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+          'email'::notification_transport, ${body.emailAddress!})
+      `;
+    } else if (body.url !== undefined) {
       // Said here as well as in the delivery worker: a notification names which
       // client has which expiring asset and who exported what. That is
       // reconnaissance, and an internal network is not a reason to put it on
@@ -181,7 +296,7 @@ export const PUT = tenantRoute(
 
       await tx`
         SELECT helm.set_webhook_endpoint(
-          ${id}::uuid, ${body.name}, ${body.format}::webhook_format, ${body.isActive},
+          ${id}::uuid, ${body.name}, ${body.format ?? 'generic'}::webhook_format, ${body.isActive},
           ${body.organizationId ?? null}::uuid, ${body.events}::text[],
           ${sealed.urlHost}, ${sealed.urlDigest}, ${sealed.signingSecretSet},
           ${body.maxAttempts}::smallint, ${body.timeoutMs},
@@ -189,9 +304,13 @@ export const PUT = tenantRoute(
           ${sealed.ciphertext}, ${sealed.nonce}, ${sealed.tag}, ${sealed.aad})
       `;
     } else {
+      // Everything but the target: a webhook saved without a URL, or an email
+      // destination whose address is the one already stored. This function
+      // touches neither the envelope nor the delivery history, which is the
+      // whole reason the two cases share it.
       const [updated] = await tx<{ update_webhook_endpoint: boolean }[]>`
         SELECT helm.update_webhook_endpoint(
-          ${body.id!}::uuid, ${body.name}, ${body.format}::webhook_format,
+          ${body.id!}::uuid, ${body.name}, ${body.format ?? 'generic'}::webhook_format,
           ${body.isActive}, ${body.organizationId ?? null}::uuid,
           ${body.events}::text[], ${body.maxAttempts}::smallint, ${body.timeoutMs})
       `;

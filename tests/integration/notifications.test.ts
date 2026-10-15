@@ -20,6 +20,13 @@
  *   CUSTODY        the webhook URL is a credential. helm_app cannot read it by
  *                  any column, and the AAD binds it to one endpoint of one
  *                  tenant.
+ *
+ * 0690 added a second transport, and the last block here is about the thing
+ * that makes it a feature rather than a column: an export audit row reaching a
+ * mailbox through the SAME fan-out, the SAME queue and the SAME worker. §1 of
+ * docs/architecture/10-notifications.md is about 0110 shipping tables nothing
+ * was wired to, so "the route can create one" is not the test — the test is
+ * that a message arrives.
  */
 import { randomUUID } from 'node:crypto';
 import { NextRequest } from 'next/server';
@@ -30,6 +37,9 @@ import { withTenant } from '../../src/lib/db/client';
 import { getExportService } from '../../src/lib/exports/service';
 import { openWebhook, sealWebhook, digestOf, hostOf, isDeliverable } from '../../src/lib/notifications/config';
 import { FakeWebhook } from '../support/fake-webhook';
+import { FakeSmtp, bodyOf, subjectOf } from '../support/fake-smtp';
+import { deliverNotificationsJob } from '../../src/workers/notifications';
+import type { JobContext } from '../../src/workers/runtime';
 import {
   buildHarness,
   connectPools,
@@ -189,6 +199,10 @@ async function wipeNotifications(): Promise<void> {
   try {
     await sql`DELETE FROM webhook_delivery`;
     await sql`DELETE FROM webhook_endpoint`;
+    // 0690. An email destination cannot exist without one, so the relay goes
+    // when the destinations do — otherwise the "refused before a relay exists"
+    // test depends on which tests ran before it.
+    await sql`DELETE FROM smtp_setting`;
     await sql`
       INSERT INTO notification_cursor (tenant_id, last_chain_seq)
       SELECT ${IDS.tenant1}::uuid, coalesce(max(chain_seq), 0)
@@ -208,6 +222,10 @@ beforeAll(async () => {
   setKekProvider(h.kek);
   useSessionResolver(async () => currentUser);
   await h.keys.provision(IDS.tenant1, IDS.admin1, { reason: 'test provisioning' });
+  // One relay for the file. Started here rather than per test because
+  // generating a certificate is the slow part and nothing in these tests
+  // depends on a fresh one.
+  relay = await FakeSmtp.start();
   // Start from the current head, so the first test does not fan out the audit
   // rows the fixtures and the key provisioning above already wrote.
   await wipeNotifications();
@@ -216,10 +234,15 @@ beforeAll(async () => {
 afterEach(async () => {
   currentUser = null;
   while (running.length) running.pop()!.stop();
+  // The relay is shared, so what it received has to be forgotten between
+  // tests — otherwise "sent exactly one message" passes for the wrong reason.
+  relay?.received.splice(0, relay.received.length);
+  relay?.commands.splice(0, relay.commands.length);
   await wipeNotifications();
 });
 
 afterAll(async () => {
+  await relay?.stop();
   await disconnectPools();
 });
 
@@ -385,6 +408,338 @@ describe('an export becomes a message in a channel', () => {
     } finally {
       await sql.end({ timeout: 5 });
     }
+  });
+});
+
+/**
+ * The relay the email destinations point at, started once for this file.
+ *
+ * Possibly undefined if beforeAll failed, which afterAll has to tolerate —
+ * otherwise a setup error is replaced by a TypeError about `stop` and the real
+ * failure never reaches the output.
+ */
+let relay: FakeSmtp | undefined;
+
+function theRelay(): FakeSmtp {
+  if (!relay) throw new Error('the fake relay is not running; beforeAll failed');
+  return relay;
+}
+
+/**
+ * Point the tenant at the fake relay, with the superuser.
+ *
+ * Not through /api/tenant/smtp: that route has its own tests, and what is being
+ * established here is the delivery path. The envelope is left empty, which is
+ * the "a relay on a trusted network needs no credentials" case.
+ */
+async function configureRelay(options: { enabled?: boolean; domains?: string[] } = {}) {
+  const smtp = theRelay();
+  const sql = superuserSql();
+  try {
+    await sql`
+      INSERT INTO smtp_setting (
+        tenant_id, enabled, host, port, security, tls_verify, tls_pinned_certificate,
+        from_address, from_name, allowed_recipient_domains)
+      VALUES (
+        ${IDS.tenant1}::uuid, ${options.enabled ?? true}, ${smtp.host}, ${smtp.port},
+        'starttls', true, ${smtp.certificatePem},
+        'helm@northwind.test', 'Lake Effect Helm', ${options.domains ?? ['northwind.test']})
+      ON CONFLICT (tenant_id) DO UPDATE SET
+        enabled = EXCLUDED.enabled, host = EXCLUDED.host, port = EXCLUDED.port,
+        tls_pinned_certificate = EXCLUDED.tls_pinned_certificate,
+        allowed_recipient_domains = EXCLUDED.allowed_recipient_domains
+    `;
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+async function forgetRelay() {
+  const sql = superuserSql();
+  try {
+    await sql`DELETE FROM smtp_setting`;
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+function jobContext(): JobContext & { lines: string[] } {
+  const lines: string[] = [];
+  const logger = {
+    debug: (m: string) => lines.push(`debug ${m}`),
+    info: (m: string) => lines.push(`info ${m}`),
+    warn: (m: string) => lines.push(`warn ${m}`),
+    error: (m: string) => lines.push(`error ${m}`),
+    child: () => logger,
+  };
+  return { log: logger, stopping: () => false, lines } as unknown as JobContext & {
+    lines: string[];
+  };
+}
+
+/** One pass of the REAL delivery job — the worker, not a trimmed copy. */
+const runDelivery = () => deliverNotificationsJob().run(jobContext());
+
+/** Ask for an export, which is the audit row every test here fans out. */
+async function requestAnExport(reason = 'a reason long enough to pass') {
+  asUser(IDS.admin1, 'admin@northwind.test');
+  await getExportService().request(
+    { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' },
+    {
+      organizationId: IDS.orgAcme,
+      kind: 'client_offboarding',
+      format: 'zip',
+      reason,
+      includeSecrets: true,
+    },
+  );
+}
+
+const emailDestination = (over: Record<string, unknown> = {}) => ({
+  name: 'the on-call mailbox',
+  transport: 'email',
+  isActive: true,
+  events: ['export.requested'],
+  maxAttempts: 3,
+  timeoutMs: 2000,
+  emailAddress: 'oncall@northwind.test',
+  ...over,
+});
+
+describe('an email destination', () => {
+  it('reaches a real mailbox through the same fan-out, queue and worker', async () => {
+    await configureRelay();
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const created = await putNotification(request('PUT', emailDestination()));
+    expect(created.status).toBe(200);
+
+    await requestAnExport('contractual handover of all documentation');
+    expect((await fanOut()).queued).toBe(1);
+
+    const result = await runDelivery();
+    expect(result.counts).toMatchObject({ sent: 1, failed: 0 });
+
+    const smtp = theRelay();
+    expect(smtp.received).toHaveLength(1);
+    const mail = smtp.received[0]!;
+    expect(mail.to).toEqual(['oncall@northwind.test']);
+    expect(mail.from).toBe('helm@northwind.test');
+    // STARTTLS was negotiated before DATA, which is what the pin is for.
+    expect(mail.encrypted).toBe(true);
+    // The same subject the other four formats are given, from
+    // helm.notification_subject() — not one this transport invented.
+    expect(subjectOf(mail)).toContain('Acme');
+    const text = bodyOf(mail);
+    expect(text).toContain('CREDENTIAL-BEARING');
+    expect(text).toContain('Acme');
+    // And nothing that was never in the allow-listed payload.
+    expect(text).not.toContain('undefined');
+
+    // Recorded as delivered, so a second pass does not send it again.
+    const sql = superuserSql();
+    try {
+      const [row] = await sql<{ status: string }[]>`
+        SELECT status FROM webhook_delivery
+      `;
+      expect(row!.status).toBe('delivered');
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+    expect(await claim()).toHaveLength(0);
+  });
+
+  it('is refused before a relay exists, naming what is missing', async () => {
+    await forgetRelay();
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const response = await putNotification(request('PUT', emailDestination()));
+    // The database refuses it — helm.set_webhook_endpoint checks for the row —
+    // so this also proves the route cannot create one by going round the check.
+    expect(response.status).toBeGreaterThanOrEqual(400);
+
+    const sql = superuserSql();
+    try {
+      const rows = await sql`SELECT 1 FROM webhook_endpoint`;
+      expect(rows).toHaveLength(0);
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('refuses an address outside the tenant’s allowed domains', async () => {
+    await configureRelay({ domains: ['northwind.test'] });
+    asUser(IDS.admin1, 'admin@northwind.test');
+
+    const response = await putNotification(
+      request('PUT', emailDestination({ emailAddress: 'someone@elsewhere.test' })),
+    );
+    expect(response.status).toBeGreaterThanOrEqual(400);
+
+    // ...and accepts one inside them, so the refusal is about the domain and
+    // not about email destinations in general.
+    const ok = await putNotification(request('PUT', emailDestination()));
+    expect(ok.status).toBe(200);
+  });
+
+  it('will not take a URL or a signing secret', async () => {
+    await configureRelay();
+    asUser(IDS.admin1, 'admin@northwind.test');
+
+    const withUrl = await putNotification(
+      request('PUT', emailDestination({ url: 'https://example.test/hook' })),
+    );
+    expect(withUrl.status).toBe(400);
+
+    const withSecret = await putNotification(
+      request('PUT', emailDestination({ signingSecret: 'x'.repeat(24) })),
+    );
+    expect(withSecret.status).toBe(400);
+  });
+
+  it('stores no URL, no HMAC and the generic format, whatever was sent', async () => {
+    await configureRelay();
+    asUser(IDS.admin1, 'admin@northwind.test');
+
+    // 'discord' names a webhook payload shape, and an email has none. Sent
+    // deliberately: a form that was showing the platform picker before the
+    // transport was switched will send exactly this.
+    const response = await putNotification(
+      request('PUT', emailDestination({ format: 'discord' })),
+    );
+    expect(response.status).toBe(200);
+
+    const payload = await body(response);
+    const [stored] = payload.destinations as Record<string, unknown>[];
+    expect(stored).toMatchObject({
+      transport: 'email',
+      emailAddress: 'oncall@northwind.test',
+      format: 'generic',
+      signingSecretSet: false,
+      urlHost: null,
+      urlDigest: null,
+    });
+  });
+
+  it('cannot be turned into a webhook, or a webhook into one', async () => {
+    await configureRelay();
+    asUser(IDS.admin1, 'admin@northwind.test');
+
+    const created = await body(await putNotification(request('PUT', emailDestination())));
+    const id = (created.destinations as { id: string }[])[0]!.id;
+
+    const switched = await putNotification(request('PUT', {
+      id,
+      name: 'the on-call mailbox',
+      transport: 'webhook',
+      format: 'generic',
+      isActive: true,
+      events: ['export.requested'],
+      maxAttempts: 3,
+      timeoutMs: 2000,
+      url: 'https://example.test/hook',
+    }));
+    expect(switched.status).toBe(400);
+
+    // The other direction, which is the one that would otherwise have been a
+    // silent no-op: update_webhook_endpoint does not touch `transport`.
+    const hook = await receiver('ok');
+    const wid = await seedDestination(hook.url, 'generic');
+    const other = await putNotification(request('PUT', {
+      id: wid,
+      name: 'now by email',
+      transport: 'email',
+      isActive: true,
+      events: ['export.requested'],
+      maxAttempts: 3,
+      timeoutMs: 2000,
+      emailAddress: 'oncall@northwind.test',
+    }));
+    expect(other.status).toBe(400);
+
+    const sql = superuserSql();
+    try {
+      const rows = await sql<{ transport: string }[]>`
+        SELECT transport FROM webhook_endpoint WHERE id = ${wid}::uuid
+      `;
+      expect(rows[0]!.transport).toBe('webhook');
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('keeps its delivery history when renamed, and drops it when readdressed', async () => {
+    await configureRelay({ domains: ['northwind.test'] });
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const created = await body(await putNotification(request('PUT', emailDestination())));
+    const id = (created.destinations as { id: string }[])[0]!.id;
+
+    // A failure to carry forward. Written directly: what is being tested is
+    // which function the route picks, not how a failure is recorded.
+    const sql = superuserSql();
+    try {
+      await sql`
+        UPDATE webhook_endpoint
+        SET consecutive_failures = 4, last_delivery_ok = false,
+            last_delivery_error = 'relay said no', last_delivery_at = now()
+        WHERE id = ${id}::uuid
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+
+    // A rename, with the SAME address the server just handed back — which is
+    // what a form will send. This must not reset the failure count.
+    const renamed = await body(await putNotification(
+      request('PUT', emailDestination({ id, name: 'the duty mailbox' })),
+    ));
+    expect((renamed.destinations as Record<string, unknown>[])[0]).toMatchObject({
+      name: 'the duty mailbox',
+      consecutiveFailures: 4,
+      lastDeliveryOk: false,
+    });
+
+    // A different address IS a different destination, so what the old one
+    // proved no longer applies.
+    const moved = await body(await putNotification(
+      request('PUT', emailDestination({ id, emailAddress: 'duty@northwind.test' })),
+    ));
+    expect((moved.destinations as Record<string, unknown>[])[0]).toMatchObject({
+      emailAddress: 'duty@northwind.test',
+      consecutiveFailures: 0,
+      lastDeliveryOk: null,
+    });
+  });
+
+  it('leaves a delivery pending rather than failing it while mail is off', async () => {
+    await configureRelay({ enabled: true });
+    asUser(IDS.admin1, 'admin@northwind.test');
+    await putNotification(request('PUT', emailDestination()));
+
+    // Switched off AFTER the destination exists, which is the real sequence:
+    // an administrator turns the relay off and the queue must wait rather than
+    // burning attempts once a minute until every reminder is dead.
+    await configureRelay({ enabled: false });
+
+    await requestAnExport();
+    expect((await fanOut()).queued).toBe(1);
+
+    const result = await runDelivery();
+    expect(result.idle).toBe(true);
+    expect(theRelay().received).toHaveLength(0);
+
+    const sql = superuserSql();
+    try {
+      const [row] = await sql<{ status: string; attempts: number }[]>`
+        SELECT status, attempts FROM webhook_delivery
+      `;
+      expect(row).toMatchObject({ status: 'pending', attempts: 0 });
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+
+    // Turned back on, it goes out — the queue waited rather than losing it.
+    await configureRelay({ enabled: true });
+    expect((await runDelivery()).counts).toMatchObject({ sent: 1 });
+    expect(theRelay().received).toHaveLength(1);
   });
 });
 

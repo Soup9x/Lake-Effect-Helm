@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers';
-import { KeyRound, Mail, MonitorSmartphone, ShieldCheck, UserCog } from 'lucide-react';
+import { Bell, KeyRound, Mail, MonitorSmartphone, ShieldCheck, UserCog } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { sessionCookieName, sessionRef } from '@/lib/auth/session-cookie';
@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { ChangePasswordCard } from '@/components/change-password-card';
 import { ProfileForm } from '@/components/profile-form';
 import { readMyPreferences } from '@/lib/ui/account-queries';
+import { readMyNotificationKinds } from '@/lib/email/preferences';
+import { NotificationPreferencesCard } from '@/components/notification-preferences';
 import { SessionList, type SessionRow } from '@/components/session-list';
 import { formatDateTime } from '@/lib/ui/format';
 
@@ -48,8 +50,10 @@ export default async function AccountPage() {
   const token = (await cookies()).get(sessionCookieName())?.value;
   const currentRef = token ? sessionRef(token) : null;
 
-  const { credential, sessions, timezones } = await withTenant(actorOf(identity), async (tx) => {
-    const [credentialRows, sessionRows, timezoneRows] = await Promise.all([
+  const {
+    credential, sessions, timezones, notifications,
+  } = await withTenant(actorOf(identity), async (tx) => {
+    const [credentialRows, sessionRows, timezoneRows, notificationRow] = await Promise.all([
       // The view carries no hash — helm_app holds column grants that exclude
       // it. Its only job is to answer "do you have a local password, and did
       // somebody else choose it".
@@ -75,11 +79,17 @@ export default async function AccountPage() {
         WHERE name LIKE '%/%' AND name NOT LIKE 'posix/%' AND name NOT LIKE 'right/%'
         ORDER BY name
       `,
+      // Which kinds I want, and whether the tenant can send at all. One read
+      // answers both, because a toggle with no relay behind it has to say so.
+      readMyNotificationKinds(tx),
     ]);
     return {
       credential: credentialRows[0] ?? null,
       sessions: sessionRows,
       timezones: timezoneRows.map((r) => r.name),
+      // In the same transaction as the rest, because it is the same actor's own
+      // row: RLS is what scopes it, so there is no predicate here to get wrong.
+      notifications: notificationRow,
     };
   });
 
@@ -143,6 +153,17 @@ export default async function AccountPage() {
                 </div>
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Bell className="size-4 text-ink-faint" aria-hidden /> Email notifications
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <NotificationPreferencesCard initial={notifications} />
           </CardContent>
         </Card>
 

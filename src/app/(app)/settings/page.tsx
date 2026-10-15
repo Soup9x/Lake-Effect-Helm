@@ -12,6 +12,8 @@ import { SidebarCustomise } from '@/components/sidebar-customise';
 import { ExternalChecksForm } from '@/components/external-checks-form';
 import { HealthWindowForm } from '@/components/health-window-form';
 import { readHealthSetting } from '@/lib/health/queries';
+import { readSmtpSetting } from '@/lib/email/settings';
+import { SmtpSettingsCard } from '@/components/smtp-settings';
 import { readExternalCheckSetting } from '@/lib/external/settings';
 import { readTenantSidebarDefault } from '@/lib/nav/sidebar-queries';
 import { ORG_CATEGORIES } from '@/lib/nav/org-categories';
@@ -85,11 +87,13 @@ interface DestinationRow {
   name: string;
   format: NotificationDestination['format'];
   is_active: boolean;
+  transport: NotificationDestination['transport'];
+  email_address: string | null;
   organization_id: string | null;
   organization_name: string | null;
   events: string[];
-  url_host: string;
-  url_digest: string;
+  url_host: string | null;
+  url_digest: string | null;
   signing_secret_set: boolean;
   max_attempts: number;
   timeout_ms: number;
@@ -128,6 +132,8 @@ function toDestination(row: DestinationRow): NotificationDestination {
     name: row.name,
     format: row.format,
     isActive: row.is_active,
+    transport: row.transport,
+    emailAddress: row.email_address,
     organizationId: row.organization_id,
     organizationName: row.organization_name,
     events: row.events,
@@ -312,12 +318,12 @@ export default async function SettingsPage() {
   const {
     keys, integrations, workers, tenant, radius, oidc, destinations, deliveries,
     unifi, organizations, canManageNetwork, flexibleTypeCount,
-    sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow,
+    sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow, smtp,
   } = await withTenant(actorOf(identity), async (tx) => {
     const [keyRows, integrationRows, workerRows, tenantRows, radiusRows, oidcRows,
            destinationRows, deliveryRows, unifiRows, organizationRows, networkRows,
            flexibleTypeRows, sidebarDefaultRow, externalCheckRow,
-           healthWindowRow] = await Promise.all([
+           healthWindowRow, smtpRow] = await Promise.all([
       tx<KeyRow[]>`SELECT * FROM helm.key_custody()`,
       tx<IntegrationRow[]>`
         SELECT id, provider::text, display_name, status::text, sync_enabled,
@@ -381,6 +387,9 @@ export default async function SettingsPage() {
       // is what the card needs to say, and an absent row means off.
       readExternalCheckSetting(tx),
       readHealthSetting(tx),
+      // The mail relay, without its password: helm_app has no privilege on the
+      // envelope columns, so `passwordSet` is a boolean the database computed.
+      readSmtpSetting(tx),
     ]);
     return {
       keys: keyRows,
@@ -399,6 +408,7 @@ export default async function SettingsPage() {
       sidebarDefaultSet: sidebarDefaultRow.set,
       externalChecks: externalCheckRow,
       healthWindow: healthWindowRow,
+      smtp: smtpRow,
     };
   });
 
@@ -437,10 +447,18 @@ export default async function SettingsPage() {
           </Card>
         )}
 
+        {/*
+          * The relay comes BEFORE the destinations that depend on it. An email
+          * destination cannot be saved without one, and a page that offers the
+          * dependent control first teaches people to hit the error.
+          */}
+        <SmtpSettingsCard initial={smtp} canManage={tenant?.can_write_tenant ?? false} />
+
         <NotificationSettingsCard
           destinations={destinations.map(toDestination)}
           history={deliveries.map(toDelivery)}
           events={NOTIFICATION_EVENTS}
+          emailConfigured={smtp.enabled}
         />
 
         <UnifiSettingsCard

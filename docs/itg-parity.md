@@ -33,7 +33,7 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 1 | Four top-nav scopes | **Partial** | `src/components/shell/top-nav.tsx` has all four. `Personal`→`/account` and `Global`→`/search` are aliases, not sections — **group L** makes them real pages |
 | 1 | Global search in header | **Exists** | `/search`, `src/app/api/search/route.ts` |
 | 1 | Recent-items dropdown | **Partial** | Data and API exist (`user_recent_view`, `/api/workspace/recent`); no header dropdown, no per-type icons — **group L** |
-| 1 | Notifications + help icons | **Missing** | `webhook_endpoint` is outbound-only; there is no in-app notification surface — **group L**, with notifications conditional on K's channel |
+| 1 | Notifications + help icons | **Missing** | `webhook_endpoint` is outbound-only and K's channel is email, so there is still no *in-app* notification surface — **group L**. K's `NOTIFICATION_KINDS` is the jsonb set L adds an in-app kind to, which is why it is a set and not a column per kind |
 | 1 | User menu | **Exists** | Top-right account menu |
 | 2 | Recents + Favorites strip | **Exists** | `components/client-strip.tsx` — two avatar rows above the table, clients only; the mixed-type dropdown is #1 |
 | 2 | Clients table, star, Name, Status | **Exists** | `components/clients-table.tsx`; status shows the real six-stage value, grouped by the filter |
@@ -64,7 +64,7 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 7 | Personal Credentials (private vault) | **Dropped** | Not built natively. Personal credentials will come from a Bitwarden/Vaultwarden integration — decision 14. The vault design that was drafted for it is kept below as background for that work |
 | 8 | Reusable checklist templates → per client | **Exists** | F1. `sop`/`sop_step` authored on `/assets/{id}`, published into an immutable `sop_version`, and `sop_run`/`sop_run_step` started against a client with the step copy 0090 describes. F2 added `assigned_to` and `due_at` to runs and their steps. Reminders are K |
 | 8 | Assignable tasks + due dates | **Exists** | F2 (0650). `assigned_to` + `due_at` on `sop_run` and `sop_run_step`, the assignee a composite key to `membership` so work cannot be given to somebody who cannot see it |
-| 8 | Email notification on assign/due | **Missing** | No email channel anywhere; `webhook_endpoint` is Discord/Teams/Slack — **group K**. The columns it would read now exist (F2) |
+| 8 | Email notification on assign/due | **Exists** | K (0690). `task_reminder` + two worker jobs (`0x…0c` raises, `0x…0d` delivers). One message when a step is assigned to somebody else, then three days before / the day before / on the day, once each and nothing once the step is done. Needs a relay the tenant configures — Helm ships with none, see decision 29 |
 | 9 | Domain tracker fields | **Exists** | `domain`: registrar, registered_at, expires_at, nameservers, dns_provider, dnssec, transfer_locked |
 | 9 | SSL tracker fields | **Exists** | `ssl_certificate`: issuer, not_before, not_after, subject_alt_names, fingerprint, key_algorithm |
 | 9 | Both feed Upcoming Expirations | **Exists** | `expiration.kind` + `source_table`/`source_id` |
@@ -75,7 +75,7 @@ Decision 14 has the reasoning; nothing is being built for it now.
 | 10 | One-time MFA recovery token | **Deferred** | Group E deliberately did not build it: nothing reads `mfa_enrolled_at` and the sign-in path enforces no second factor, so a bypass token would be a second password — see decision 15 |
 | 10 | Time zone | **Exists** | Group E: `app_user.timezone`, validated against `pg_timezone_names`. Shared facts stay UTC-suffixed; a reader's own sessions show their local time beside it |
 | 10 | Theme (default/light/dark) | **Exists** | Group E: `app_user.theme` is the account DEFAULT; the shell's existing per-browser toggle still overrides it locally |
-| 10 | Email notification toggles | **Missing** | Depends on an email channel existing at all |
+| 10 | Email notification toggles | **Exists** | K (0690). `user_notification_preference.kinds`, a checkbox per kind on `/account`. **Private**: RLS admits only the owner's row, so no administrator can set somebody else's and there is no screen that could — decision 33. Both on by default, and an empty list means *nothing* rather than the default |
 | 10 | "Enable side panel" | **Deferred** | Group E deliberately did not store it: there is no side panel to switch. Needs the panel first — see decision 15 |
 
 ---
@@ -173,10 +173,10 @@ and PR.
 | **F1** | Checklists you can actually use: template authoring, publishing a version, starting a run against a client, the run page, SOP rows in the integration fixture — **landed** | 0640, for the purge conflict publishing exposed | 0090 modelled all of this and nothing in the application ever created a run. Assignment is meaningless until a run exists |
 | **F2** | `assigned_to` + `due_at` on run steps, a default assignee and due date on the run, My Tasks, an open-task count — **landed** | 0650, plus 0660 for a defect it exposed | Delivers half of the Personal section by extending SOPs |
 | **G** | Global section: completion grid with % badges, per-client completion scores — **landed** | none; the measurements are in the landed section | Needs C done first so custom types are real; the heaviest query work |
-| **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback | 0670 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
-| **I** | Documentation Health ring; client logo upload | 0680 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
+| **H** | Domain/SSL auto-refresh worker job (RDAP + TLS probe), manual entry fallback — **landed** | 0670 | Outbound network from the worker — needs a decision on egress in an air-gapped install |
+| **I** | Documentation Health ring; client logo upload — **landed** | 0680 | Health needs "stale" and "not viewed recently" defined; logo needs an upload path reusing the documents storage |
 | ~~**J**~~ | ~~Personal Credentials vault~~ — **dropped**, see decision 14 | — | Superseded by a future Bitwarden/Vaultwarden integration, which is not in this plan |
-| **K** | Email channel + notification toggles | 0690 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles |
+| **K** | Email channel + notification toggles — **landed** | 0690 | New outbound dependency (SMTP config, secrets, docs); unlocks #8's reminder and #10's toggles. It also gave 0420's notification destinations a second transport, because a `transport` column nothing can create is the scaffolding §1 of the notifications doc warns about |
 | **L** | Header and navigation parity: recent-items dropdown, notifications and help icons, Personal and Global as real landing pages, Important Contacts | 0700 | Last because three of its four parts are *assembly* — the dropdown, My Tasks, profile/preferences and the completion grid all have to exist before a page can collect them |
 
 **On the migration numbers.** Two shifts have happened and both are recorded
@@ -237,10 +237,16 @@ header is changed once rather than four times.
 
 **Notifications and the help icon.** The help icon is a link. Notifications are
 not: an in-app notification surface needs a *store*, and `webhook_endpoint` is
-outbound-only. So this is conditional on K — if K has landed, the icon reads
-whatever K's channel records; if not, it ships as a visible stub that says
-there is nothing to show rather than a bell that silently never lights. A bell
-that cannot be distinguished from an empty inbox is worse than no bell.
+outbound-only. K has landed and did **not** provide one — its channel is email
+and its queues (`task_reminder`, `webhook_delivery`) are both outbound, so
+neither is a per-person inbox. What K did leave L is the shape to extend:
+`user_notification_preference.kinds` is a jsonb set with a SQL validator and a
+TypeScript mirror precisely so an in-app kind is a value and not a migration
+per kind, and `helm.notification_kinds_valid()` is the one place that decides
+what is legal. So L still owns the store. Until it exists the icon ships as a
+visible stub that says there is nothing to show rather than a bell that
+silently never lights: a bell that cannot be distinguished from an empty inbox
+is worse than no bell.
 
 **Personal and Global as real pages.** Today `Personal` → `/account` and
 `Global` → `/search` are aliases, which is why they look like parity on the
@@ -1173,6 +1179,99 @@ and a person who assumes a muted icon was a design choice.
 `tests/unit/colour-tokens.test.ts` now fails on any colour utility or inline
 `var(--color-…)` naming a token `globals.css` does not declare.
 
+### Group K — a mail relay of your own, and reminders that use it (migration 0690)
+
+Three features that share one dependency: outbound email. A relay the tenant
+configures, personal reminders about assigned checklist steps, and a second
+transport for the notification destinations 0420 built.
+
+**Helm sends no mail until somebody points it at a relay.** No hosted sender,
+no bundled MTA — the same air-gapped default 0670 established for the external
+checks, for the same reason: an on-premises install that starts talking to the
+internet because it was upgraded is a surprise nobody consented to.
+`smtp_setting` is one row per tenant, `enabled` defaulting to false, and a
+tenant with no row contributes nothing anywhere.
+
+**The relay password is the fourth envelope.** 0360 (RADIUS), 0410 (OIDC) and
+0420 (webhook URL) each seal a secret the application needs and the database
+must never be able to produce; this is the fourth, bound to the tenant because
+there is exactly one row per tenant and the AAD has to name something stable.
+`helm_app` holds no privilege on the envelope columns — asserted per column by
+a guard, and behaviourally by §50, including that `SELECT *` fails for the same
+reason a named column does.
+
+**`checkServerIdentity` cannot pin a self-signed certificate.** This was
+measured, not reasoned about, and the measurement changed the design — see
+decision 29. What is stored is the certificate, in PEM, used as the only
+acceptable CA; the fingerprint the settings page shows is derived from it, so
+the two cannot disagree.
+
+**A reminder belongs to a person, so it gets its own queue.**
+`webhook_delivery` keys on `(endpoint, event_uid)` and every row belongs to a
+destination; a reminder belongs to somebody and names a step. Sharing the table
+would have meant a nullable endpoint and a dedupe key that means two things.
+`task_reminder` carries `(step_id, kind, lead_day)` as its uniqueness, which is
+0100's lead-day construction and the whole reason a sweep every hour is not a
+nuisance: three days before, the day before, and on the day, once each, and
+nothing at all once the step is complete.
+
+**The notification destinations got a transport rather than a second
+mechanism.** §1 of `docs/architecture/10-notifications.md` exists because 0110
+shipped `webhook_endpoint` and `webhook_delivery` with retry fields and a
+dedupe constraint that nothing was ever wired to. A `transport` column with a
+delivery branch and no way to create such a row would be the same mistake with
+a better comment, so `helm.webhook_endpoints()` and
+`helm.set_webhook_endpoint()` were both reissued, the route and the card learned
+the second transport, and the test that matters is an export audit row arriving
+in a real mailbox through the same fan-out, the same queue and the same worker.
+
+**Tests: 28 unit (transport), 26 integration (reminders), 29 integration
+(settings and preferences), 8 integration (the destination surface, including
+the end-to-end send), 5 page value tests, and §50 of `security.sql` at 28
+assertions. 6 sabotages, 6 caught.** The more useful findings came from writing
+the assertions rather than from breaking them:
+
+- **`webhook_envelope_complete` refused every email destination**, and nothing
+  in the migration noticed. 0420's version spells out `IS NOT NULL` seven
+  times; 0690 had made the *other* envelope constraint
+  (`webhook_secret_present`) conditional on the transport and missed this one —
+  which, it turns out, was the only one that ever mattered, because
+  `octet_length(NULL) > 0` is NULL and a CHECK passes on NULL. Found by the
+  integration test trying to create a destination through the route. Both are
+  conditional now, email requiring that *none* of the envelope columns is set,
+  and guard 5b asserts the constraint's text mentions the transport so a later
+  migration cannot reissue 0420's version and break it silently.
+- **`audit:read` alone opened the reminder queue to a client administrator.**
+  The first draft of `task_reminder_rls_select` was
+  `user_id = current_actor_id() OR has_permission('audit:read')`.
+  `client_admin` holds `audit:read` in the shipped catalogue and the table has
+  no organisation to scope on, so a client administrator at one client could
+  read reminders naming another client's steps — and learn that the other
+  client exists. It now requires a tenant-wide seat for the oversight half.
+  Decision 31.
+- **`helm_app` and `helm_worker` could write `task_reminder` directly**, which
+  0220's default privileges had granted and the policies did not catch: the
+  INSERT and UPDATE policies check the tenant and not the person, deliberately,
+  because the writers act for other people. So any signed-in member could have
+  raised a reminder in somebody else's name or marked one sent. All five
+  writers are `SECURITY DEFINER`, so the revoke costs nothing. The same
+  correction 0680 had to make for `node_view_stat`, found the same way.
+- **§37's `has_function_privilege` assertion caught the signature change** for
+  free. It names `helm.set_webhook_endpoint`'s full argument list, and
+  `has_function_privilege` *raises* on a signature that does not exist rather
+  than returning false — so reissuing the function with two more parameters
+  could not quietly leave the grant behind.
+- **`recipientAllowed` was called outside a tenant context** and therefore
+  refused every address. The zero-row-is-not-an-error family again, from the
+  read side: `helm.email_recipient_allowed` is `STABLE` and not a definer
+  function, so called on a bare connection it saw no `smtp_setting` row and
+  answered no. Asking inside `withTenant` is the fix.
+- **A pinned certificate reached the settings props as a PEM** in the first
+  draft of the card's reader. It is a fingerprint now, derived, and a page test
+  asserts the props contain no `BEGIN CERTIFICATE` — a pinned certificate is
+  not secret, but a wall of base64 is something people scroll past and a
+  fingerprint is what an operator can compare.
+
 ## Decisions
 
 The questions this document opened with have been answered. Recorded here
@@ -1703,6 +1802,93 @@ is how the same argument gets had twice.
     and `src/lib/ui/logo.ts` is the single place that decides — three call sites
     render `ClientAvatar`, and a precedence rule written out three times is a
     rule that is wrong in one of them.
+
+29. **A certificate is pinned by being the only acceptable CA, because a
+    fingerprint cannot be enforced (K).** The first design stored a SHA-256
+    fingerprint and compared it in `checkServerIdentity`. Measured against
+    Node, that does not work in either direction: with
+    `rejectUnauthorized: false` the callback is **never called**, and with
+    `rejectUnauthorized: true` a self-signed chain is **refused before it
+    runs** — so the hook fires only in the case where there was nothing to
+    check. What works is `ca: [pem]` with `rejectUnauthorized: true`, which
+    reports `authorized = true` for that certificate, refuses a different one,
+    and behaves the same for implicit TLS and STARTTLS.
+
+    So the column holds a certificate, not a digest, and the settings page
+    shows a fingerprint derived from it. The route refuses verification-off
+    with no pin, and refuses a pin on a plaintext connection — where no
+    certificate is ever presented, so a pin is a configuration somebody
+    believes is protecting them.
+
+30. **Sending without TLS needs a signature, and the signature describes the
+    setting in force (K).** `security = 'plaintext'` is savable, because a
+    relay on a trusted VLAN is a real deployment and refusing it outright means
+    somebody runs a plaintext relay Helm does not know about. But it requires
+    `acknowledgePlaintext`, and a CHECK ties the acknowledgement to the mode:
+    `(security = 'plaintext') = (plaintext_acknowledged_at IS NOT NULL AND
+    plaintext_acknowledged_by IS NOT NULL)`. Moving to STARTTLS clears it, so
+    the record always describes what is configured now rather than something
+    accepted once in 2024.
+
+31. **`audit:read` is not a tenant-wide seat, and a table with no organisation
+    column cannot rely on it (K).** `task_reminder` names a person and a step,
+    the step belongs to a run, and the run belongs to a client — but the
+    reminder row carries no `organization_id`, so there is nothing for
+    `helm.org_in_scope()` to test. The first policy therefore leaned on
+    `audit:read` for the MSP's oversight and leaked: `client_admin` holds
+    `audit:read`, so a client administrator could read every reminder in the
+    tenant.
+
+    The rule taken from this, which applies past K: **a permission is not a
+    scope.** Where a row has no organisation to scope on, a client-side role is
+    excluded by `helm.is_tenant_wide()` and not by the absence of a permission
+    somebody may well hold. Both halves are asserted — a guard on the policy's
+    text, and §50 reading a planted row from four different seats.
+
+32. **A notification destination's transport is fixed once it exists (K).**
+    Switching one would have to clear the envelope columns of the transport
+    being left behind, re-validate against the other transport's rules, and
+    decide what the delivery history now describes — all to save a "new
+    destination" click. Worse, the obvious implementation is silently wrong:
+    an email destination saved as a webhook carries no URL, so the route takes
+    the update path, and `helm.update_webhook_endpoint()` does not touch
+    `transport` — the screen would report a change that never happened. Refused
+    with an explanation instead.
+
+    Two smaller rules fall out of the same place. The **address is returned in
+    full** where the URL never is, because for Discord and Teams the URL *is*
+    the credential while an address is a destination somebody has to be able to
+    read. And the **payload format and the signing secret are normalised away**
+    for an email destination rather than refused: `format` names a webhook
+    payload shape and a signature proves a POST body came from Helm, so both
+    are fields nobody chose once the transport is email. The read-back reports
+    what was stored, so nothing is hidden.
+
+33. **A notification preference is private, and nobody can set somebody
+    else's (K).** Same rule as `user_sidebar` and `user_dashboard`, with a
+    stronger reason: what somebody chooses to be told about says something
+    about what they are paying attention to. RLS admits only rows where
+    `user_id = helm.current_actor_id()`, which makes the policy the
+    authorisation — so the route is gated on no permission at all, and there is
+    no administrator screen for it and no policy that would allow one. A client
+    read-only user assigned a checklist step decides for themselves whether to
+    hear about it.
+
+    **An empty array is a real answer**, meaning "nothing" rather than "use the
+    default". Both kinds are on when no row exists, because email is off at the
+    tenant level until an administrator configures a relay — so nothing can
+    arrive unasked-for, and defaulting off would mean the feature appears
+    broken to everybody who was not told to go and switch it on.
+
+34. **The relay has no test button, because a relay is proved by a real
+    send (K).** The obvious control — "send a test message" on the settings
+    card — would need the worker's role in a request handler to reach the
+    password, and would be a second sending path that can disagree with the one
+    that actually delivers. Instead the existing destination test is the test:
+    add an email destination, press Test, and the outcome lands on the relay
+    card, because every send records `last_send_ok`/`last_send_error` against
+    `smtp_setting` whoever triggered it. The card says so rather than leaving
+    the absence looking like an omission.
 
 Two further decisions taken at the same time:
 
