@@ -158,11 +158,13 @@ export function unpackBundle(bytes: Buffer, passphrase?: string): UnpackedBundle
   if (version === (FORMAT_V1 | 0x80)) {
     if (!passphrase) throw new Error('this bundle is encrypted; a passphrase is required');
 
-    let offset = MAGIC.length + 1;
-    const salt = bytes.subarray(offset, (offset += SALT_BYTES));
-    const nonce = bytes.subarray(offset, (offset += NONCE_BYTES));
-    const tag = bytes.subarray(offset, (offset += TAG_BYTES));
-    const ciphertext = bytes.subarray(offset);
+    const saltAt = MAGIC.length + 1;
+    const nonceAt = saltAt + SALT_BYTES;
+    const tagAt = nonceAt + NONCE_BYTES;
+    const salt = bytes.subarray(saltAt, nonceAt);
+    const nonce = bytes.subarray(nonceAt, tagAt);
+    const tag = bytes.subarray(tagAt, tagAt + TAG_BYTES);
+    const ciphertext = bytes.subarray(tagAt + TAG_BYTES);
 
     const key = deriveKey(passphrase, salt);
     try {

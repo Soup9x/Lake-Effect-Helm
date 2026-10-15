@@ -32,7 +32,7 @@
 import { useId, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { GripVertical, Plus, Trash2 } from 'lucide-react';
-import { Modal } from './ui/modal';
+import { Modal, ModalTrigger } from './ui/modal';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Badge } from './ui/badge';
@@ -186,7 +186,7 @@ export function FlexibleTypeEditor({
 
   return (
     <>
-      <span onClick={() => setOpen(true)}>{trigger}</span>
+      <ModalTrigger onOpen={() => setOpen(true)}>{trigger}</ModalTrigger>
       <Modal
         open={open}
         onOpenChange={setOpen}

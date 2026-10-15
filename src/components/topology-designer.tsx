@@ -194,7 +194,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
   const onPointerUp = async () => {
     const d = drag.current;
     drag.current = null;
-    if (!d || !d.moved) return;
+    if (!d?.moved) return;
 
     const at = positions.get(d.id);
     if (!at) return;
@@ -330,6 +330,8 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
                 ref={surface}
                 width={extent.w}
                 height={extent.h}
+                role="img"
+                aria-label={`Network diagram for ${siteName}`}
                 className="block touch-none select-none"
                 onPointerMove={onPointerMove}
                 onPointerUp={() => void onPointerUp()}
@@ -346,6 +348,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
                   const y2 = b.y + BOX.h / 2;
                   const active = selected === link.id;
                   return (
+                    // biome-ignore lint/a11y/noStaticElementInteractions: a diagram edge; selection by pointer is the only editing offered, as the header says
                     <g key={link.id} onClick={() => setSelected(active ? null : link.id)}>
                       {/* A 12px transparent stroke under the visible one: a
                           1px line is a cruel click target. */}
@@ -375,6 +378,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
                   const active = selected === node.id;
                   const linkSource = linkingFrom === node.id;
                   return (
+                    // biome-ignore lint/a11y/noStaticElementInteractions: a diagram node, dragged with the pointer; see the edge above
                     <g
                       key={node.id}
                       transform={`translate(${at.x},${at.y})`}

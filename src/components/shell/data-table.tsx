@@ -159,11 +159,12 @@ export function DataTable<T extends GridRow>({
    * tag change applied to a row nobody could see. SelectableTable already
    * behaved this way; this is the same rule.
    */
+  // Only a change in what is visible can make a selection stale, so `filtered`
+  // is the whole dependency list on purpose.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
   useEffect(() => {
     const kept = retainVisible(selected, filtered.map((row) => row.id));
     if (kept) setSelection(kept);
-    // Only a change in what is visible can make a selection stale.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtered]);
 
   const allVisibleSelected = sorted.length > 0 && sorted.every((r) => selected.has(r.id));

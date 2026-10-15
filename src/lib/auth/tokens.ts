@@ -86,7 +86,7 @@ export function bearerFrom(headers: Headers): string | null {
   const header = headers.get('authorization');
   if (!header) return null;
   const [scheme, ...rest] = header.split(' ');
-  if (!scheme || scheme.toLowerCase() !== 'bearer') return null;
+  if (scheme?.toLowerCase() !== 'bearer') return null;
   const value = rest.join(' ').trim();
   return value.length > 0 ? value : null;
 }

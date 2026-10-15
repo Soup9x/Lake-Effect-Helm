@@ -38,7 +38,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowDown, ArrowUp, GripVertical, Plus, RotateCcw, X } from 'lucide-react';
-import { Modal } from './ui/modal';
+import { Modal, ModalTrigger } from './ui/modal';
 import { Button } from './ui/button';
 import { reorder } from '@/lib/workspace/widgets';
 import { ORG_CATEGORIES } from '@/lib/nav/org-categories';
@@ -165,7 +165,7 @@ export function SidebarCustomise({
 
   return (
     <>
-      <span onClick={() => onOpenChange(true)}>{trigger}</span>
+      <ModalTrigger onOpen={() => onOpenChange(true)}>{trigger}</ModalTrigger>
 
       <Modal
         open={open}

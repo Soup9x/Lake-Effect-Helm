@@ -171,7 +171,7 @@ export function ProfileForm({
 
       <div className="space-y-1.5">
         <Label htmlFor="theme-default">Default theme</Label>
-        <div role="group" aria-labelledby="theme-default" className="flex flex-wrap gap-2">
+        <fieldset aria-labelledby="theme-default" className="flex flex-wrap gap-2">
           {THEMES.map((value) => {
             const { label, icon: Icon } = THEME_LABELS[value];
             return (
@@ -192,7 +192,7 @@ export function ProfileForm({
               </button>
             );
           })}
-        </div>
+        </fieldset>
         <FieldHint>
           What a browser you have not used before starts with. The switcher in the shell overrides
           it on this machine only, and keeps doing so until you clear it there.

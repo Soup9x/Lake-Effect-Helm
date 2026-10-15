@@ -154,7 +154,7 @@ export function checkUpload(input: {
   }
   // Control characters render as nothing, so two files look identical in a list
   // and only one of them is the one somebody meant.
-  // eslint-disable-next-line no-control-regex
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the control characters are the point
   if (/[\u0000-\u001f\u007f]/.test(filename)) {
     return {
       ok: false,

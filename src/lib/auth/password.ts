@@ -222,6 +222,7 @@ export function checkPasswordPolicy(
   if (plaintext !== plaintext.trim()) {
     problems.push('must not start or end with a space');
   }
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the control characters are the point
   if (/[\x00-\x08\x0e-\x1f\x7f]/.test(plaintext)) {
     problems.push('must not contain control characters');
   }

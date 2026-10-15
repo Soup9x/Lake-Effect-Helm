@@ -92,19 +92,21 @@ export function TotpPanel({
    */
   const inFlight = useRef(false);
 
-  const clearTick = () => {
+  // Both touch only refs and setters, so they are stable across renders and
+  // safe to list as dependencies without re-running anything.
+  const clearTick = useCallback(() => {
     if (tick.current) clearInterval(tick.current);
     tick.current = null;
-  };
+  }, []);
 
-  useEffect(() => clearTick, []);
+  useEffect(() => clearTick, [clearTick]);
 
-  const stop = () => {
+  const stop = useCallback(() => {
     clearTick();
     startedAt.current = null;
     setState({ status: 'idle' });
     setElapsed(0);
-  };
+  }, [clearTick]);
 
   /**
    * One attempt, reduced to granted-or-refused.
@@ -152,7 +154,7 @@ export function TotpPanel({
     } finally {
       inFlight.current = false;
     }
-  }, [attempt, stepUp.prompt]);
+  }, [attempt, stepUp.prompt, clearTick]);
 
   const show = async () => {
     startedAt.current = Date.now();
@@ -189,7 +191,7 @@ export function TotpPanel({
       return;
     }
     void load();
-  }, [remaining, state.status, load]);
+  }, [remaining, state.status, load, stop]);
 
   const subject = [issuer, account].filter(Boolean).join(' · ');
 

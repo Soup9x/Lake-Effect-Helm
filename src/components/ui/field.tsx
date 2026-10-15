@@ -40,6 +40,7 @@ export function Select({ className, ...props }: ComponentProps<'select'>) {
 }
 
 export function Label({ className, ...props }: ComponentProps<'label'>) {
+  // biome-ignore lint/a11y/noLabelWithoutControl: a primitive; every caller passes htmlFor
   return <label className={cn('text-sm font-medium text-ink', className)} {...props} />;
 }
 

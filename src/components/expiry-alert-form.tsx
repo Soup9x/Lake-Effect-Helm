@@ -17,7 +17,7 @@ import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
-import { Modal } from './ui/modal';
+import { Modal, ModalTrigger } from './ui/modal';
 import { LEAD_DAY_MAX, MAX_LEAD_DAYS, parseLeadDays, type ExpiryAlertSetting } from '@/lib/alerts/expiry';
 import { apiFetch } from '@/lib/ui/api';
 
@@ -71,7 +71,7 @@ export function ExpiryAlertForm({
 
   return (
     <>
-      <span onClick={() => openWith(true)}>{trigger}</span>
+      <ModalTrigger onOpen={() => openWith(true)}>{trigger}</ModalTrigger>
       <Modal
         open={open}
         onOpenChange={openWith}

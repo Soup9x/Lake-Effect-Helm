@@ -24,7 +24,7 @@ import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
-import { Modal } from './ui/modal';
+import { Modal, ModalTrigger } from './ui/modal';
 import { HEALTH_DAYS_MAX, HEALTH_DAYS_MIN, type HealthSetting } from '@/lib/health/window';
 import { apiFetch } from '@/lib/ui/api';
 
@@ -87,10 +87,9 @@ export function HealthWindowForm({
 
   return (
     <>
-      {/* The same trigger shape every other modal in this project uses: the
-          caller renders the button, this wraps it. A server component cannot
-          pass a component reference across the boundary. */}
-      <span onClick={() => openWith(true)}>{trigger}</span>
+      {/* The caller renders the button; the trigger wraps it, because a server
+          component cannot pass a component reference across the boundary. */}
+      <ModalTrigger onOpen={() => openWith(true)}>{trigger}</ModalTrigger>
       <Modal
         open={open}
         onOpenChange={openWith}

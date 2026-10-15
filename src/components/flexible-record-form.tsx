@@ -36,7 +36,7 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
-import { Modal } from './ui/modal';
+import { Modal, ModalTrigger } from './ui/modal';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
@@ -247,7 +247,7 @@ export function FlexibleRecordForm({
       {/* onOpenChange rather than setOpen: opening is where the draft is
           re-seeded from props, so bypassing it is the bug the comment above
           describes. */}
-      <span onClick={() => onOpenChange(true)}>{trigger}</span>
+      <ModalTrigger onOpen={() => onOpenChange(true)}>{trigger}</ModalTrigger>
 
       <Modal
         open={open}

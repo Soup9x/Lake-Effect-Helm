@@ -22,7 +22,7 @@ import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
-import { Modal } from './ui/modal';
+import { Modal, ModalTrigger } from './ui/modal';
 import {
   INTERVAL_MAX_HOURS, INTERVAL_MIN_HOURS, type ExternalCheckSetting,
 } from '@/lib/external/settings';
@@ -100,7 +100,7 @@ export function ExternalChecksForm({
 
   return (
     <>
-      <span onClick={() => openWith(true)}>{trigger}</span>
+      <ModalTrigger onOpen={() => openWith(true)}>{trigger}</ModalTrigger>
       <Modal
         open={open}
         onOpenChange={openWith}
