@@ -25,7 +25,6 @@
  * and a bad secret are deliberately indistinguishable from outside, so this
  * endpoint cannot be used to discover which mapping ids exist.
  */
-import { createHash } from 'node:crypto';
 import { db, withTenant } from '../db/client';
 import { getBlindIndex, getKekProvider } from '../services';
 import { activeDataKey } from '../secrets/keys';
@@ -333,9 +332,4 @@ function sealThreatField(
     version: 1,
   });
   return Buffer.concat([envelope.nonce, envelope.authTag, envelope.ciphertext]);
-}
-
-/** A stable digest of a body, for logging a rejection without logging the body. */
-export function bodyDigest(body: string): string {
-  return createHash('sha256').update(body, 'utf8').digest('hex').slice(0, 12);
 }

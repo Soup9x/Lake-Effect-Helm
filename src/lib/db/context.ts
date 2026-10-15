@@ -66,24 +66,3 @@ export function parseResolvedContext(raw: RawResolvedContext): ResolvedSessionCo
     requireStepUp: raw.require_step_up,
   };
 }
-
-export function hasPermission(ctx: ResolvedSessionContext, permission: string): boolean {
-  return ctx.permissions.includes(permission);
-}
-
-export function isTenantWide(ctx: ResolvedSessionContext): boolean {
-  return ctx.orgScope === '*';
-}
-
-/**
- * Whether an organisation is inside the actor's scope.
- *
- * Mirrors helm.org_in_scope() so the UI can grey out an action instead of
- * letting the user click it and receive a 403. It is NOT the security
- * boundary — that is the RLS policy, which runs regardless of what this says.
- */
-export function orgInScope(ctx: ResolvedSessionContext, organizationId: string): boolean {
-  if (ctx.orgScope === '') return false;
-  if (ctx.orgScope === '*') return true;
-  return ctx.orgScope.split(',').includes(organizationId);
-}

@@ -18,7 +18,7 @@
  * functions below and cannot read a password hash by any path; that separation
  * is asserted by a guard in db/sql/0340_local_authentication.sql.
  */
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { db } from '../db/client';
 import { authenticate as radiusAuthenticate } from './radius';
 import { radiusForEmail } from './radius-config';
@@ -605,18 +605,4 @@ async function recordResetRefusal(sql: ReturnType<typeof db>, ip?: string): Prom
     SELECT helm.record_login_attempt(
       ${''}, NULL::uuid, 'reset_refused', ${ip ?? null}::inet, NULL)
   `;
-}
-
-/**
- * Compare a token against a stored digest without a timing signal.
- *
- * The lookup in redeemPasswordReset is an indexed equality on the digest, which
- * is already constant in the useful sense — the index tells an attacker nothing
- * about how many leading bytes matched. This exists for callers that have both
- * values in hand and would otherwise reach for `===`.
- */
-export function tokenMatches(token: string, storedSha256: Buffer): boolean {
-  const digest = createHash('sha256').update(token).digest();
-  if (digest.length !== storedSha256.length) return false;
-  return timingSafeEqual(digest, storedSha256);
 }

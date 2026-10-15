@@ -413,12 +413,6 @@ export const handlers: NextAuthResult['handlers'] = {
 export const auth: NextAuthResult['auth'] = ((...args: unknown[]) =>
   (nextAuth().auth as (...a: unknown[]) => unknown)(...args)) as NextAuthResult['auth'];
 
-export const signIn: NextAuthResult['signIn'] = ((...args: unknown[]) =>
-  (nextAuth().signIn as (...a: unknown[]) => unknown)(...args)) as NextAuthResult['signIn'];
-
-export const signOut: NextAuthResult['signOut'] = ((...args: unknown[]) =>
-  (nextAuth().signOut as (...a: unknown[]) => unknown)(...args)) as NextAuthResult['signOut'];
-
 /**
  * Bind the session resolver.
  *

@@ -77,20 +77,6 @@ export const DEFAULT_NOTIFICATION_KINDS: readonly NotificationKind[] = [
 /** Matches 0690's task_reminder_kind enum. */
 export type TaskReminderKind = 'assigned' | 'due';
 
-/**
- * Which preference governs a reminder.
- *
- * The two vocabularies are deliberately not the same word: the reminder's kind
- * is why it was raised ('assigned', 'due'), while the preference names what a
- * person is choosing to receive ('task_assigned', 'task_due'). Keeping them
- * distinct means the queue's enum can grow a kind — a reminder for a blocked
- * step, say — without silently inheriting somebody's answer to a different
- * question.
- */
-export function kindFor(reminder: TaskReminderKind): NotificationKind {
-  return reminder === 'assigned' ? 'task_assigned' : 'task_due';
-}
-
 export const KIND_LABELS: Record<NotificationKind, { title: string; hint: string }> = {
   task_assigned: {
     title: 'A checklist step is assigned to me',
@@ -124,17 +110,6 @@ export const KIND_LABELS: Record<NotificationKind, { title: string; hint: string
       + 'Also covers a tenant key being rotated or retired.',
   },
 };
-
-/** Whether a stored preference enables a kind, with the default applied. */
-export function wants(
-  stored: readonly string[] | null | undefined,
-  kind: NotificationKind,
-): boolean {
-  if (stored === null || stored === undefined) {
-    return DEFAULT_NOTIFICATION_KINDS.includes(kind);
-  }
-  return stored.includes(kind);
-}
 
 /** Drop anything that is not a known kind, and de-duplicate. */
 export function normaliseKinds(raw: readonly string[]): NotificationKind[] {

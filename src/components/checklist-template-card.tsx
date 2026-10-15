@@ -24,9 +24,8 @@
  */
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import {
-  ArrowDown, ArrowUp, BookOpen, CircleDot, GripVertical, Loader2, Play, Plus, Trash2, Upload,
+  ArrowDown, ArrowUp, BookOpen, GripVertical, Loader2, Play, Plus, Trash2, Upload,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -37,7 +36,6 @@ import { reorder } from '@/lib/workspace/widgets';
 import { STEP_LIMITS, validateSteps, type StepDraft } from '@/lib/sops/steps';
 import type { TemplateView } from '@/lib/sops/queries';
 import { formatDateTime, fromDateTimeLocalInput } from '@/lib/ui/format';
-import { cn } from '@/lib/ui/cn';
 
 export function ChecklistTemplateCard({
   sopId,
@@ -452,42 +450,5 @@ export function ChecklistTemplateCard({
         </div>
       </Modal>
     </Card>
-  );
-}
-
-/** A run's progress, as a line of text. Used by the client page's list. */
-export function RunProgress({
-  done,
-  total,
-  remainingRequired,
-  status,
-}: {
-  done: number;
-  total: number;
-  remainingRequired: number;
-  status: string;
-}) {
-  return (
-    <span className="flex items-center gap-1.5 text-xs text-ink-muted">
-      <CircleDot
-        className={cn(
-          'size-3',
-          status === 'completed' ? 'text-ok' : status === 'abandoned' ? 'text-ink-faint' : 'text-sev-notice',
-        )}
-        aria-hidden
-      />
-      {done} of {total} done
-      {remainingRequired > 0 && status !== 'completed' && status !== 'abandoned'
-        && ` · ${remainingRequired} required left`}
-    </span>
-  );
-}
-
-/** A link to a run, for the client page. Here so the card and the list agree. */
-export function RunLink({ runId, children }: { runId: string; children: React.ReactNode }) {
-  return (
-    <Link href={`/runs/${runId}`} className="text-sm text-brand hover:underline">
-      {children}
-    </Link>
   );
 }
