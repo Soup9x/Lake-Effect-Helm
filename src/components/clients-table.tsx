@@ -55,23 +55,7 @@ export interface ClientRow extends GridRow {
     warningCount: number;
     reasons: string[] | null;
   };
-  /** Last sync outcome for this client, or null where no integration covers it. */
-  sync: { status: string; at: string | null } | null;
   pinned: boolean;
-}
-
-/**
- * Sync Status is a placeholder for PSA/RMM sync and says so.
- *
- * A column that renders nothing for every row teaches people to ignore it. "Not
- * linked" is a fact — this client has no integration mapped — and is different
- * from a sync that ran and failed, which is the state worth a colour.
- */
-function SyncCell({ sync }: { sync: ClientRow['sync'] }) {
-  if (!sync) return <span className="text-xs text-ink-faint">Not linked</span>;
-  const tone =
-    sync.status === 'succeeded' ? 'ok' : sync.status === 'failed' ? 'danger' : 'notice';
-  return <Badge tone={tone}>{sync.status}</Badge>;
 }
 
 export function ClientsTable({
@@ -146,13 +130,6 @@ export function ClientsTable({
             {row.status.replace(/_/g, '-')}
           </span>
         ),
-      },
-      {
-        key: 'sync',
-        header: 'Sync',
-        secondary: true,
-        sortBy: (row) => row.sync?.status ?? '',
-        cell: (row) => <SyncCell sync={row.sync} />,
       },
       {
         key: 'health',

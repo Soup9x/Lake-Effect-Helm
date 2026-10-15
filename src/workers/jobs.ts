@@ -16,13 +16,16 @@
  *
  *   01  alerts.evaluate        05  exports.render       09  notifications.deliver
  *   02  alerts.deliver         06  exports.expire       0a  unifi.sync
- *   03  integration.sync       07  auth.prune           0b  external.checks
+ *   03  (retired)              07  auth.prune           0b  external.checks
  *   04  audit.anchor           08  notifications.fanout 0c  reminders.raise
  *                                                       0d  reminders.deliver
+ *
+ * 03 belonged to integration.sync, the generic RMM/PSA adapter, removed because
+ * nothing could configure a connection for it. Do not reuse it: an old worker
+ * still running during a rolling upgrade could hold it.
  */
 import { deliverExpiryAlertsJob, evaluateExpiryAlertsJob } from './alerts';
 import { anchorAuditChainJob } from './anchor';
-import { integrationSyncJob } from './sync';
 import { renderExportsJob, expireExportsJob } from './exports';
 import { pruneAuthAttemptsJob } from './auth-hygiene';
 import { fanOutNotificationsJob, deliverNotificationsJob } from './notifications';
@@ -35,7 +38,6 @@ export function allJobs(): Job[] {
   return [
     evaluateExpiryAlertsJob(),
     deliverExpiryAlertsJob(),
-    integrationSyncJob(),
     anchorAuditChainJob(),
     renderExportsJob(),
     expireExportsJob(),

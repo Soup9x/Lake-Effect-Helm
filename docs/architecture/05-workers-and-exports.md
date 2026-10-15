@@ -146,50 +146,28 @@ run sends them again.
 
 ---
 
-## 5. Integration sync
+## 5. Integration sync (removed)
 
-The **engine** is complete and vendor-independent; the vendor part is
-configuration. Every RMM and PSA in scope — NinjaOne, N-able N-central and RMM,
-ConnectWise, HaloPSA, Autotask, Microsoft Graph — exposes a paged JSON REST API
-over bearer or basic authentication, so one configurable adapter covers them:
-`integration_connection.config` names the path, the pagination style, and a
-field map from the vendor's JSON to Helm's columns. `registerProvider()` is
-there for the cases where a bespoke client genuinely earns its keep — Microsoft
-Graph's delta queries are the obvious first candidate.
+A generic RMM/PSA sync job — one configurable REST adapter meant to cover
+NinjaOne, N-able, ConnectWise, HaloPSA, Autotask and Microsoft Graph — was
+removed from the worker. Nothing could reach it: no route, settings form,
+script or seed ever created an `integration_connection`, so the job reported
+idle on every tick. It also carried defects that would have surfaced on first
+use: a record that failed mid-page aborted the page's transaction while the run
+still reported rows as created, the "resume from cursor" path always restarted
+from the beginning, and it revealed the vendor credential on every page.
 
-This is a deliberate choice, not a stub. Hand-writing six clients against six
-APIs that each version independently, with no live tenant of any of them to test
-against, produces six plausible-looking files that are wrong in six different
-ways.
-
-What the engine guarantees:
-
-**Correlation.** Every external record maps to a Helm node through
-`external_identity`, whose unique constraints pin both directions. Without that,
-the second sync creates duplicates and the third sync's "cleanup" deletes real
-documentation.
-
-**Manual edits survive.** With `respect_manual_edits` on (the default), an
-inbound value only fills a field that is still NULL. A technician who corrected
-a hostname the RMM has wrong keeps their correction. Last-writer-wins teaches
-technicians that editing anything is pointless, and then the documentation stops
-being maintained.
-
-**Unchanged records cost nothing.** The vendor payload is hashed with
-key-sorted JSON and compared to the last one seen, so a nightly sync over 4,000
-devices writes only what moved. This is also what keeps the audit log readable.
-
-**Exponential backoff.** A connection whose vendor credentials were revoked
-would otherwise be retried every five minutes forever — thousands of failed
-authentications a day against the client's RMM, which is how an MSP's
-integration account gets locked out across every client at once. Backoff doubles
-to 32× the configured interval. A connection that has never run is due
-immediately, so an administrator finds out within a minute whether the
-credentials they just entered work.
-
-**A failed run does not advance the cursor.** Advancing it after a partial
-failure silently skips whatever was missed, and nobody finds out until a client
-asks why a server is not documented.
+The schema it was written against stays, because applied migrations are never
+edited: `integration_connection`, `integration_sync_run`, `external_identity`,
+`helm.sync_due()` and the `integration` reveal purpose for the `system_sync`
+identity (which tests/integration/workers.test.ts still exercises). A future
+vendor integration should be built the way the UniFi one was
+(`11-network-integration.md`): a dedicated client, tested against a real
+account, with its own settings card. The properties the removed engine aimed
+for still apply to whatever replaces it — correlate every record through
+`external_identity`, never overwrite a manual edit by default, skip unchanged
+payloads by hash, back off a failing connection, and never advance the cursor
+past a partial failure.
 
 ---
 

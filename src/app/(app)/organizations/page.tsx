@@ -31,8 +31,6 @@ interface OrganizationQueryRow {
   critical_count: number;
   warning_count: number;
   reasons: string[] | null;
-  sync_status: string | null;
-  sync_at: Date | null;
 }
 
 /**
@@ -96,23 +94,9 @@ export default async function OrganizationsPage({
         coalesce(h.expired_count, 0) AS expired_count,
         coalesce(h.critical_count, 0) AS critical_count,
         coalesce(h.warning_count, 0) AS warning_count,
-        h.reasons,
-        -- The most recent run of any integration covering this client. LATERAL
-        -- rather than a correlated subquery because two columns come back
-        -- together, and a NULL here means "no integration is mapped", which the
-        -- Sync column renders differently from a run that failed.
-        sync.status::text AS sync_status,
-        sync.finished_at AS sync_at
+        h.reasons
       FROM organization o
       LEFT JOIN v_client_health h ON h.organization_id = o.id
-      LEFT JOIN LATERAL (
-        SELECT r.status, r.finished_at
-        FROM integration_sync_run r
-        JOIN integration_connection c ON c.id = r.connection_id
-        WHERE c.organization_id = o.id
-        ORDER BY r.started_at DESC
-        LIMIT 1
-      ) sync ON true
       WHERE o.deleted_at IS NULL
         AND (${showArchived}::boolean = (o.archived_at IS NOT NULL))
         AND (${typeFilter}::text IS NULL OR o.relationship::text = ${typeFilter})
@@ -166,9 +150,6 @@ export default async function OrganizationsPage({
       warningCount: org.warning_count,
       reasons: org.reasons,
     },
-    sync: org.sync_status
-      ? { status: org.sync_status, at: org.sync_at?.toISOString() ?? null }
-      : null,
     pinned: pinned.has(org.id),
   }));
 
