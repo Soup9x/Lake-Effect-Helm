@@ -79,15 +79,31 @@ export function parseAad(aad: string): SecretBinding & { aadVersion: string } {
 }
 
 /**
+ * Refuse a key that cannot be the real DEK before encrypting anything under it.
+ *
+ * All-zero is what a DEK looks like after DekCache eviction has wiped it. A
+ * length check alone let exactly that through: the value was sealed under 32
+ * zero bytes and stored against the real data_key_id, unreadable to Helm and
+ * readable to anyone with a dump. A random 256-bit key is never all zero, so
+ * this refuses nothing legitimate.
+ */
+export function assertSealingKey(dek: Buffer): void {
+  if (dek.length !== 32) {
+    throw new HelmCryptoError('invalid_envelope', `DEK must be 32 bytes, got ${dek.length}`);
+  }
+  if (dek.every((byte) => byte === 0)) {
+    throw new HelmCryptoError('invalid_envelope', 'refusing to encrypt under an all-zero key');
+  }
+}
+
+/**
  * Encrypt one field.
  *
  * `dek` must be the 32-byte unwrapped key. `plaintext` is zeroed by the caller,
  * not here — this function does not own it.
  */
 export function sealField(dek: Buffer, plaintext: Buffer, binding: SecretBinding): Envelope {
-  if (dek.length !== 32) {
-    throw new HelmCryptoError('invalid_envelope', `DEK must be 32 bytes, got ${dek.length}`);
-  }
+  assertSealingKey(dek);
   if (plaintext.length === 0) {
     throw new HelmCryptoError('invalid_envelope', 'refusing to encrypt an empty value');
   }

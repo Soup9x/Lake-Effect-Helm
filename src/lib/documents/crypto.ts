@@ -28,7 +28,7 @@
 import { createCipheriv, createDecipheriv } from 'node:crypto';
 import { randomBytes } from 'node:crypto';
 import { HelmCryptoError } from '../crypto/errors';
-import { NONCE_BYTES, TAG_BYTES, buildAad, type SecretBinding } from '../crypto/envelope';
+import { NONCE_BYTES, TAG_BYTES, assertSealingKey, buildAad, type SecretBinding } from '../crypto/envelope';
 
 /** The field name every document ciphertext is bound to. */
 export const DOCUMENT_FIELD = 'document';
@@ -45,9 +45,7 @@ export function documentBinding(tenantId: string, attachmentId: string): SecretB
 }
 
 export function sealDocument(dek: Buffer, plaintext: Buffer, binding: SecretBinding): SealedDocument {
-  if (dek.length !== 32) {
-    throw new HelmCryptoError('invalid_envelope', `DEK must be 32 bytes, got ${dek.length}`);
-  }
+  assertSealingKey(dek);
   if (plaintext.length === 0) {
     throw new HelmCryptoError('invalid_envelope', 'refusing to encrypt an empty file');
   }

@@ -402,21 +402,73 @@ describe('DEK cache', () => {
     expect(await cache.get(request)).toEqual(plaintext);
   });
 
-  it('zeroes and drops a key on invalidate', async () => {
+  it('drops a key on invalidate, so the next get unwraps again', async () => {
     const { kek, spy, provider } = makeProvider();
     const context = tenantKeyContext(TENANT, 1);
     const { wrapped, kekId } = await kek.generateDek(context);
     const cache = new DekCache(provider);
     const request = { dataKeyId: 'key-1', wrappedDek: wrapped, kekId, context };
 
-    const first = await cache.get(request);
+    await cache.get(request);
     cache.invalidate('key-1');
-    // The cache's copy is zeroed on eviction; a caller that squirrelled it away
-    // sees that, which is the intended signal not to hold DEKs.
-    expect(first.every((b) => b === 0)).toBe(true);
-
     await cache.get(request);
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('never zeroes a key a request is still using when another request evicts it', async () => {
+    // The race this replays: writeVersion() fetches the DEK, then awaits a row
+    // lock in begin_secret_write(). Meanwhile the entry expires and another
+    // request's get() evicts it — which zeroes the cached bytes in place. When
+    // the cache handed out its own Buffer, the first request then sealed the
+    // secret under 32 zero bytes.
+    const { kek, provider } = makeProvider();
+    const context = tenantKeyContext(TENANT, 1);
+    const { wrapped, kekId, plaintext } = await kek.generateDek(context);
+
+    let now = 1_000_000;
+    const cache = new DekCache(provider, { ttlMs: 60_000, now: () => now });
+    const request = { dataKeyId: 'key-1', wrappedDek: wrapped, kekId, context };
+
+    const inFlight = await cache.get(request);
+    now += 61_000;
+    await cache.get(request); // evicts the expired entry
+    cache.clear(); // and KEK rotation clears everything
+
+    expect(inFlight).toEqual(plaintext);
+    expect(() =>
+      sealField(inFlight, Buffer.from('still the right key'), {
+        tenantId: TENANT, secretId: 'secret-1', field: 'value', version: 1,
+      }),
+    ).not.toThrow();
+  });
+
+  it('hands every caller its own copy', async () => {
+    const { kek, provider } = makeProvider();
+    const context = tenantKeyContext(TENANT, 1);
+    const { wrapped, kekId, plaintext } = await kek.generateDek(context);
+    const cache = new DekCache(provider);
+    const request = { dataKeyId: 'key-1', wrappedDek: wrapped, kekId, context };
+
+    const [a, b] = await Promise.all([cache.get(request), cache.get(request)]);
+    const c = await cache.get(request);
+    expect(a).not.toBe(b);
+    expect(b).not.toBe(c);
+
+    // A caller wiping its copy when done must not wipe anybody else's.
+    a.fill(0);
+    expect(c).toEqual(plaintext);
+    expect(await cache.get(request)).toEqual(plaintext);
+  });
+
+  it('refuses to seal under an all-zero key', () => {
+    // What a DEK looks like after eviction wiped it. Refused loudly rather than
+    // stored: a value sealed under zeros is unreadable to Helm and readable to
+    // anyone holding a dump.
+    expect(() =>
+      sealField(Buffer.alloc(32), Buffer.from('a password'), {
+        tenantId: TENANT, secretId: 'secret-1', field: 'value', version: 1,
+      }),
+    ).toThrow(/all-zero key/);
   });
 
   it('evicts the oldest entry when full', async () => {
