@@ -31,9 +31,9 @@ enforced by PostgreSQL itself rather than by application code.
 - **Clients and their estate.** Organisations, sites, contacts, assets (devices,
   networks, domains, certificates, applications …) linked as a graph, so "what
   breaks if this fails" is a query.
-- **Credential vault.** Envelope-encrypted secrets with TOTP, autofill domain
-  rules, sensitivity levels, step-up re-authentication and justification for
-  critical credentials. Every reveal and copy is audited in the same database
+- **Credential vault.** Envelope-encrypted secrets with TOTP, sensitivity
+  levels, step-up re-authentication and justification for critical
+  credentials. Every reveal and copy is audited in the same database
   transaction.
 - **Flexible asset types.** Technician-authored JSON Schema types, versioned,
   validated as untrusted input.
@@ -49,6 +49,9 @@ enforced by PostgreSQL itself rather than by application code.
   certificate pinning and signed webhooks.
 - **Sign-in.** Local passwords (the break-glass path), Microsoft Entra ID, any
   OpenID Connect provider, and RADIUS. All produce the same revocable session.
+- **Personal API tokens.** Issued from the account page, scoped to a subset of
+  what the person holds, expiring within a year, revocable at once, for
+  scripts and integrations that act as a technician.
 - **Tamper-evident audit log.** Per-tenant SHA-256 hash chain, anchored to an
   external receipt on a schedule.
 

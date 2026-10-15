@@ -1,5 +1,6 @@
 /**
- * API tokens for service accounts and the browser extension.
+ * API tokens: personal ones a person issues from the account page (0750), and
+ * service-account ones the schema allows but nothing issues yet.
  *
  * Format: `helm_<kind>_<prefix>.<secret>`
  *

@@ -12,6 +12,8 @@ import { readMyPreferences } from '@/lib/ui/account-queries';
 import { readMyNotificationKinds } from '@/lib/email/preferences';
 import { NotificationPreferencesCard } from '@/components/notification-preferences';
 import { SessionList, type SessionRow } from '@/components/session-list';
+import { ApiTokensCard } from '@/components/api-tokens-card';
+import { listMyTokens } from '@/lib/auth/api-tokens';
 import { formatDateTime } from '@/lib/ui/format';
 
 interface CredentialRow {
@@ -51,9 +53,9 @@ export default async function AccountPage() {
   const currentRef = token ? sessionRef(token) : null;
 
   const {
-    credential, sessions, timezones, notifications,
-  } = await withTenant(actorOf(identity), async (tx) => {
-    const [credentialRows, sessionRows, timezoneRows, notificationRow] = await Promise.all([
+    credential, sessions, timezones, notifications, tokens, permissions,
+  } = await withTenant(actorOf(identity), async (tx, session) => {
+    const [credentialRows, sessionRows, timezoneRows, notificationRow, tokenRows] = await Promise.all([
       // The view carries no hash — helm_app holds column grants that exclude
       // it. Its only job is to answer "do you have a local password, and did
       // somebody else choose it".
@@ -82,10 +84,19 @@ export default async function AccountPage() {
       // Which kinds I want, and whether the tenant can send at all. One read
       // answers both, because a toggle with no relay behind it has to say so.
       readMyNotificationKinds(tx),
+      // Personal API tokens, through the SECURITY DEFINER reader: the table's
+      // own policy is tenant-wide-only, and these rows are mine, not the
+      // tenant's.
+      listMyTokens(tx),
     ]);
     return {
       credential: credentialRows[0] ?? null,
       sessions: sessionRows,
+      tokens: tokenRows,
+      // What this session holds, as the DATABASE resolved it: the scope menu a
+      // token may be narrowed to. Not the role's list — a token-authenticated
+      // session is already narrowed, and a token must not widen past it.
+      permissions: session.permissions,
       timezones: timezoneRows.map((r) => r.name),
       // In the same transaction as the rest, because it is the same actor's own
       // row: RLS is what scopes it, so there is no predicate here to get wrong.
@@ -180,6 +191,17 @@ export default async function AccountPage() {
               the password it was created with.
             </p>
             <SessionList sessions={rows} timezone={preferences.timezone} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <KeyRound className="size-4 text-ink-faint" aria-hidden /> API tokens
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ApiTokensCard tokens={tokens} permissions={permissions} />
           </CardContent>
         </Card>
 

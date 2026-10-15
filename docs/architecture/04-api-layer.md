@@ -78,7 +78,7 @@ Two paths, separated because their threat models differ:
 | | Session | API token |
 | --- | --- | --- |
 | Carrier | Cookie | `Authorization: Bearer` |
-| Who | A technician in a browser | RMM/PSA sync, browser extension |
+| Who | A technician in a browser | A script or tool acting as the person who issued the token |
 | Step-up possible | Yes | **No** — machine accounts cannot re-authenticate |
 | IP restriction | No | Yes, exact-match allowlist |
 | Revocation | Delete the session row | Set `revoked_at` |
@@ -95,6 +95,18 @@ functions, each as narrow as the job allows: `authenticate_api_token`,
 to establish a context — never tenant data, never a secret, never an audit row —
 and make no authorisation decision. A migration-time assertion fails the deploy
 if a fourth appears, so adding one is a decision rather than a drift.
+
+### Issuing one
+
+`POST /api/account/tokens` issues a PERSONAL token: bound to the person, carrying
+`*` (everything their role allows) or a subset of the permissions the database
+resolved for that session, expiring within a year, and shown exactly once.
+`helm.issue_my_api_token()` (0750) enforces all of that itself, including that a
+request which authenticated with a token cannot issue another — a leaked
+30-day token must not become an unbounded chain of them. Revocation
+(`DELETE /api/account/tokens/:id`) is immediate: the session context re-reads
+`revoked_at` on every request. Service-account tokens have no issuing route
+yet; they need an administrator screen for service accounts first.
 
 ### Token format
 
@@ -361,8 +373,9 @@ no security meaning.
 | `/api/flexible-assets/types` | GET/POST | `flexible_type:manage` | Publish runs the schema guard |
 | `/api/flexible-assets/records` | POST | `asset:write` | Validate, split secrets, one transaction |
 | `/api/expirations` | GET | `asset:read` | Single pane, severity computed at read |
-| `/api/extension/autofill` | POST | `secret:read` | Metadata only; reveal is separate |
 | `/api/audit` | GET | `audit:read` | Chain columns deliberately withheld |
+| `/api/account/tokens` | GET/POST | — | Your personal tokens; the token is in the POST response once |
+| `/api/account/tokens/:id` | DELETE | — | Revoke one of yours; somebody else's is "no such token" |
 
 Every route is `force-dynamic`. Nothing in a credential vault may be prerendered
 or cached at the edge, and making that the root default is safer than each route
