@@ -44,11 +44,31 @@
 --   rather than a boolean, because "who accepted this and when" is the question
 --   somebody asks a year later, and a boolean cannot answer it.
 --
--- A SELF-SIGNED RELAY IS PINNED, NOT TRUSTED BLINDLY. Same construction as
--- 0430's UniFi controller: tls_verify defaults true, and tls_pinned_sha256
--- holds the fingerprint of the certificate an operator has actually looked at.
--- Turning verification off without a pin is refused — that combination is the
--- one that silently accepts anybody.
+-- A SELF-SIGNED RELAY IS PINNED BY ITS CERTIFICATE, NOT BY A FINGERPRINT, and
+-- the difference is not cosmetic — the first version of this stored a
+-- fingerprint and compared it in `checkServerIdentity`, which DOES NOT WORK.
+-- Measured rather than assumed:
+--
+--   rejectUnauthorized=false  → checkServerIdentity is NEVER CALLED. The
+--                               connection succeeds whatever the pin says.
+--   rejectUnauthorized=true   → a self-signed chain is refused BEFORE
+--                               checkServerIdentity runs.
+--
+-- So a fingerprint comparison in that hook is dead code in both directions. It
+-- looked implemented, it was stored, a unit test of the comparison function
+-- passed in isolation, and the pin accepted any certificate at all. 0430's
+-- UniFi client avoids this by taking over socket creation and checking the
+-- fingerprint before returning the socket — "THE ORDERING IS THE SECURITY
+-- PROPERTY" — which is available there because it owns the HTTP agent, and is
+-- not available here because nodemailer performs the STARTTLS upgrade itself.
+--
+-- What works, and is strictly stronger: store the CERTIFICATE and hand it to
+-- Node as the only acceptable CA. Verification is then real
+-- (`socket.authorized` is true), it covers implicit TLS and STARTTLS alike
+-- because the options are passed into the upgrade, and a different certificate
+-- is refused by OpenSSL rather than by our own `if`. The fingerprint an
+-- operator compares is DERIVED from the stored certificate at read time, so
+-- there is no second copy to disagree with it.
 --
 -- THE PASSWORD IS AN ENVELOPE, readable by helm_worker and not by helm_app,
 -- exactly as 0420's webhook URL is. helm_app writes it through a SECURITY
@@ -129,12 +149,12 @@ CREATE TABLE smtp_setting (
   port        integer NOT NULL DEFAULT 587,
   security    smtp_security NOT NULL DEFAULT 'starttls',
 
-  -- A pin rather than a disable; see 0430's header for the full argument. An
-  -- operator who has looked at their relay's self-signed certificate records
-  -- its fingerprint here, which is strictly stronger than trusting whatever
-  -- answers.
+  -- A pin rather than a disable. The CERTIFICATE, in PEM, because a
+  -- fingerprint cannot be enforced — see the header. Node is given this as the
+  -- only acceptable CA, so a self-signed relay is verified against exactly one
+  -- certificate instead of being trusted blindly.
   tls_verify        boolean NOT NULL DEFAULT true,
-  tls_pinned_sha256 text,
+  tls_pinned_certificate text,
 
   -- Signed for, not defaulted to. See the header.
   plaintext_acknowledged_at timestamptz,
@@ -175,13 +195,21 @@ CREATE TABLE smtp_setting (
   CONSTRAINT smtp_from_shape CHECK (
     from_address ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
   ),
+  -- A PEM certificate, not a fingerprint and not a private key. The BEGIN
+  -- CERTIFICATE check also refuses the obvious paste accident of putting the
+  -- relay's KEY here, which would be a private key sitting in a settings
+  -- table.
   CONSTRAINT smtp_pin_shape CHECK (
-    tls_pinned_sha256 IS NULL OR tls_pinned_sha256 ~ '^[0-9a-f]{64}$'
+    tls_pinned_certificate IS NULL
+    OR (tls_pinned_certificate LIKE '%BEGIN CERTIFICATE%'
+        AND tls_pinned_certificate LIKE '%END CERTIFICATE%'
+        AND tls_pinned_certificate NOT LIKE '%PRIVATE KEY%'
+        AND length(tls_pinned_certificate) BETWEEN 100 AND 16384)
   ),
   -- Verification off with no pin accepts anybody. That is the combination this
   -- refuses; a pin IS the verification in that case.
   CONSTRAINT smtp_unverified_needs_pin CHECK (
-    tls_verify OR tls_pinned_sha256 IS NOT NULL OR security = 'plaintext'
+    tls_verify OR tls_pinned_certificate IS NOT NULL OR security = 'plaintext'
   ),
   -- Plaintext is signed for. Both columns, so the record names a person.
   CONSTRAINT smtp_plaintext_acknowledged CHECK (
@@ -421,7 +449,7 @@ COMMENT ON TABLE task_reminder IS
 CREATE OR REPLACE FUNCTION helm.smtp_settings()
   RETURNS TABLE (
     enabled boolean, host text, port integer, security smtp_security,
-    tls_verify boolean, tls_pinned_sha256 text,
+    tls_verify boolean, tls_pinned_certificate text,
     plaintext_acknowledged_at timestamptz, plaintext_acknowledged_by uuid,
     username text, password_set boolean,
     from_address text, from_name text, allowed_recipient_domains text[],
@@ -432,7 +460,7 @@ CREATE OR REPLACE FUNCTION helm.smtp_settings()
   SET search_path = public, helm, extensions, pg_catalog, pg_temp
 AS $$
   SELECT s.enabled, s.host, s.port, s.security,
-         s.tls_verify, s.tls_pinned_sha256,
+         s.tls_verify, s.tls_pinned_certificate,
          s.plaintext_acknowledged_at, s.plaintext_acknowledged_by,
          s.username, s.password_set,
          s.from_address::text, s.from_name, s.allowed_recipient_domains,
@@ -477,7 +505,7 @@ BEGIN
   END IF;
 
   INSERT INTO smtp_setting AS s (
-    tenant_id, enabled, host, port, security, tls_verify, tls_pinned_sha256,
+    tenant_id, enabled, host, port, security, tls_verify, tls_pinned_certificate,
     plaintext_acknowledged_at, plaintext_acknowledged_by,
     username, password_set,
     wrap_provider, kek_id, wrapped_dek, secret_ciphertext, secret_nonce,
@@ -500,7 +528,7 @@ BEGIN
     port      = EXCLUDED.port,
     security  = EXCLUDED.security,
     tls_verify = EXCLUDED.tls_verify,
-    tls_pinned_sha256 = EXCLUDED.tls_pinned_sha256,
+    tls_pinned_certificate = EXCLUDED.tls_pinned_certificate,
     -- The acknowledgement is re-stamped when plaintext is chosen and cleared
     -- when it is not, so the record always describes the CURRENT setting. A
     -- stale timestamp against a TLS relay would read as somebody having
@@ -551,7 +579,7 @@ $$;
 CREATE OR REPLACE FUNCTION helm.smtp_transport(p_tenant_id uuid)
   RETURNS TABLE (
     host text, port integer, security smtp_security,
-    tls_verify boolean, tls_pinned_sha256 text,
+    tls_verify boolean, tls_pinned_certificate text,
     username text, from_address text, from_name text,
     wrap_provider text, kek_id text, wrapped_dek bytea,
     secret_ciphertext bytea, secret_nonce bytea, secret_tag bytea, secret_aad text
@@ -559,7 +587,7 @@ CREATE OR REPLACE FUNCTION helm.smtp_transport(p_tenant_id uuid)
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = public, helm, extensions, pg_catalog, pg_temp
 AS $$
-  SELECT s.host, s.port, s.security, s.tls_verify, s.tls_pinned_sha256,
+  SELECT s.host, s.port, s.security, s.tls_verify, s.tls_pinned_certificate,
          s.username, s.from_address::text, s.from_name,
          s.wrap_provider, s.kek_id, s.wrapped_dek,
          s.secret_ciphertext, s.secret_nonce, s.secret_tag, s.secret_aad
@@ -723,6 +751,10 @@ CREATE OR REPLACE FUNCTION helm.claim_task_reminders(p_limit integer DEFAULT 50)
   RETURNS TABLE (
     reminder_id uuid, kind task_reminder_kind, lead_day integer,
     recipient text, recipient_name text,
+    -- The RUN's id, because the link in the message points at the run. Caught
+    -- by reading the worker back: it was passing the reminder's own id, which
+    -- would have produced a 404 in every reminder ever sent.
+    run_id uuid,
     step_title text, step_position integer, run_title text,
     organization_name text, due_at timestamptz, attempts smallint
   )
@@ -731,6 +763,7 @@ CREATE OR REPLACE FUNCTION helm.claim_task_reminders(p_limit integer DEFAULT 50)
 AS $$
   SELECT r.id, r.kind, r.lead_day,
          u.email::text, u.name,
+         run.id,
          s.title, s.position, run.title,
          o.name, s.due_at, r.attempts
   FROM task_reminder r
@@ -818,7 +851,7 @@ $$;
 REVOKE ALL ON smtp_setting FROM helm_app;
 
 GRANT SELECT (
-  tenant_id, enabled, host, port, security, tls_verify, tls_pinned_sha256,
+  tenant_id, enabled, host, port, security, tls_verify, tls_pinned_certificate,
   plaintext_acknowledged_at, plaintext_acknowledged_by, username, password_set,
   from_address, from_name, allowed_recipient_domains,
   last_send_at, last_send_ok, last_send_error, consecutive_failures,

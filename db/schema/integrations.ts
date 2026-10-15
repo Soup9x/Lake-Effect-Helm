@@ -205,7 +205,13 @@ export const smtpSetting = pgTable('smtp_setting', {
   port: integer('port').notNull().default(587),
   security: smtpSecurity('security').notNull().default('starttls'),
   tlsVerify: boolean('tls_verify').notNull().default(true),
-  tlsPinnedSha256: text('tls_pinned_sha256'),
+  /**
+   * The relay's certificate in PEM when one is pinned — not a fingerprint. A
+   * fingerprint cannot be enforced: Node skips checkServerIdentity entirely
+   * when rejectUnauthorized is false, and refuses a self-signed chain before
+   * reaching it when true. 0690's header has the measurement.
+   */
+  tlsPinnedCertificate: text('tls_pinned_certificate'),
   plaintextAcknowledgedAt: tstz('plaintext_acknowledged_at'),
   plaintextAcknowledgedBy: uuid('plaintext_acknowledged_by'),
   username: text('username'),

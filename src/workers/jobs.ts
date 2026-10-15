@@ -17,7 +17,8 @@
  *   01  alerts.evaluate        05  exports.render       09  notifications.deliver
  *   02  alerts.deliver         06  exports.expire       0a  unifi.sync
  *   03  integration.sync       07  auth.prune           0b  external.checks
- *   04  audit.anchor           08  notifications.fanout
+ *   04  audit.anchor           08  notifications.fanout 0c  reminders.raise
+ *                                                       0d  reminders.deliver
  */
 import { deliverExpiryAlertsJob, evaluateExpiryAlertsJob } from './alerts';
 import { anchorAuditChainJob } from './anchor';
@@ -27,6 +28,7 @@ import { pruneAuthAttemptsJob } from './auth-hygiene';
 import { fanOutNotificationsJob, deliverNotificationsJob } from './notifications';
 import { unifiSyncJob } from './unifi-sync';
 import { externalChecksJob } from './external-checks';
+import { deliverRemindersJob, raiseRemindersJob } from './reminders';
 import type { Job } from './runtime';
 
 export function allJobs(): Job[] {
@@ -54,5 +56,13 @@ export function allJobs(): Job[] {
     // remember, and it means the job's own log line says "nothing to do"
     // rather than the job being invisible.
     externalChecksJob(),
+    /*
+     * Checklist reminders, split evaluation from delivery the same way the
+     * expiry alerts are: a relay that is down must not stop tomorrow's sweep
+     * from noticing that a step is now overdue. Both contribute nothing until a
+     * tenant has configured a mail relay, which 0690 makes structural.
+     */
+    raiseRemindersJob(),
+    deliverRemindersJob(),
   ];
 }
