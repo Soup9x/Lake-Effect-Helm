@@ -63,20 +63,27 @@ export class ResetDeliveryUnavailable extends Error {
   constructor() {
     super(
       'no password reset delivery channel is configured. Self-service reset by ' +
-        'email needs HELM_SMTP_URL; an administrator can issue a reset code ' +
-        'out of band without one. See docs/deployment/on-premises.md §5.',
+        'email needs HELM_RESET_DELIVERY_URL; an administrator can issue a ' +
+        'reset code out of band without one. See ' +
+        'docs/deployment/on-premises.md §5.',
     );
     this.name = 'ResetDeliveryUnavailable';
   }
 }
 
 /**
- * SMTP, over an implicit-TLS or STARTTLS connection.
+ * A POST to a small local relay, configured by HELM_RESET_DELIVERY_URL.
  *
- * Helm does not ship a mail client. Rather than take a dependency on nodemailer
- * for one message type, this posts to a small local relay — the shape an
- * on-premises MSP already has, since something on that network is already
- * sending ticket notifications.
+ * NOT SMTP, AND NOT 0690's RELAY, though Helm now has one. The reason is the
+ * moment this runs: a password reset happens BEFORE sign-in, so there is no
+ * tenant context to read `smtp_setting` in, and `helm_auth` — the role the
+ * pre-authentication path uses — holds no privilege on that table at all. It
+ * could not open the relay's password envelope if it tried, which is the
+ * boundary 0410 established and not an oversight to tidy up.
+ *
+ * The original note here said Helm takes no nodemailer dependency; it does now
+ * (0690), so the reasoning has moved to the paragraph above — the dependency was
+ * never the real objection, the missing tenant was.
  *
  * Refuses a plain-http endpoint. The message contains a working reset link.
  */
