@@ -292,6 +292,60 @@ Full treatment: [`07-local-authentication.md`](07-local-authentication.md).
 
 ---
 
+## 9a. What a view does NOT mean
+
+`asset_node.updated_at` means **when this documentation was last revised**, and
+three features read it that way: the Recently Updated widget, the split
+`src/lib/clients/activity.ts` documents between events and state, and 0680's
+documentation health ring. It is maintained by a trigger:
+
+```sql
+CREATE TRIGGER asset_node_touch BEFORE UPDATE ON asset_node
+  FOR EACH ROW EXECUTE FUNCTION helm.touch_updated_at();   -- updated_at := now()
+```
+
+**That trigger fires on ANY update of the row**, which is correct for every
+write it was built for and fatal for one that was not. 0680's first attempt
+recorded "when did anybody last open this" as a column on `asset_node`; the
+trigger then marked a record as freshly *revised* every time somebody *read* it.
+A node measured at 400 days old read as 0 days old immediately after being
+viewed, so the health ring would have reported only the records nobody had
+opened as stale — a different measure, wearing the name of this one, getting
+better the more people browsed.
+
+So **read traffic does not touch `asset_node`**. `node_view_stat` holds it,
+keyed by node, with no actor column at all:
+
+```sql
+CREATE TABLE node_view_stat (
+  node_id        uuid PRIMARY KEY,
+  tenant_id      uuid NOT NULL,
+  last_viewed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  view_count     bigint      NOT NULL DEFAULT 1,
+  FOREIGN KEY (node_id, tenant_id) REFERENCES asset_node (id, tenant_id) ON DELETE CASCADE
+);
+```
+
+Two guards in 0680 hold the shape from both ends: one fails the migration if a
+view-tracking column reappears on `asset_node`, and one fails it if
+`asset_node_touch` is ever dropped — because without the trigger `updated_at`
+stops being maintained and every record reads as current forever.
+
+**No actor column is the design, not an omission.** Decisions 5 and 7 keep read
+activity unattributable; a table with nowhere to write a name cannot disclose
+who read what, whatever anybody later adds to the page that renders it.
+
+**The write needs one carve-out.** A client read-only user must be able to cause
+it and holds no `asset:write`, so `helm.touch_node_view(uuid)` is `SECURITY
+DEFINER` — one statement, taking the tenant from the session rather than from
+its argument. `helm_app` is granted `SELECT` on the table and no write privilege
+at all, so the function is the only way in and the gate is a missing privilege
+rather than a policy somebody could widen. 0220's `ALTER DEFAULT PRIVILEGES`
+had already granted that privilege, so 0680 revokes it explicitly — the guard
+caught that on the migration's first run.
+
+---
+
 ## 10. Where things live
 
 | Concern | Location |

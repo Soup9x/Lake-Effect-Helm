@@ -384,6 +384,20 @@ describe('each segment"s list agrees with its count', () => {
     const read = await node({ name: 'zz d read', createdDaysAgo: 400, revisedDaysAgo: 2 });
     await withTenant(ADMIN, (tx) => tx`SELECT helm.record_view(NULL, ${read}::uuid)`);
 
+    /*
+     * AN ARCHIVED NODE IN EVERY SEGMENT'S RANGE, and it is here because of a
+     * sabotage that survived. Removing `archived_at IS NULL` from
+     * listHealthSegment broke no test: the view excludes archived rows, the
+     * list did not, and the counts-versus-list comparison below never noticed
+     * because the fixture has nothing archived. With these present, a list that
+     * forgets the filter returns more rows than the count and this fails.
+     */
+    await node({ name: 'zz e archived fresh', createdDaysAgo: 400, revisedDaysAgo: 2,
+                 archived: true });
+    await node({ name: 'zz f archived lapsed', createdDaysAgo: 400, revisedDaysAgo: 300,
+                 archived: true });
+    await node({ name: 'zz g archived untouched', createdDaysAgo: 400, archived: true });
+
     const health = await healthOf(ADMIN);
     const counts = {
       current: health!.current,

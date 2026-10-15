@@ -3582,5 +3582,181 @@ SELECT helm_test.check('...with the hand-recorded expiry left exactly as it was'
   (SELECT expires_at = current_date + 20 FROM domain WHERE id = :n_dom));
 ROLLBACK;
 
+\echo '== 49. Health is a measure of revision, and a view must not disturb it =='
+-- 0680. The guards in that migration assert the SHAPE — no view-tracking column
+-- on asset_node, the trigger still present, the request role unable to write
+-- node_view_stat. These assert what that shape DOES, on rows.
+
+-- (a) THE DEFECT THIS MIGRATION TURNED ON, reproduced from the other side.
+--     asset_node_touch sets updated_at := now() on ANY update of the row, so a
+--     last_viewed_at column on asset_node made every page view a revision — a
+--     400-day-old record measured as 0 days old immediately after being read.
+--     This is the behaviour that makes that fatal, asserted so nobody
+--     reintroduces the column believing the trigger is harmless.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name,
+                        created_at, updated_at)
+VALUES ('1d000000-0000-0000-0000-0000000000b1', :t1, :t1_acme, 'device', 'zz ancient',
+        now() - interval '400 days', now() - interval '400 days');
+SELECT helm_test.check('a backdated node really is 400 days old',
+  (SELECT updated_at < now() - interval '399 days' FROM asset_node
+    WHERE id = '1d000000-0000-0000-0000-0000000000b1'));
+
+-- Any update at all, even one that changes nothing a person would notice.
+UPDATE asset_node SET notes = coalesce(notes, '')
+WHERE id = '1d000000-0000-0000-0000-0000000000b1';
+SELECT helm_test.check('...and ANY update to the row makes it young again',
+  (SELECT updated_at > now() - interval '1 minute' FROM asset_node
+    WHERE id = '1d000000-0000-0000-0000-0000000000b1'));
+ROLLBACK;
+
+-- (b) SO RECORDING A VIEW LEAVES updated_at ALONE. The same node, opened
+--     through the path a page uses.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name,
+                        created_at, updated_at)
+VALUES ('1d000000-0000-0000-0000-0000000000b2', :t1, :t1_acme, 'device', 'zz read me',
+        now() - interval '400 days', now() - interval '400 days');
+SELECT helm.record_view(NULL, '1d000000-0000-0000-0000-0000000000b2');
+SELECT helm_test.check('opening a record does not make it look revised',
+  (SELECT updated_at < now() - interval '399 days' FROM asset_node
+    WHERE id = '1d000000-0000-0000-0000-0000000000b2'));
+SELECT helm_test.check('...and the view was still recorded',
+  EXISTS (SELECT 1 FROM node_view_stat
+           WHERE node_id = '1d000000-0000-0000-0000-0000000000b2'));
+ROLLBACK;
+
+-- (c) A CLIENT READ-ONLY USER CAN CAUSE THE WRITE AND CANNOT MAKE IT DIRECTLY.
+--     The carve-out from both ends: helm_app holds no INSERT on node_view_stat,
+--     so helm.touch_node_view() is the only way in — and it has to work for the
+--     role that holds no asset:write, or the measure is only ever about what
+--     administrators read.
+SELECT helm_test.check('helm_app cannot insert view stats directly',
+  NOT has_table_privilege('helm_app', 'node_view_stat', 'INSERT'));
+SELECT helm_test.check('...nor update them',
+  NOT has_table_privilege('helm_app', 'node_view_stat', 'UPDATE'));
+SELECT helm_test.check('...but it can read them, for the ring',
+  has_table_privilege('helm_app', 'node_view_stat', 'SELECT'));
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_ro);
+SELECT helm_test.check('a client read-only user holds no asset:write',
+  NOT helm.has_permission('asset:write'));
+SELECT helm_test.check_raises('...and cannot write node_view_stat itself',
+  $$INSERT INTO node_view_stat (node_id, tenant_id)
+    VALUES ('1d000000-0000-0000-0000-000000000001',
+            '11111111-1111-1111-1111-111111111111')$$);
+SELECT helm.record_view(NULL, :n_fw);
+SELECT helm_test.check('...yet opening a record it can see DOES record the view',
+  EXISTS (SELECT 1 FROM node_view_stat WHERE node_id = :n_fw));
+ROLLBACK;
+
+-- (d) AND THE DEFINER RIGHTS CANNOT BE AIMED ELSEWHERE. touch_node_view takes
+--     the tenant from the session and the node id from its caller, so a foreign
+--     id must write nothing. Called directly, because record_view() is stopped
+--     earlier by user_recent_view's own foreign key — a welcome second layer
+--     that would hide this one if the test went through it.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm.touch_node_view('2d000000-0000-0000-0000-000000000001');
+SELECT helm_test.check('a definer function wrote nothing outside its session tenant',
+  NOT EXISTS (SELECT 1 FROM node_view_stat
+               WHERE node_id = '2d000000-0000-0000-0000-000000000001'));
+ROLLBACK;
+
+-- (e) THE RING ITSELF IS TENANT- AND SCOPE-BOUND, through security_invoker.
+--     v_client_health shipped without that once and a client administrator
+--     could list every client in every tenant; §27 asserts no public view omits
+--     it, and this is the behavioural half for the new one.
+BEGIN;
+SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('another tenant sees none of our clients" health',
+  NOT EXISTS (SELECT 1 FROM v_documentation_health
+               WHERE organization_id = '1a000000-0000-0000-0000-000000000002'));
+ROLLBACK;
+
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('a client administrator sees their own organisation"s health',
+  EXISTS (SELECT 1 FROM v_documentation_health WHERE organization_id = :t1_acme));
+SELECT helm_test.check('...and not another client"s',
+  NOT EXISTS (SELECT 1 FROM v_documentation_health WHERE organization_id = :t1_globex));
+ROLLBACK;
+
+-- (f) THE WINDOW IS READ-OPEN AND WRITE-GATED, the split 0620 and 0670 chose.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+INSERT INTO documentation_health_setting (tenant_id, stale_after_days) VALUES (:t1, 90);
+SELECT helm_test.ctx(:t1, :u_ro);
+SELECT helm_test.check('a client user can see the window, so a count has its units',
+  EXISTS (SELECT 1 FROM documentation_health_setting WHERE tenant_id = :t1));
+
+--     AND THE REFUSAL IS A ZERO-ROW UPDATE, NOT AN EXCEPTION, which is worth
+--     saying because this project has now been caught by it twice. An UPDATE
+--     whose RLS USING clause excludes every row matches nothing and returns
+--     cleanly — only a WITH CHECK violation on a row that WAS matched raises.
+--     H's refresh worker shipped a write that matched zero rows and reported
+--     success for exactly this reason, so here the assertion reads the value
+--     back rather than waiting for an error that never comes.
+UPDATE documentation_health_setting SET stale_after_days = 1
+WHERE tenant_id = '11111111-1111-1111-1111-111111111111';
+SELECT helm_test.check('...and a client user cannot move it',
+  (SELECT stale_after_days = 90 FROM documentation_health_setting WHERE tenant_id = :t1));
+
+SELECT helm_test.ctx(:t1, :u_tech1);
+UPDATE documentation_health_setting SET stale_after_days = 2
+WHERE tenant_id = '11111111-1111-1111-1111-111111111111';
+SELECT helm_test.check('nor can a technician',
+  (SELECT stale_after_days = 90 FROM documentation_health_setting WHERE tenant_id = :t1));
+
+--     The one that DOES raise, for contrast: an INSERT is checked against
+--     WITH CHECK before it lands, so the refusal is an error rather than
+--     silence. Both halves asserted so the difference is on the record.
+SELECT helm_test.check_raises('...and an INSERT by a technician is refused outright',
+  $$INSERT INTO documentation_health_setting (tenant_id, stale_after_days)
+    VALUES ('22222222-2222-2222-2222-222222222222', 5)$$);
+ROLLBACK;
+
+-- (g) A LOGO IS NOT A DOCUMENT, AND IT IS NOT AN SVG.
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('an SVG logo is refused by the column itself',
+  $$INSERT INTO organization_logo (organization_id, tenant_id, content_type,
+                                   byte_size, storage_key, content_sha256)
+    VALUES ('1a000000-0000-0000-0000-000000000002',
+            '11111111-1111-1111-1111-111111111111', 'image/svg+xml', 10,
+            'zz-svg', decode(repeat('ab', 32), 'hex'))$$);
+INSERT INTO organization_logo (organization_id, tenant_id, content_type, byte_size,
+                               storage_key, content_sha256)
+VALUES (:t1_acme, :t1, 'image/png', 10, 'zz-png', decode(repeat('ab', 32), 'hex'));
+SELECT helm_test.check('a PNG logo is accepted',
+  EXISTS (SELECT 1 FROM organization_logo WHERE organization_id = :t1_acme));
+SELECT helm_test.check_raises('...and a second logo for the same client is not',
+  $$INSERT INTO organization_logo (organization_id, tenant_id, content_type,
+                                   byte_size, storage_key, content_sha256)
+    VALUES ('1a000000-0000-0000-0000-000000000002',
+            '11111111-1111-1111-1111-111111111111', 'image/png', 10,
+            'zz-png-2', decode(repeat('ab', 32), 'hex'))$$);
+
+-- A client administrator may see their own logo and may not change it:
+-- organization:write is the permission, and in the shipped catalogue they do
+-- not hold it.
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('a client administrator can see their own logo',
+  EXISTS (SELECT 1 FROM organization_logo WHERE organization_id = :t1_acme));
+-- Same shape as (f): the UPDATE matches no rows rather than raising, so the
+-- assertion reads the value back.
+UPDATE organization_logo SET content_type = 'image/gif'
+WHERE organization_id = '1a000000-0000-0000-0000-000000000002';
+SELECT helm_test.check('...and cannot replace it',
+  (SELECT content_type = 'image/png' FROM organization_logo
+    WHERE organization_id = :t1_acme));
+SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('another tenant sees no logo of ours',
+  NOT EXISTS (SELECT 1 FROM organization_logo));
+ROLLBACK;
+
 \echo '== All security assertions passed =='
 

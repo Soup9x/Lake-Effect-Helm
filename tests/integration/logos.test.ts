@@ -25,6 +25,7 @@
  *      would connect to key management.
  */
 import { readFile, readdir } from 'node:fs/promises';
+import { NextRequest } from 'next/server';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { withTenant } from '../../src/lib/db/client';
@@ -35,6 +36,11 @@ import {
 } from './harness';
 import { LogoError, LOGO_CONTENT_TYPES, MAX_LOGO_BYTES } from '../../src/lib/logos/service';
 import { collectExport } from '../../src/lib/exports/collect';
+import {
+  DELETE as deleteLogo, GET as getLogo,
+} from '../../src/app/api/organizations/[organizationId]/logo/route';
+import { setDocumentStorage } from '../../src/lib/documents/storage';
+import { FilesystemExportStorage } from '../../src/lib/exports/storage';
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
@@ -84,6 +90,14 @@ beforeAll(async () => {
   useSessionResolver(async () => currentUser);
   await harness.keys.provision(IDS.tenant1, IDS.admin1, { reason: 'logo tests' });
   await harness.keys.provision(IDS.tenant2, IDS.admin2, { reason: 'logo tests' });
+  /*
+   * The ROUTE reaches for the singleton service, which reads
+   * HELM_DOCUMENT_DIR. Pointed at the same directory the harness uses, so the
+   * route and harness.logos are looking at one store — otherwise a logo
+   * uploaded through the harness would be invisible to the route and the
+   * route tests below would pass against an empty directory.
+   */
+  setDocumentStorage(new FilesystemExportStorage(harness.documentRoot));
 }, 120_000);
 
 afterEach(async () => {
@@ -92,8 +106,17 @@ afterEach(async () => {
 
 afterAll(async () => {
   resetServices();
+  setDocumentStorage(null);
   await disconnectPools();
 });
+
+const logoRequest = (method = 'GET', headers: Record<string, string> = {}) =>
+  new NextRequest(
+    new Request(`http://helm.test/api/organizations/${IDS.orgAcme}/logo`, { method, headers }),
+  );
+
+const routeParams = (organizationId: string = IDS.orgAcme) =>
+  ({ params: Promise.resolve({ organizationId }) });
 
 // ---------------------------------------------------------------------------
 
@@ -339,15 +362,34 @@ describe('removing it', () => {
   });
 
   it('goes with the client when the client is deleted', async () => {
-    // ON DELETE CASCADE on the composite key. Asserted because a logo row
-    // surviving its organisation would be a row no policy can reach and no
-    // screen can show.
-    await put(ADMIN, PNG, 'image/png', IDS.orgGlobex);
-    await su((sql) => sql`DELETE FROM organization WHERE id = ${IDS.orgGlobex}::uuid`);
-    const rows = await su((sql) => sql`
-      SELECT 1 FROM organization_logo WHERE organization_id = ${IDS.orgGlobex}::uuid
-    `);
-    expect(rows).toEqual([]);
+    /*
+     * ON DELETE CASCADE on the composite key. Asserted because a logo row
+     * surviving its organisation would be a row no policy can reach and no
+     * screen can show.
+     *
+     * ITS OWN THROWAWAY CLIENT, not a fixture one. The first version deleted
+     * Globex and a later test in this file then failed on the foreign key,
+     * because the fixture row it needed was gone — the suite had become
+     * order-dependent, which is a worse problem than the one it was testing.
+     */
+    const doomed = await su(async (sql) => {
+      const [row] = await sql<{ id: string }[]>`
+        INSERT INTO organization (tenant_id, name, slug, relationship)
+        VALUES (${IDS.tenant1}::uuid, 'zz doomed client', 'zz-doomed-client', 'client')
+        RETURNING id
+      `;
+      return row!.id;
+    });
+
+    await put(ADMIN, PNG, 'image/png', doomed);
+    expect(await su((sql) => sql`
+      SELECT 1 FROM organization_logo WHERE organization_id = ${doomed}::uuid
+    `)).toHaveLength(1);
+
+    await su((sql) => sql`DELETE FROM organization WHERE id = ${doomed}::uuid`);
+    expect(await su((sql) => sql`
+      SELECT 1 FROM organization_logo WHERE organization_id = ${doomed}::uuid
+    `)).toEqual([]);
   });
 });
 
@@ -372,5 +414,116 @@ describe('after a key rotation', () => {
     const [after] = await logoRow();
     expect(after!.data_key_id, 'the stored key id should not have moved')
       .toBe(before!.data_key_id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The HTTP surface.
+ *
+ * The service tests above prove the bytes round-trip. These prove the part a
+ * browser actually interacts with, and the ETag in particular: the clients list
+ * renders one logo per row, so whether a second page load re-downloads them all
+ * is a measurable cost rather than a detail.
+ */
+describe('serving it over HTTP', () => {
+  const asAdmin = () => { currentUser = { id: IDS.admin1, email: 'admin@northwind.test' }; };
+  const asViewer = () => { currentUser = { id: IDS.acmeViewer, email: 'viewer@acme.test' }; };
+
+  it('serves the bytes with the sniffed type and nosniff', async () => {
+    await put(ADMIN, PNG);
+    asAdmin();
+
+    const response = await getLogo(logoRequest(), routeParams());
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/png');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(Buffer.from(await response.arrayBuffer()).equals(PNG)).toBe(true);
+  });
+
+  it('answers 304 when the browser already has these bytes', async () => {
+    await put(ADMIN, PNG);
+    asAdmin();
+
+    const first = await getLogo(logoRequest(), routeParams());
+    const etag = first.headers.get('etag');
+    expect(etag, 'no ETag, so every page load re-downloads every logo').toBeTruthy();
+
+    const second = await getLogo(
+      logoRequest('GET', { 'if-none-match': etag! }),
+      routeParams(),
+    );
+    expect(second.status).toBe(304);
+    expect((await second.arrayBuffer()).byteLength, 'a 304 should carry no body').toBe(0);
+  });
+
+  it('changes the ETag when the bytes change, so a replacement is picked up', async () => {
+    await put(ADMIN, PNG);
+    asAdmin();
+    const before = (await getLogo(logoRequest(), routeParams())).headers.get('etag');
+
+    await put(ADMIN, PNG2);
+    const after = await getLogo(logoRequest(), routeParams());
+    expect(after.status).toBe(200);
+    expect(after.headers.get('etag')).not.toBe(before);
+
+    // And the old ETag no longer validates, which is the half that matters: a
+    // browser holding the previous copy must be told to take the new one.
+    const stale = await getLogo(
+      logoRequest('GET', { 'if-none-match': before! }),
+      routeParams(),
+    );
+    expect(stale.status).toBe(200);
+  });
+
+  it('is cached privately, never in a shared cache', async () => {
+    // A shared cache holding these would serve one tenant's client logo to
+    // another tenant's reader — a cross-tenant disclosure arranged by a header.
+    await put(ADMIN, PNG);
+    asAdmin();
+    const response = await getLogo(logoRequest(), routeParams());
+    const cacheControl = response.headers.get('cache-control') ?? '';
+    expect(cacheControl).toContain('private');
+    expect(cacheControl).not.toContain('public');
+  });
+
+  it('answers 404 for a client with no logo, and for one the reader cannot see', async () => {
+    asAdmin();
+    const missing = await getLogo(logoRequest(), routeParams());
+    expect(missing.status).toBe(404);
+
+    // The same answer for a client outside the reader's scope, so an outsider
+    // cannot tell which organisation ids exist.
+    await put(ADMIN, PNG, 'image/png', IDS.orgGlobex);
+    asViewer();
+    const forbidden = await getLogo(
+      new NextRequest(new Request(`http://helm.test/api/organizations/${IDS.orgGlobex}/logo`)),
+      routeParams(IDS.orgGlobex),
+    );
+    expect(forbidden.status).toBe(404);
+    await su((sql) => sql`DELETE FROM organization_logo`);
+  });
+
+  it('lets a client user fetch their own logo', async () => {
+    await put(ADMIN, PNG);
+    asViewer();
+    const response = await getLogo(logoRequest(), routeParams());
+    expect(response.status, 'a client could not load their own logo').toBe(200);
+  });
+
+  it('refuses a delete from somebody without organization:write', async () => {
+    await put(ADMIN, PNG);
+    asViewer();
+    const response = await deleteLogo(logoRequest('DELETE'), routeParams());
+    expect(response.status).toBe(403);
+    expect(await logoRow(), 'the logo was removed by a reader').toHaveLength(1);
+  });
+
+  it('is idempotent about deleting one that is already gone', async () => {
+    asAdmin();
+    const first = await deleteLogo(logoRequest('DELETE'), routeParams());
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ removed: false });
   });
 });

@@ -467,7 +467,7 @@ now asserts it column by column across all five runtime roles.
 | `tests/unit/exports.test.ts` | 21 — PDF structure and xref resolution, bundle round-trip, passphrase distribution |
 | `tests/integration/external-checks.test.ts` | 21 — off-by-default, write-beside, failure recording, the claim, the route's gate and bounds |
 | `tests/unit/rdap.test.ts`, `tests/unit/certificate-probe.test.ts` | 21 — parsing, redirect refusal, timeouts, fingerprint form |
-| `db/tests/security.sql` | §15 (export behaviour), §35 (what `0400` removed, and what it kept) and §48 (external checks) |
+| `db/tests/security.sql` | §15 (export behaviour), §35 (what `0400` removed, and what it kept), §48 (external checks) and §49 (health, view recording and logos) |
 
 The PDF output was additionally parsed with an independent reader (`pypdf`) to
 confirm page count, extracted text, repeated table headers and the UTF-16 title.
