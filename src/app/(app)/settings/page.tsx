@@ -7,7 +7,7 @@ import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { RenameTenant } from '@/components/rename-tenant';
+import { InlineRename } from '@/components/inline-rename';
 import { SidebarCustomise } from '@/components/sidebar-customise';
 import { ExternalChecksForm } from '@/components/external-checks-form';
 import { HealthWindowForm } from '@/components/health-window-form';
@@ -417,7 +417,21 @@ export default async function SettingsPage() {
             </CardHeader>
             <CardContent>
               {tenant.can_write_tenant ? (
-                <RenameTenant currentName={tenant.name} slug={tenant.slug} />
+                <InlineRename
+                  currentName={tenant.name}
+                  slug={tenant.slug}
+                  endpoint="/api/tenant"
+                  inputId="rename-tenant"
+                  label="MSP name"
+                  // The slug is what memberships and audit rows resolve
+                  // through; a rebrand must not invalidate a year of history.
+                  hint={
+                    <>
+                      The identifier <code className="font-mono">{tenant.slug}</code> stays as it
+                      is — memberships and audit history resolve through it.
+                    </>
+                  }
+                />
               ) : (
                 <div>
                   <div className="text-ink">{tenant.name}</div>

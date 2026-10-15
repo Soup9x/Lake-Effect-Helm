@@ -10,7 +10,7 @@ import { SiteForm } from '@/components/site-form';
 import { TopologyDesigner } from '@/components/topology-designer';
 import { CredentialEditForm } from '@/components/credential-edit-form';
 import { NewAssetForm } from '@/components/new-asset-form';
-import { RenameOrganization } from '@/components/rename-organization';
+import { InlineRename } from '@/components/inline-rename';
 import { TagEditor } from '@/components/tag-editor';
 import { SectionBrowser } from '@/components/section-browser';
 import { DocumentsCard } from '@/components/documents-card';
@@ -398,9 +398,14 @@ export default async function OrganizationPage({
               label={organization.name}
             />
             {canWrite && (
-              <RenameOrganization
-                organizationId={organization.id}
+              // The slug stays: it is in URLs and in the mappings that
+              // correlate this client with an RMM or PSA.
+              <InlineRename
                 currentName={organization.name}
+                endpoint={`/api/organizations/${organization.id}`}
+                inputId="rename-org"
+                label="Client name"
+                hint="The slug and every existing link stay as they are."
               />
             )}
             <Button asChild variant="secondary" size="sm">
