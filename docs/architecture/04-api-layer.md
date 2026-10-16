@@ -387,6 +387,8 @@ no security meaning.
 | `/api/tenant/service-accounts/:id` | PATCH | `user:write` | Disable or enable; no DELETE, the audit log names it |
 | `/api/tenant/service-accounts/:id/tokens` | GET/POST | `user:read` / `user:write` | Scopes bounded by the account's role; IP allow-list optional |
 | `/api/tenant/service-accounts/:id/tokens/:tokenId` | DELETE | `user:write` | Revoke |
+| `/api/sops/:sopId/schedules` | GET/POST | `sop:read` / `sop:execute` | Recurring runs; POST refuses an unpublished procedure |
+| `/api/sops/:sopId/schedules/:id` | PATCH/DELETE | `sop:execute` | Pause, resume, edit, remove; raised runs stay |
 
 Every route is `force-dynamic`. Nothing in a credential vault may be prerendered
 or cached at the edge, and making that the root default is safer than each route

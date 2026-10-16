@@ -38,7 +38,8 @@ enforced by PostgreSQL itself rather than by application code.
 - **Flexible asset types.** Technician-authored JSON Schema types, versioned,
   validated as untrusted input.
 - **Documents and checklists.** Encrypted document storage per client;
-  procedures with runnable, assignable checklists and due-date reminders.
+  procedures with runnable, assignable checklists, due-date reminders and
+  schedules that raise a run every so many days on their own.
 - **Expiry tracking.** Certificates, domains, warranties and contracts, with
   warnings at configurable lead times (Settings → Expiry warnings).
 - **Notifications.** Webhooks (generic, Slack, Teams, Discord), email through

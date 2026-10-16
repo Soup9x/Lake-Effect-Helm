@@ -276,6 +276,39 @@ marked one sent. `0220`'s `ALTER DEFAULT PRIVILEGES` grants that DML to
 `helm_app` on every table a later migration creates, which is the third time
 this project has had to go back and take it away.
 
+## 5c. Scheduled checklists
+
+The fourteenth job (`checklists.schedule`, lock key `0x48_45_4c_4d_0e`, every
+five minutes). A `sop_schedule` row (`0770`) says: this procedure, every N days
+from this first slot, assigned to this person, due so many days after the slot.
+The job turns a slot that has arrived into a run — the same `sop_run` and
+`sop_run_step` rows a person's Start would write, from the same published
+snapshot, with the same per-step assignment reminders and an audit row,
+`sop.run_scheduled`.
+
+**Idempotent by construction, not by a record.** `helm.raise_scheduled_runs()`
+takes the due rows `FOR UPDATE SKIP LOCKED` and advances `next_run_at` in the
+same transaction as the INSERT, so two worker runtimes on one tick raise one
+run, and a tick that dies between the two statements rolls both back. There is
+no "already raised" table to drift.
+
+**Missed slots are skipped, not queued.** The function advances by whole
+intervals past everything already gone: a worker that was down for a month
+raises one run per schedule, not four, and the next slot stays on the
+schedule's own grid rather than drifting to "now plus N days". Nobody wants
+four backup checks on the same morning.
+
+**A skip is explained on the row.** A procedure archived or never published
+after it was scheduled, or a snapshot with no readable steps, moves the slot on
+and writes `last_error`; the card on the procedure shows it. An assignee who has
+since left the tenant is dropped rather than failing the slot — the run is still
+due, and somebody will pick it up from the client's page.
+
+**Per tenant, as the worker's own identity.** `helm.schedule_backlog()` is the
+cross-tenant list (worker-only, like the others), and the raise runs inside
+`withTenant()` as `system_sync`, so RLS, the audit chain and the reminders all
+see an actor with a name.
+
 ---
 
 ## 6. Audit chain anchoring

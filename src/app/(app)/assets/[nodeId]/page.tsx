@@ -21,6 +21,8 @@ import { FlexibleRecordForm } from '@/components/flexible-record-form';
 import { pointerFor, schemaToFields, type FieldDef } from '@/lib/flexible/fields';
 import { listAssignableUsers, readTemplate } from '@/lib/sops/queries';
 import { ChecklistTemplateCard } from '@/components/checklist-template-card';
+import { ChecklistSchedulesCard } from '@/components/checklist-schedules-card';
+import { listSchedules } from '@/lib/sops/schedules';
 import { ExternalCheckNote, type ExternalCheckState } from '@/components/external-check-note';
 import { readExternalCheckSetting } from '@/lib/external/settings';
 
@@ -210,6 +212,8 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     // Same bargain for a procedure: its steps and published versions, read
     // only when the node is one.
     const template = node.node_type === 'sop' ? await readTemplate(tx, node.id) : null;
+    // And its schedules, the runs it raises on its own (0770).
+    const schedules = template ? await listSchedules(tx, node.id) : [];
     /*
      * Only for the two node types a probe can reach. Read even when checking is
      * OFF, because "off" is the sentence the card needs: never checked because
@@ -254,7 +258,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     const assignable = template && perm?.run ? await listAssignableUsers(tx) : [];
 
     return {
-      node, detail: detailRows, edges, secrets, expiries, sites, record, template,
+      node, detail: detailRows, edges, secrets, expiries, sites, record, template, schedules,
       totp: totp ?? null,
       canReveal: perm?.reveal ?? false,
       canAuthorProcedures: perm?.author ?? false,
@@ -267,7 +271,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   if (!data) notFound();
   const {
-    node, detail, edges, secrets, expiries, sites, record, template, totp, canReveal,
+    node, detail, edges, secrets, expiries, sites, record, template, schedules, totp, canReveal,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
   } = data;
 
@@ -497,6 +501,17 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             canAuthor={canAuthorProcedures}
             canRun={canRunChecklists}
             assignable={assignable}
+          />
+        )}
+        {template && (
+          <ChecklistSchedulesCard
+            sopId={node.id}
+            sopName={node.name}
+            published={template.current !== null}
+            schedules={schedules}
+            canManage={canRunChecklists}
+            assignable={assignable}
+            sites={sites}
           />
         )}
 

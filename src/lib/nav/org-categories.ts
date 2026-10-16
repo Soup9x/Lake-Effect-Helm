@@ -7,15 +7,13 @@
  * backing query would render a count of nothing and route to an empty page,
  * which is the kind of navigation that teaches people not to trust the sidebar.
  *
- * WHAT HAS NO HELM EQUIVALENT, and is therefore absent rather than stubbed:
- * a RECURRING task list. The sentence here used to say "Checklists. There is no
- * table for a recurring task list", and the first half of that was never true —
- * 0090 has modelled procedures, published versions and runs since the schema
- * was written, and since F1 the application creates them, under SOPs. What is
- * still missing is the recurring part: something that raises a run on a
- * schedule, which needs the job channel K builds. A "Checklists" item today
- * would route to the same rows SOPs already lists, under a word that promises
- * scheduling.
+ * WHY THERE IS NO "CHECKLISTS" ITEM beside SOPs. The sentence here used to say
+ * "Checklists. There is no table for a recurring task list", and neither half
+ * is true any more — 0090 has modelled procedures, published versions and runs
+ * since the schema was written, the application creates them under SOPs, and
+ * since 0770 a schedule on a procedure raises runs on its own. A "Checklists"
+ * item would route to the same rows SOPs already lists; the schedules live on
+ * each procedure's page, where the steps they raise are.
  *
  * `kind` is how the count and the listing are derived:
  *   'node'  — asset_node filtered to one node_type
