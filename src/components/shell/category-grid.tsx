@@ -23,6 +23,7 @@ import { ColumnMenu, useHiddenColumns, type ColumnChoice } from './column-menu';
 import { DataTable, type Column, type GridRow } from './data-table';
 import { matchesBrowse } from '@/lib/ui/browse';
 import { RowRemoveDialog, type RemoveKind } from './row-remove-dialog';
+import { ContactForm } from './contact-form';
 import { RowPermissionsDialog, type RowPermissions } from './row-permissions-dialog';
 import { Badge } from '../ui/badge';
 import { formatDate } from '@/lib/ui/format';
@@ -50,6 +51,18 @@ export interface CategoryRecord {
   removeKind?: RemoveKind | undefined;
   /** Who can see it. Omitted for rows with no visibility flag — contacts, sites. */
   permissions?: RowPermissions | undefined;
+  /** A contact row: Edit opens the contact dialog rather than a page. */
+  editContact?: { organizationId: string } | undefined;
+  /** Values for the category's extra columns (see CategoryGrid's extraColumns). */
+  cells?: Record<string, string | null> | undefined;
+}
+
+/** A column a category adds beyond the shared four: configurations' OS, IP, serial… */
+export interface ExtraColumn {
+  key: string;
+  header: string;
+  /** Hidden at narrow widths. */
+  secondary?: boolean | undefined;
 }
 
 interface Row extends GridRow {
@@ -112,6 +125,7 @@ export function CategoryGrid({
   labels,
   actorRoleRank,
   columnScope,
+  extraColumns = [],
 }: {
   records: readonly CategoryRecord[];
   total: number;
@@ -122,6 +136,7 @@ export function CategoryGrid({
   actorRoleRank: number;
   /** Namespaces the viewer's column choice. One per category. */
   columnScope: string;
+  extraColumns?: readonly ExtraColumn[] | undefined;
 }) {
   const params = useSearchParams();
   const query = params?.get('q') ?? '';
@@ -136,6 +151,7 @@ export function CategoryGrid({
 
   const [removing, setRemoving] = useState<CategoryRecord | null>(null);
   const [permissioning, setPermissioning] = useState<CategoryRecord | null>(null);
+  const [editingContact, setEditingContact] = useState<CategoryRecord | null>(null);
 
   const rows = useMemo<Row[]>(
     () =>
@@ -147,7 +163,8 @@ export function CategoryGrid({
           ? { folder: { label: record.name, ...record.folder } }
           : {}),
         // Lowercased once here rather than per keystroke in the table.
-        search: [record.name, record.secondary, record.type, record.extra]
+        search: [record.name, record.secondary, record.type, record.extra,
+                 ...Object.values(record.cells ?? {})]
           .filter(Boolean)
           .join(' ')
           .toLowerCase(),
@@ -156,6 +173,10 @@ export function CategoryGrid({
           : [
               ...(canWrite && record.href
                 ? [{ label: 'Edit', icon: Pencil, href: record.href }]
+                : []),
+              // A contact has no page of its own; its edit is a dialog (0790).
+              ...(canWrite && record.editContact
+                ? [{ label: 'Edit', icon: Pencil, onClick: () => setEditingContact(record) }]
                 : []),
               // Only where there is a flag to edit: a contact has no visibility
               // of its own, so offering the control would be offering nothing.
@@ -243,6 +264,13 @@ export function CategoryGrid({
         sortBy: (r) => r.record.extra?.toLowerCase() ?? null,
         cell: (r) => <span className="text-ink-muted">{r.record.extra || '—'}</span>,
       },
+      ...extraColumns.map<Column<Row>>((c) => ({
+        key: c.key,
+        header: c.header,
+        secondary: c.secondary,
+        sortBy: (r) => r.record.cells?.[c.key]?.toLowerCase() ?? null,
+        cell: (r) => <span className="text-ink-muted">{r.record.cells?.[c.key] || '—'}</span>,
+      })),
       {
         key: 'updated',
         header: 'Updated',
@@ -262,7 +290,7 @@ export function CategoryGrid({
         cell: (r) => <span className="text-ink-faint">{r.record.updatedBy || '—'}</span>,
       },
     ],
-    [labels],
+    [labels, extraColumns],
   );
 
   // The same matcher DataTable filters with, so the count agrees with the rows.
@@ -306,6 +334,15 @@ export function CategoryGrid({
           kind={removing.removeKind}
           open
           onOpenChange={(next) => { if (!next) setRemoving(null); }}
+        />
+      )}
+
+      {editingContact?.editContact && (
+        <ContactForm
+          organizationId={editingContact.editContact.organizationId}
+          contactId={editingContact.id}
+          open
+          onOpenChange={(next) => { if (!next) setEditingContact(null); }}
         />
       )}
 

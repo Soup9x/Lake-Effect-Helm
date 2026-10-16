@@ -29,6 +29,8 @@ const uploadSchema = z.object({
   folderId: z.guid().nullable().default(null),
   /** Attach to an asset instead of filing in a folder (0780). */
   nodeId: z.guid().nullable().default(null),
+  /** Attach to a written document (0810). */
+  pageId: z.guid().nullable().default(null),
   isInternalOnly: z.boolean().default(false),
 });
 
@@ -71,6 +73,7 @@ export const POST = serviceRoute(
       organizationId: form.get('organizationId'),
       folderId: emptyToNull(form.get('folderId')),
       nodeId: emptyToNull(form.get('nodeId')),
+      pageId: emptyToNull(form.get('pageId')),
       isInternalOnly: form.get('isInternalOnly') === 'true',
     });
     if (!parsed.success) {
@@ -103,6 +106,7 @@ export const POST = serviceRoute(
           organizationId: parsed.data.organizationId,
           folderId: parsed.data.folderId,
           nodeId: parsed.data.nodeId,
+          pageId: parsed.data.pageId,
           filename: check.filename,
           contentType: file.type || 'application/octet-stream',
           isInternalOnly: parsed.data.isInternalOnly,

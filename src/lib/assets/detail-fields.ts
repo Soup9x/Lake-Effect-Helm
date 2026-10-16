@@ -81,6 +81,10 @@ export const DIRECTORY_KINDS = [
   'active_directory', 'entra_id', 'hybrid', 'ldap', 'google_workspace', 'okta',
 ] as const;
 export const CERTIFICATE_ISSUANCE = ['public_ca', 'internal_ca', 'self_signed', 'acme'] as const;
+export const PLATFORMS = [
+  'windows', 'windows_server', 'macos', 'linux', 'ios', 'android', 'chromeos',
+  'network_os', 'embedded', 'other',
+] as const;
 
 export const DETAIL_FIELDS: Readonly<Record<string, readonly DetailField[]>> = {
   network: [
@@ -116,6 +120,16 @@ export const DETAIL_FIELDS: Readonly<Record<string, readonly DetailField[]>> = {
     text('rmm_device_id', 'RMM device id'),
     text('backup_policy', 'Backup policy'),
     bool('monitoring_enabled', 'Monitored'),
+    // 0800: the rest of the configuration form. contact_id is a relationship
+    // and is written by the configuration routes, not from here.
+    text('purchased_by', 'Purchased by'),
+    date('installed_at', 'Installed'),
+    text('installed_by', 'Installed by'),
+    text('physical_position', 'Physical position', 'Rack 3, U12; under the desk in reception'),
+    inet('primary_ip', 'Primary IP'),
+    inet('default_gateway', 'Default gateway'),
+    select('platform', 'Platform', 'text', PLATFORMS, false),
+    textarea('os_notes', 'Operating system notes'),
   ],
   vendor: [
     text('legal_name', 'Legal name'),

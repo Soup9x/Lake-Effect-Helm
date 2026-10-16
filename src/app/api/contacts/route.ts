@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
+import { emailEntrySchema, phoneEntrySchema, replaceChannels } from '@/lib/contacts/channels';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,6 +41,13 @@ const createSchema = z.object({
   isBilling: z.boolean().default(false),
   isEmergency: z.boolean().default(false),
   isAuthorised: z.boolean().default(false),
+  /**
+   * 0790: as many as the person has. When either list is sent it is the
+   * whole truth for that kind and the matching single column above is
+   * ignored; when neither is, the columns seed one entry each, by trigger.
+   */
+  emails: z.array(emailEntrySchema).max(20).optional(),
+  phones: z.array(phoneEntrySchema).max(20).optional(),
 });
 
 export const POST = tenantRoute(
@@ -65,7 +73,9 @@ export const POST = tenantRoute(
         VALUES (
           helm.require_tenant_id(), ${body.organizationId}::uuid, ${body.siteId ?? null}::uuid,
           ${body.firstName}, ${body.lastName}, ${body.title ?? null},
-          ${body.email ?? null}, ${body.phone ?? null}, ${body.mobile ?? null},
+          ${body.emails === undefined ? (body.email ?? null) : null},
+          ${body.phones === undefined ? (body.phone ?? null) : null},
+          ${body.phones === undefined ? (body.mobile ?? null) : null},
           ${body.extension ?? null}, ${body.notes ?? null},
           ${body.isPrimary}, ${body.isTechnical}, ${body.isBilling},
           ${body.isEmergency}, ${body.isAuthorised},
@@ -74,6 +84,9 @@ export const POST = tenantRoute(
         RETURNING id
       `;
       if (!row) throw ApiError.conflict('the contact could not be created');
+      if (body.emails !== undefined || body.phones !== undefined) {
+        await replaceChannels(tx, identity.tenantId, row.id, { emails: body.emails, phones: body.phones });
+      }
       return { contactId: row.id };
     } catch (error) {
       // The org and site FKs are both composite on tenant_id, so an id from

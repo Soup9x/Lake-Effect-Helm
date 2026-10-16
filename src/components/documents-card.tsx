@@ -37,6 +37,7 @@ import {
   Eye,
   EyeOff,
   File as FileIcon,
+  FileText,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -74,10 +75,19 @@ type Pending =
   | { kind: 'document-move'; id: string; value: string }
   | null;
 
+export interface PageListRow {
+  id: string;
+  folderId: string | null;
+  title: string;
+  isInternalOnly: boolean;
+  archived: boolean;
+}
+
 export function DocumentsCard({
   organizationId,
   folders,
   documents,
+  pages = [],
   canWrite,
   canDelete,
   maxBytes,
@@ -85,6 +95,8 @@ export function DocumentsCard({
   organizationId: string;
   folders: FolderRow[];
   documents: DocumentRow[];
+  /** Written documents (0810), listed in their folders beside the files. */
+  pages?: PageListRow[];
   canWrite: boolean;
   canDelete: boolean;
   maxBytes: number;
@@ -108,6 +120,12 @@ export function DocumentsCard({
     [documents, current, showArchived],
   );
   const live = useMemo(() => documents.filter((d) => !d.archived), [documents]);
+  const pagesHere = useMemo(
+    () => pages.filter((p) => p.folderId === current && (showArchived || !p.archived))
+      .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })),
+    [pages, current, showArchived],
+  );
+  const livePages = useMemo(() => pages.filter((p) => !p.archived), [pages]);
 
   /** One place that talks to the API, so one place that reports a refusal. */
   async function send(url: string, request: ApiRequest): Promise<boolean> {
@@ -167,7 +185,7 @@ export function DocumentsCard({
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <FolderOpen className="size-4 text-ink-faint" aria-hidden /> Documents
-          <Badge tone="neutral">{live.length}</Badge>
+          <Badge tone="neutral">{live.length + livePages.length}</Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -306,7 +324,7 @@ export function DocumentsCard({
             </div>
 
             <div className="max-h-80 space-y-1 overflow-y-auto">
-              {subfolders.length === 0 && files.length === 0 ? (
+              {subfolders.length === 0 && files.length === 0 && pagesHere.length === 0 ? (
                 <EmptyState
                   title="This folder is empty."
                   description={canWrite ? 'Upload a file or create a folder inside it.' : undefined}
@@ -379,6 +397,23 @@ export function DocumentsCard({
                   </div>
                 );
               })}
+
+              {pagesHere.map((page) => (
+                <a
+                  key={page.id}
+                  href={`/documents/${page.id}`}
+                  className={cn(
+                    'flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm hover:bg-surface-sunken',
+                    page.archived ? 'border-dashed border-border text-ink-faint' : 'border-border',
+                  )}
+                >
+                  <FileText className="size-4 shrink-0 text-ink-faint" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate font-medium text-ink">{page.title}</span>
+                  <span className="text-xs text-ink-faint">Written document</span>
+                  {page.isInternalOnly && <Badge tone="warning">Internal</Badge>}
+                  {page.archived && <Badge tone="neutral">Archived</Badge>}
+                </a>
+              ))}
 
               {files.map((doc) => (
                 <div

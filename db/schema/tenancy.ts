@@ -7,7 +7,7 @@
  * in db/sql — which is why db/sql is the schema authority and this file is the
  * query layer.
  */
-import { boolean, index, integer, jsonb, numeric, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, numeric, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { auditColumns, citext, softDelete, textArray, tstz } from './_types';
 import { organizationRelationship, organizationStatus, tenantStatus } from './enums';
 
@@ -126,6 +126,37 @@ export const contact = pgTable('contact', {
   ...softDelete,
 }, (t) => [
   index('contact_org_idx').on(t.tenantId, t.organizationId),
+]);
+
+/** 0790: a contact's addresses, labelled, one primary. contact.email is the projection. */
+export const contactEmail = pgTable('contact_email', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  contactId: uuid('contact_id').notNull(),
+  address: citext('address').notNull(),
+  label: text('label').notNull().default('work'),
+  isPrimary: boolean('is_primary').notNull().default(false),
+  position: smallint('position').notNull().default(0),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+}, (t) => [
+  index('contact_email_contact_idx').on(t.tenantId, t.contactId),
+]);
+
+/** 0790: a contact's numbers. contact.phone is the primary, contact.mobile the first mobile. */
+export const contactPhone = pgTable('contact_phone', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  contactId: uuid('contact_id').notNull(),
+  number: text('number').notNull(),
+  extension: text('extension'),
+  label: text('label').notNull().default('work'),
+  isPrimary: boolean('is_primary').notNull().default(false),
+  position: smallint('position').notNull().default(0),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+}, (t) => [
+  index('contact_phone_contact_idx').on(t.tenantId, t.contactId),
 ]);
 
 export type Tenant = typeof tenant.$inferSelect;

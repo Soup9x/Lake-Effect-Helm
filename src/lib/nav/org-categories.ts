@@ -82,11 +82,14 @@ export const ORG_CATEGORIES: readonly OrgCategory[] = [
  * It is here, beside the taxonomy, because the answer is a property of the
  * category: 'passwords' means a credential whatever page is asking.
  */
-export type CreateForm = 'contact' | 'secret' | 'site' | 'procedure' | 'asset';
+export type CreateForm = 'contact' | 'secret' | 'site' | 'procedure' | 'configuration' | 'asset';
 
 export function createFormFor(category: string, nodeType?: string | undefined): CreateForm | null {
   switch (category) {
     case 'contacts': return 'contact';
+    // A device has the sectioned form (0800); the generic one asks only for
+    // a name and a type, which is not how anybody documents a server.
+    case 'configurations': return 'configuration';
     case 'passwords': return 'secret';
     case 'locations': return 'site';
     case 'sops': return 'procedure';

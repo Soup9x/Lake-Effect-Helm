@@ -198,9 +198,12 @@ function hrefFor(row: RawHit): string {
   switch (row.kind) {
     case 'client':
       return `/organizations/${row.entity_id}`;
+    case 'document':
+      // A written document has a page of its own (0810); a file does not.
+      if (row.entity_type === 'document_page') return `/documents/${row.entity_id}`;
+      return row.node_id ? `/assets/${row.node_id}` : `/organizations/${row.organization_id}`;
     case 'credential':
     case 'asset':
-    case 'document':
       // An attachment hangs off the node it documents; a credential and an
       // asset ARE nodes. All three open the asset page when there is one.
       return row.node_id ? `/assets/${row.node_id}` : `/organizations/${row.organization_id}`;

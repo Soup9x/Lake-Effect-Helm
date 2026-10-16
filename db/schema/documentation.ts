@@ -427,9 +427,30 @@ export const attachment = pgTable('attachment', {
    */
   folderId: uuid('folder_id'),
   isDocument: boolean('is_document').notNull().default(false),
+  /** 0810: attached to a written document instead of a node or a folder. */
+  pageId: uuid('page_id'),
   uploadedAt: tstz('uploaded_at').notNull().defaultNow(),
   uploadedBy: uuid('uploaded_by').references(() => appUser.id, { onDelete: 'set null' }),
   /** Archive-first, the rail 0500 put in front of every permanent deletion. */
+  archivedAt: tstz('archived_at'),
+  deletedAt: tstz('deleted_at'),
+});
+
+/** 0810: a written document in the client's document tree. */
+export const documentPage = pgTable('document_page', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  folderId: uuid('folder_id'),
+  title: text('title').notNull(),
+  body: jsonb('body').notNull().default({ type: 'doc', content: [] }),
+  bodyText: text('body_text').notNull().default(''),
+  isInternalOnly: boolean('is_internal_only').notNull().default(false),
+  version: integer('version').notNull().default(1),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
   archivedAt: tstz('archived_at'),
   deletedAt: tstz('deleted_at'),
 });

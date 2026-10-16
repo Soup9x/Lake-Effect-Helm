@@ -31,7 +31,7 @@ describe('choosing a create form', () => {
   });
 
   it('gives every other node category the generic form', () => {
-    expect(createFormFor('configurations', 'device')).toBe('asset');
+    expect(createFormFor('configurations', 'device')).toBe('configuration');
     expect(createFormFor('domains', 'domain')).toBe('asset');
     expect(createFormFor('ip-addresses', 'ip_address')).toBe('asset');
   });
