@@ -23,6 +23,7 @@ import { ColumnMenu, useHiddenColumns, type ColumnChoice } from './column-menu';
 import { DataTable, type Column, type GridRow } from './data-table';
 import { matchesBrowse } from '@/lib/ui/browse';
 import { RowRemoveDialog, type RemoveKind } from './row-remove-dialog';
+import { ContactForm } from './contact-form';
 import { RowPermissionsDialog, type RowPermissions } from './row-permissions-dialog';
 import { Badge } from '../ui/badge';
 import { formatDate } from '@/lib/ui/format';
@@ -50,6 +51,8 @@ export interface CategoryRecord {
   removeKind?: RemoveKind | undefined;
   /** Who can see it. Omitted for rows with no visibility flag — contacts, sites. */
   permissions?: RowPermissions | undefined;
+  /** A contact row: Edit opens the contact dialog rather than a page. */
+  editContact?: { organizationId: string } | undefined;
 }
 
 interface Row extends GridRow {
@@ -136,6 +139,7 @@ export function CategoryGrid({
 
   const [removing, setRemoving] = useState<CategoryRecord | null>(null);
   const [permissioning, setPermissioning] = useState<CategoryRecord | null>(null);
+  const [editingContact, setEditingContact] = useState<CategoryRecord | null>(null);
 
   const rows = useMemo<Row[]>(
     () =>
@@ -156,6 +160,10 @@ export function CategoryGrid({
           : [
               ...(canWrite && record.href
                 ? [{ label: 'Edit', icon: Pencil, href: record.href }]
+                : []),
+              // A contact has no page of its own; its edit is a dialog (0790).
+              ...(canWrite && record.editContact
+                ? [{ label: 'Edit', icon: Pencil, onClick: () => setEditingContact(record) }]
                 : []),
               // Only where there is a flag to edit: a contact has no visibility
               // of its own, so offering the control would be offering nothing.
@@ -306,6 +314,15 @@ export function CategoryGrid({
           kind={removing.removeKind}
           open
           onOpenChange={(next) => { if (!next) setRemoving(null); }}
+        />
+      )}
+
+      {editingContact?.editContact && (
+        <ContactForm
+          organizationId={editingContact.editContact.organizationId}
+          contactId={editingContact.id}
+          open
+          onOpenChange={(next) => { if (!next) setEditingContact(null); }}
         />
       )}
 

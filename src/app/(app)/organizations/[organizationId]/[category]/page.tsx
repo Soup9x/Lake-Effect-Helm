@@ -195,6 +195,7 @@ export default async function CategoryPage({
           updatedAt: r.updated_at.toISOString(),
           // No visibility flag on `contact`, so no permissions action.
           removeKind: 'contact',
+          editContact: { organizationId },
         })),
       };
     }

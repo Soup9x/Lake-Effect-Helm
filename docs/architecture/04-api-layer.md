@@ -375,6 +375,8 @@ no security meaning.
 | `/api/assets/:nodeId` | GET | `asset:read` | Metadata + secret *metadata*, no ciphertext |
 | `/api/assets/:nodeId/graph` | GET | `asset:read` | `neighbours` / `dependencies` / `impact` |
 | `/api/assets/:nodeId/detail` | PATCH | `asset:write` | The subtype row (a network's CIDR, a device's serial), from the catalogue in `lib/assets/detail-fields.ts`; Postgres validates |
+| `/api/contacts` | POST | `asset:write` | With `emails[]` and `phones[]` (0790), or the single columns, which seed one entry each |
+| `/api/contacts/:id` | GET/PATCH/DELETE | `asset:read` / `asset:write` | Every address and number; PATCH replaces a list whole |
 | `/api/assets/links` | POST/DELETE | `asset:link` | Idempotent in both directions |
 | `/api/secrets/:id/reveal` | POST | `secret:reveal` | Audited; returns the event id |
 | `/api/secrets/:id/copy` | POST | `secret:read` | Clipboard is its own event |

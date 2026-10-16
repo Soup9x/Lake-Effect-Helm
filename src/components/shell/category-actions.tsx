@@ -27,7 +27,7 @@
  */
 import { useState } from 'react';
 import { ImportDialog } from './import-dialog';
-import { NewContactForm } from './new-contact-form';
+import { ContactForm } from './contact-form';
 import { NewProcedureForm } from '../new-procedure-form';
 import { NewAssetForm } from '../new-asset-form';
 import { NewSecretForm } from '../new-secret-form';
@@ -95,7 +95,7 @@ export function CategoryActions({
         half-typed input nobody can see.
       */}
       {creating && form === 'contact' && (
-        <NewContactForm
+        <ContactForm
           organizationId={organizationId}
           open={creating}
           onOpenChange={setCreating}
