@@ -912,8 +912,10 @@ describe('what the registry said, on the asset page', () => {
     // column is asserted present in the same breath as the observed one is
     // asserted absent. Without this line, deleting detailFor() entirely would
     // pass.
+    // The row is labelled from the detail catalogue now ('Expires'), not
+    // humanised from the column name ('Expires at').
     expect(text, 'the domain detail list should still show the recorded expiry')
-      .toContain('Expires at');
+      .toContain('Expires');
     expect(
       text,
       'registry_expires_at reached the generic detail list — is it still in HIDDEN?',
