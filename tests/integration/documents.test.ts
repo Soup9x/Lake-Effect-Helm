@@ -390,6 +390,67 @@ describe('archiving, and the rail in front of deletion', () => {
   });
 });
 
+describe('attachments on an asset (0780)', () => {
+  /*
+   * The 0130 shape, written for the first time. A node attachment is not a
+   * document — no folder, 0560's constraint forbids both — and until 0780 both
+   * doors (open, delete) began with `AND is_document`, so such a row could be
+   * stored and then neither downloaded nor removed.
+   */
+  it('stores a file against the asset, outside the document tree', async () => {
+    const stored = await harness.documents.upload(ADMIN, {
+      organizationId: IDS.orgAcme, folderId: null, nodeId: IDS.firewall,
+      filename: 'rack-photo.png', contentType: 'image/png', isInternalOnly: false,
+      bytes: bytesOf('png-bytes'),
+    });
+    const [row] = await withTenant(ADMIN, (tx) => tx<{ node_id: string; is_document: boolean; folder_id: string | null }[]>`
+      SELECT node_id, is_document, folder_id FROM attachment WHERE id = ${stored.id}::uuid
+    `);
+    expect(row).toEqual({ node_id: IDS.firewall, is_document: false, folder_id: null });
+
+    // Listed on the asset, not in the client's documents.
+    const { listDocuments, listNodeAttachments } = await import('../../src/lib/clients/queries');
+    const onNode = await withTenant(ADMIN, (tx) => listNodeAttachments(tx, IDS.firewall));
+    expect(onNode.map((a) => a.id)).toContain(stored.id);
+    const inTree = await withTenant(ADMIN, (tx) => listDocuments(tx, IDS.orgAcme));
+    expect(inTree.map((a) => a.id)).not.toContain(stored.id);
+  });
+
+  it('downloads and deletes through the same doors as a document', async () => {
+    const stored = await harness.documents.upload(ADMIN, {
+      organizationId: IDS.orgAcme, folderId: null, nodeId: IDS.firewall,
+      filename: 'loa.pdf', contentType: 'application/pdf', isInternalOnly: false,
+      bytes: bytesOf('letter of authorisation'),
+    });
+    const opened = await harness.documents.download(ADMIN, stored.id);
+    expect(opened.bytes.toString('utf8')).toBe('letter of authorisation');
+
+    // The archive rail still stands in front of deletion.
+    await expect(harness.documents.remove(ADMIN, stored.id)).rejects.toMatchObject({ code: 'not_archived' });
+    await withTenant(ADMIN, (tx) => tx`UPDATE attachment SET archived_at = now() WHERE id = ${stored.id}::uuid`);
+    await harness.documents.remove(ADMIN, stored.id);
+    const [gone] = await withTenant(ADMIN, (tx) => tx<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM attachment WHERE id = ${stored.id}::uuid
+    `);
+    expect(gone!.n).toBe(0);
+  });
+
+  it('refuses an asset of another client, and a folder alongside a node', async () => {
+    await expect(harness.documents.upload(ADMIN, {
+      organizationId: IDS.orgAcme, folderId: null, nodeId: IDS.globexServer,
+      filename: 'wrong-client.pdf', contentType: 'application/pdf', isInternalOnly: false,
+      bytes: bytesOf('x'),
+    })).rejects.toBeInstanceOf(DocumentError);
+
+    const folder = await newFolder(ADMIN, 'Not for attachments');
+    await expect(harness.documents.upload(ADMIN, {
+      organizationId: IDS.orgAcme, folderId: folder, nodeId: IDS.firewall,
+      filename: 'both.pdf', contentType: 'application/pdf', isInternalOnly: false,
+      bytes: bytesOf('x'),
+    })).rejects.toBeInstanceOf(DocumentError);
+  });
+});
+
 describe('the folder tree', () => {
   it('refuses to delete a folder that still has anything in it', async () => {
     const folder = await newFolder(ADMIN, 'Occupied');

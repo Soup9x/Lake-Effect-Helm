@@ -23,6 +23,11 @@ import { listAssignableUsers, readTemplate } from '@/lib/sops/queries';
 import { ChecklistTemplateCard } from '@/components/checklist-template-card';
 import { ChecklistSchedulesCard } from '@/components/checklist-schedules-card';
 import { listSchedules } from '@/lib/sops/schedules';
+import { NodeAttachmentsCard } from '@/components/node-attachments-card';
+import { listNodeAttachments } from '@/lib/clients/queries';
+import type { DocumentRow } from '@/lib/ui/documents';
+import { maxUploadBytes } from '@/lib/documents/limits';
+import { categoryBySource } from '@/lib/nav/org-categories';
 import { ExternalCheckNote, type ExternalCheckState } from '@/components/external-check-note';
 import { readExternalCheckSetting } from '@/lib/external/settings';
 
@@ -72,7 +77,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
   const { nodeId } = await params;
   if (!isUuid(nodeId)) notFound();
 
-  const data = await withTenant(actorOf(identity), async (tx) => {
+  const data = await withTenant(actorOf(identity), async (tx, session) => {
     const [node] = await tx<NodeRow[]>`
       SELECT n.id, n.node_type::text, n.name, n.description, n.notes, n.status::text,
              n.tags, n.criticality, n.organization_id, o.name AS organization_name,
@@ -256,9 +261,13 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     // Only for the picker in the start-a-run dialog, so only when that dialog
     // can be opened at all.
     const assignable = template && perm?.run ? await listAssignableUsers(tx) : [];
+    // Files attached to this asset (0780): the circuit's LOA, the contract's PDF.
+    const attachments = await listNodeAttachments(tx, node.id);
 
     return {
       node, detail: detailRows, edges, secrets, expiries, sites, record, template, schedules,
+      attachments,
+      canDeleteAttachments: session.permissions.includes('asset:delete'),
       totp: totp ?? null,
       canReveal: perm?.reveal ?? false,
       canAuthorProcedures: perm?.author ?? false,
@@ -273,7 +282,40 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
   const {
     node, detail, edges, secrets, expiries, sites, record, template, schedules, totp, canReveal,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
+    attachments, canDeleteAttachments,
   } = data;
+
+  const attachmentRows: DocumentRow[] = attachments.map((d) => ({
+    id: d.id,
+    folderId: d.folder_id,
+    filename: d.filename,
+    contentType: d.content_type,
+    byteSize: Number(d.byte_size),
+    isInternalOnly: d.is_internal_only,
+    archived: d.archived_at !== null,
+    uploadedAt: d.uploaded_at.toISOString(),
+    uploadedBy: d.uploaded_by_name,
+  }));
+
+  /*
+   * The category this asset is listed under, for the crumb between the client
+   * and the site. Without it the trail read Clients › Acme › Head office over
+   * a firewall, and the only way back to the firewall LIST was the client page
+   * and a second click.
+   */
+  const category = categoryBySource(node.node_type);
+
+  /*
+   * Credentials are a card on every asset page because any node can hold a
+   * secret. Most never do — a contract, a licence, a domain — and an empty
+   * "No credentials attached" card on each of those was the complaint. The
+   * card stays where credentials are the normal case, and anywhere one has
+   * actually been attached.
+   */
+  const CREDENTIAL_TYPES = new Set([
+    'device', 'application', 'directory_service', 'network', 'vendor', 'isp_circuit',
+  ]);
+  const showCredentials = secrets.length > 0 || totp !== null || CREDENTIAL_TYPES.has(node.node_type);
 
   /** The probe's answer, shaped for the card. */
   const checkState: ExternalCheckState | null = checkSetting === null || checkRow === null
@@ -302,6 +344,9 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         trail={[
           { label: 'Clients', href: '/organizations' },
           { label: node.organization_name, href: `/organizations/${node.organization_id}` },
+          ...(category
+            ? [{ label: category.label, href: `/organizations/${node.organization_id}/${category.slug}` }]
+            : []),
           ...(node.site_name ? [{ label: node.site_name }] : []),
         ]}
         actions={
@@ -515,6 +560,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           />
         )}
 
+        {showCredentials && (
         <Card>
           <CardHeader>
             <CardTitle>Credentials</CardTitle>
@@ -567,6 +613,16 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             )}
           </CardContent>
         </Card>
+        )}
+
+        <NodeAttachmentsCard
+          nodeId={node.id}
+          organizationId={node.organization_id}
+          attachments={attachmentRows}
+          canWrite={canWrite}
+          canDelete={canDeleteAttachments}
+          maxBytes={maxUploadBytes()}
+        />
       </PageBody>
     </>
   );

@@ -88,6 +88,13 @@ export class DocumentService {
     input: {
       organizationId: string;
       folderId: string | null;
+      /**
+       * An asset to attach the file to instead of a folder (0780). Such a row
+       * is not a document: it has no folder, it is listed on the asset's page
+       * rather than in the client's tree, and 0560's constraint keeps the two
+       * shapes apart. The node must be the organisation's own.
+       */
+      nodeId?: string | null;
       filename: string;
       contentType: string;
       isInternalOnly: boolean;
@@ -97,11 +104,25 @@ export class DocumentService {
     if (input.bytes.length === 0) {
       throw new DocumentError('missing_bytes', 'the file is empty');
     }
+    const nodeId = input.nodeId ?? null;
+    if (nodeId !== null && input.folderId !== null) {
+      throw new DocumentError('no_such_folder', 'an attachment on an asset has no folder');
+    }
 
     const attachmentId = randomUUID();
     const sha256 = await sha256Of(input.bytes);
 
     const sealed = await withTenant(actor, async (tx) => {
+      if (nodeId !== null) {
+        // Under RLS, so a node this actor cannot see is "no such asset", and
+        // one in another client is refused before any bytes are sealed.
+        const [node] = await tx<{ ok: boolean }[]>`
+          SELECT true AS ok FROM asset_node
+          WHERE id = ${nodeId}::uuid AND organization_id = ${input.organizationId}::uuid
+            AND archived_at IS NULL
+        `;
+        if (!node) throw new DocumentError('not_found', 'no such asset in this client');
+      }
       const key = await activeDataKey(tx, actor.tenantId);
       const dek = await this.deps.dekCache.get({
         dataKeyId: key.id,
@@ -123,14 +144,14 @@ export class DocumentService {
           { id: string; filename: string; byte_size: string; is_internal_only: boolean }[]
         >`
           INSERT INTO attachment (
-            id, tenant_id, organization_id, is_document, folder_id,
+            id, tenant_id, organization_id, is_document, folder_id, node_id,
             filename, content_type, byte_size, storage_key, content_sha256,
             data_key_id, encryption_nonce, is_internal_only,
             scan_status, uploaded_by
           )
           VALUES (
             ${attachmentId}::uuid, ${actor.tenantId}::uuid, ${input.organizationId}::uuid,
-            true, ${input.folderId},
+            ${nodeId === null}, ${input.folderId}, ${nodeId}::uuid,
             ${input.filename}, ${input.contentType}, ${input.bytes.length},
             ${storageKey}, ${sha256},
             ${sealed.dataKeyId}::uuid, ${sealed.nonce}, ${input.isInternalOnly},
@@ -146,7 +167,7 @@ export class DocumentService {
         await tx`
           SELECT helm.audit(
             'document.uploaded', 'attachment', ${row.id}::uuid, 'success',
-            ${input.organizationId}::uuid, NULL, NULL,
+            ${input.organizationId}::uuid, ${nodeId}::uuid, NULL,
             ${tx.json({
               filename: row.filename,
               byteSize: input.bytes.length,

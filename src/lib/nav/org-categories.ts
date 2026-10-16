@@ -62,7 +62,10 @@ export const ORG_CATEGORIES: readonly OrgCategory[] = [
   { slug: 'licenses',     label: 'Licences',     kind: 'node', source: 'license',           icon: 'BadgeCheck', secondary: true },
   { slug: 'vendors',      label: 'Vendors',      kind: 'node', source: 'vendor',            icon: 'Truck',      secondary: true },
   { slug: 'sops',         label: 'SOPs',         kind: 'node', source: 'sop',               icon: 'BookOpen',   secondary: true },
-  { slug: 'ip-addresses', label: 'IP Addresses', kind: 'node', source: 'ip_address',        icon: 'Binary',     secondary: true },
+  // No 'ip-addresses'. The ip_address node type still exists in the schema and
+  // an existing row still opens, but an address belongs on the network or the
+  // device that holds it, not in a list of its own; the category was retired
+  // rather than kept as a second place to record the same fact.
 ];
 
 /**

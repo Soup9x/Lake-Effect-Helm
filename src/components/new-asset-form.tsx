@@ -24,7 +24,6 @@ import { apiFetch } from '@/lib/ui/api';
 const KINDS = [
   ['device', 'Device'],
   ['network', 'Network'],
-  ['ip_address', 'IP address'],
   ['domain', 'Domain'],
   ['ssl_certificate', 'SSL certificate'],
   ['directory_service', 'Directory service'],
@@ -133,8 +132,6 @@ export function NewAssetForm({
         return { label: 'Network kind', options: NETWORK_KINDS };
       case 'directory_service':
         return { label: 'Directory kind', options: DIRECTORY_KINDS };
-      case 'ip_address':
-        return { label: 'Address', hint: 'IPv4 or IPv6, e.g. 10.10.4.7' };
       case 'domain':
         return { label: 'Domain name', hint: 'e.g. northwind.example' };
       case 'ssl_certificate':
@@ -152,7 +149,6 @@ export function NewAssetForm({
     device: 'deviceType',
     network: 'networkKind',
     directory_service: 'directoryKind',
-    ip_address: 'address',
     domain: 'domainName',
     ssl_certificate: 'commonName',
   };

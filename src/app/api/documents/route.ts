@@ -27,6 +27,8 @@ import { checkUpload, maxUploadBytes } from '@/lib/documents/limits';
 const uploadSchema = z.object({
   organizationId: z.guid('organizationId must be a UUID'),
   folderId: z.guid().nullable().default(null),
+  /** Attach to an asset instead of filing in a folder (0780). */
+  nodeId: z.guid().nullable().default(null),
   isInternalOnly: z.boolean().default(false),
 });
 
@@ -68,6 +70,7 @@ export const POST = serviceRoute(
     const parsed = uploadSchema.safeParse({
       organizationId: form.get('organizationId'),
       folderId: emptyToNull(form.get('folderId')),
+      nodeId: emptyToNull(form.get('nodeId')),
       isInternalOnly: form.get('isInternalOnly') === 'true',
     });
     if (!parsed.success) {
@@ -99,6 +102,7 @@ export const POST = serviceRoute(
         {
           organizationId: parsed.data.organizationId,
           folderId: parsed.data.folderId,
+          nodeId: parsed.data.nodeId,
           filename: check.filename,
           contentType: file.type || 'application/octet-stream',
           isInternalOnly: parsed.data.isInternalOnly,
