@@ -381,6 +381,8 @@ no security meaning.
 | `/api/devices/:id` | GET/PATCH | `asset:read` / `asset:write` | The same, read back and corrected; interfaces replaced whole |
 | `/api/document-pages` | POST | `asset:write` | A written document (0810) in the client's tree; one title per folder |
 | `/api/document-pages/:id` | GET/PATCH/DELETE | `asset:read` / `asset:write` / `asset:delete` | Body versions on save; archive-first delete takes its attachments with it |
+| `/api/tenant/backups` | GET/PUT | `tenant:write` | The instance's backup schedule, destination and recent runs (0820) |
+| `/api/tenant/backups/run` | POST | `tenant:write` | Queue a backup or a restore rehearsal for the backup service |
 | `/api/assets/links` | POST/DELETE | `asset:link` | Idempotent in both directions |
 | `/api/secrets/:id/reveal` | POST | `secret:reveal` | Audited; returns the event id |
 | `/api/secrets/:id/copy` | POST | `secret:read` | Clipboard is its own event |

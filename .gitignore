@@ -42,6 +42,9 @@ helm-master-key*
 # database password live here; committing either would be the single worst
 # mistake available in this repository.
 /deploy/secrets/
+# The default local backup destination (HELM_BACKUP_DIR). Sealed, but still
+# the whole database; it belongs on another disk, never in the tree.
+/backups/
 /deploy/tls/*
 !/deploy/tls/.gitkeep
 /deploy/data/

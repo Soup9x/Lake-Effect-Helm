@@ -366,6 +366,24 @@ $(printf '%s\n' "$born_missing" | sed 's/^/        /')
     ok "wrote deploy/secrets/master.key (0400, uid ${HELM_UID}) and .env (0600)"
   fi
 
+  # The backup passphrase (0820) arrived after the first installs. An install
+  # provisioned before it has a master key and no backup.pass, and compose
+  # would bind-mount the missing file as an empty DIRECTORY, which the backup
+  # service then cannot read as a passphrase. Create it here on every run, so
+  # an upgrade needs nothing more than re-running this script.
+  local pass_file="$REPO_ROOT/deploy/secrets/backup.pass"
+  if [ ! -e "$pass_file" ]; then
+    ( umask 077; openssl rand -base64 48 | tr -d '\n' > "$pass_file" )
+    chown "${HELM_UID}:${HELM_UID}" "$pass_file"
+    chmod 0400 "$pass_file"
+    ok "wrote deploy/secrets/backup.pass (0400, uid ${HELM_UID}) — the passphrase that seals every backup"
+  fi
+  if [ ! -d "$REPO_ROOT/backups" ]; then
+    mkdir -p "$REPO_ROOT/backups"
+    chown "${HELM_UID}:${HELM_UID}" "$REPO_ROOT/backups"
+    chmod 0700 "$REPO_ROOT/backups"
+  fi
+
   # Verify rather than assume — a key file the container cannot read stops the
   # web tier dead, with an error that reads like a bug.
   local mode owner
@@ -376,7 +394,7 @@ $(printf '%s\n' "$born_missing" | sed 's/^/        /')
   ok "master key permissions verified (0400, uid $owner)"
 
   printf '\n'
-  warn "BACK UP deploy/secrets/master.key AND .env, OFF THIS HOST, ENCRYPTED."
+  warn "BACK UP deploy/secrets/master.key, deploy/secrets/backup.pass AND .env, OFF THIS HOST, ENCRYPTED."
   note "Without the master key the database is ciphertext nobody can read."
   note "There is no recovery path — that is the design. See §7.3."
 }

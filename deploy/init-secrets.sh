@@ -171,6 +171,20 @@ ENVEOF
 
 chmod 0600 "$ENV_FILE"
 echo "environment     ${ENV_FILE} (mode 0600)"
+
+# -----------------------------------------------------------------------------
+# Backup passphrase (0820). Seals every archive the built-in backup service
+# writes. Kept beside the master key and backed up the same way: the archives
+# are useless without it, and it must never travel with them.
+# -----------------------------------------------------------------------------
+BACKUP_PASS_FILE="${SECRETS_DIR}/backup.pass"
+if [ ! -e "$BACKUP_PASS_FILE" ]; then
+  openssl rand -base64 48 | tr -d '\n' > "$BACKUP_PASS_FILE"
+  chown "${HELM_UID}:${HELM_GID}" "$BACKUP_PASS_FILE"
+  chmod 0400 "$BACKUP_PASS_FILE"
+  echo "backup pass     ${BACKUP_PASS_FILE} (mode 0400, uid ${HELM_UID})"
+fi
+mkdir -p backups && chown "${HELM_UID}:${HELM_GID}" backups && chmod 0700 backups
 echo
 
 echo "Next:"
@@ -178,4 +192,4 @@ note "1. Edit ${ENV_FILE} and set HELM_PUBLIC_HOST and HELM_PUBLIC_URL."
 note "2. docker compose up -d"
 note "3. Create the first tenant and administrator — setup guide §6."
 echo
-red "Back up ${KEY_FILE} and ${ENV_FILE} off this host before going further."
+red "Back up ${KEY_FILE}, ${SECRETS_DIR}/backup.pass and ${ENV_FILE} off this host before going further."

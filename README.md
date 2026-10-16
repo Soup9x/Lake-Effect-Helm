@@ -46,6 +46,9 @@ enforced by PostgreSQL itself rather than by application code.
   warnings at configurable lead times (Settings → Expiry warnings).
 - **Notifications.** Webhooks (generic, Slack, Teams, Discord), email through
   your own relay, and an in-app inbox.
+- **Backups.** A scheduled, sealed dump of the database and volumes to a host
+  folder or an S3-compatible bucket, configured and monitored from Settings,
+  with a weekly restore rehearsal.
 - **Exports.** Client offboarding and audit bundles as PDF and JSON, encrypted
   with a passphrase delivered out of band when they contain credentials.
 - **Network inventory.** UniFi controllers polled for devices and clients, with

@@ -148,3 +148,17 @@ COPY --chown=helm:helm src ./src
 USER helm
 ENV NODE_ENV=production
 CMD ["node_modules/.bin/tsx", "db/migrate.ts"]
+
+# -----------------------------------------------------------------------------
+# backup — the migrate image plus pg_dump, pg_restore and psql (0820).
+#
+# Holds the superuser credential like migrate does, for the same reason: a
+# dump needs to read every table past row security. It is its own service
+# in docker-compose.yml, on a schedule set in Settings, and nothing else
+# talks to it.
+# -----------------------------------------------------------------------------
+FROM migrate AS backup
+USER root
+RUN apk add --no-cache postgresql16-client tar
+USER helm
+CMD ["node_modules/.bin/tsx", "scripts/backup.ts"]
