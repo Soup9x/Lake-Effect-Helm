@@ -22,6 +22,22 @@
 	# them, and its access log is the one place a request id can be correlated
 	# with the application log.
 	admin off
+
+	# Keep X-Forwarded-For from a proxy on a private address — a Cloudflare
+	# Tunnel connector, a load balancer on the LAN — instead of discarding it.
+	# Caddy drops the incoming header from any source it does not trust, and
+	# then every request Helm sees comes from the proxy's address: the per-IP
+	# sign-in lockout counts everyone together and the audit log is blind.
+	#
+	# This does not change what Helm reads: Caddy still appends exactly one
+	# entry of its own, and Helm counts HELM_TRUSTED_PROXY_HOPS entries from
+	# the RIGHT. With nothing in front of Caddy the rightmost entry is the
+	# client, hops stays 1, and a client on the LAN who sends a forged header
+	# gains nothing. With a trusted proxy in front, set hops to 2.
+	servers {
+		trusted_proxies static private_ranges
+	}
+
 	log {
 		format json
 	}
@@ -34,10 +50,11 @@
 
 	reverse_proxy web:3000 {
 		# Exactly one X-Forwarded-For entry is appended here, which is why the
-		# application runs with HELM_TRUSTED_PROXY_HOPS=1. Change one and you
-		# must change the other: Helm reads the client address that many places
-		# from the right, because the leftmost entry is client-controlled and
-		# trusting it would defeat API token IP allowlisting.
+		# application runs with HELM_TRUSTED_PROXY_HOPS=1 when Caddy is the only
+		# proxy. Change one and you must change the other: Helm reads the client
+		# address that many places from the right, because the leftmost entry
+		# is client-controlled and trusting it would defeat API token IP
+		# allowlisting.
 		header_up X-Real-IP {remote_host}
 	}
 

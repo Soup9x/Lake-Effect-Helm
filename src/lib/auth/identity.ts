@@ -160,8 +160,22 @@ function selectTenant(available: string[], requested: string | undefined): strin
  * how many trailing entries the infrastructure appends, and we count back from
  * the right — taking the leftmost entry, the common mistake, lets a caller
  * forge any address they like and defeats IP allowlisting entirely.
+ *
+ * HELM_CLIENT_IP_HEADER names a header that carries the address outright,
+ * for an edge that sets one — Cloudflare's CF-Connecting-IP, a load balancer's
+ * True-Client-IP. It wins when set and valid, and only a deployment where the
+ * edge OVERWRITES that header on every request should set it: anything that
+ * reaches Helm without passing through the edge can then name any address it
+ * likes, which is the same forgery hop counting exists to prevent. Behind a
+ * tunnel whose origin port is not otherwise reachable, that condition holds.
  */
 export function clientIp(request: { headers: Headers }): string | undefined {
+  const named = process.env.HELM_CLIENT_IP_HEADER?.trim().toLowerCase();
+  if (named) {
+    const value = request.headers.get(named)?.trim();
+    if (value && isIP(value)) return value;
+  }
+
   const forwarded = request.headers.get('x-forwarded-for');
   if (forwarded) {
     // Validated: a non-numeric value used to become NaN, and NaN hops fell

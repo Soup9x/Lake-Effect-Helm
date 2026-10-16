@@ -375,7 +375,10 @@ from the **right** of `X-Forwarded-For`:
 HELM_TRUSTED_PROXY_HOPS=1
 ```
 
-One, for the Caddy in this stack. Raise it if you have another proxy in front.
+One, for the Caddy in this stack. Two if a tunnel or load balancer sits in
+front of it and Caddy trusts that source — or set `HELM_CLIENT_IP_HEADER` to
+the header your edge writes (`cf-connecting-ip` behind Cloudflare), which wins
+over the count. See the install guide §3 for the tunnel case.
 Counting from the right is the point: the leftmost entry is whatever the client
 sent, and an attacker who controls it controls which bucket their attempts count
 against — which would defeat the per-address limit entirely.
