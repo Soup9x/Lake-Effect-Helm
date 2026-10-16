@@ -76,7 +76,7 @@ export const PATCH = tenantRoute(
                 : null
           }
         WHERE id = ${attachmentId}::uuid
-          AND is_document
+          AND (is_document OR node_id IS NOT NULL)
           AND deleted_at IS NULL
         RETURNING id, filename, is_internal_only, archived_at
       `;

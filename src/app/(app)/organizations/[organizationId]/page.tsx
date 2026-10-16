@@ -5,11 +5,9 @@ import { Boxes, CalendarClock, KeyRound, MapPin, Users } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
-import { NewSecretForm } from '@/components/new-secret-form';
 import { SiteForm } from '@/components/site-form';
 import { TopologyDesigner } from '@/components/topology-designer';
 import { CredentialEditForm } from '@/components/credential-edit-form';
-import { NewAssetForm } from '@/components/new-asset-form';
 import { InlineRename } from '@/components/inline-rename';
 import { RelationshipPicker } from '@/components/relationship-picker';
 import { TagEditor } from '@/components/tag-editor';
@@ -300,16 +298,12 @@ export default async function OrganizationPage({
             canWrite={canWrite}
           />
         </div>
-        {canWrite && (
-          <div className="mb-4 flex flex-wrap gap-2">
-            <NewSecretForm organizationId={organization.id} />
-            <SiteForm organizationId={organization.id} />
-            <NewAssetForm
-              organizationId={organization.id}
-              sites={sites.map((s) => ({ id: s.id, name: s.name }))}
-            />
-          </div>
-        )}
+        {/*
+          No create buttons here. Add a site, Store a credential and Document an
+          asset used to sit in a row under the tags; each category page under
+          the client has its own + New, which is where somebody creating a thing
+          already is, and the overview is for finding what exists.
+        */}
         <NotesCard
           endpoint={`/api/organizations/${organization.id}`}
           notes={organization.notes}
