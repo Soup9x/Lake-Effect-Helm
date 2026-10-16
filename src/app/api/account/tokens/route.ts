@@ -21,7 +21,7 @@ import {
  * clearer 4xx before the database is asked, and nothing more — a route that
  * forgot them would still be refused.
  */
-const PERMISSION_KEY = /^[a-z_]+:[a-z_]+$/;
+const PERMISSION_KEY = /^[a-z_]+:[a-z_:]+$/;
 
 const issueSchema = z.object({
   name: z.string().trim().min(1).max(80),

@@ -49,9 +49,10 @@ enforced by PostgreSQL itself rather than by application code.
   certificate pinning and signed webhooks.
 - **Sign-in.** Local passwords (the break-glass path), Microsoft Entra ID, any
   OpenID Connect provider, and RADIUS. All produce the same revocable session.
-- **Personal API tokens.** Issued from the account page, scoped to a subset of
-  what the person holds, expiring within a year, revocable at once, for
-  scripts and integrations that act as a technician.
+- **API tokens.** Personal tokens from the account page, scoped to a subset of
+  what the person holds; service accounts from Settings for automation that
+  outlives a person, with a role, a scope and an optional IP allow-list. Both
+  expire within a year and are revocable at once.
 - **Tamper-evident audit log.** Per-tenant SHA-256 hash chain, anchored to an
   external receipt on a schedule.
 
