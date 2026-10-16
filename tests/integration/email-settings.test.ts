@@ -342,6 +342,47 @@ describe('the certificate pin', () => {
     }));
     expect(status, raw).toBe(200);
   });
+
+  it('keeps the pin when a later save does not paste it again', async () => {
+    // The form never re-sends a stored PEM — the box says "Stored — paste a
+    // new one to replace it". Saving the host again used to drop the pin, and
+    // with verification off the second save was then refused outright.
+    currentUser = USERS.admin;
+    const first = await read(await save({
+      ...VALID, tlsVerify: false, tlsPinnedCertificate: certificate,
+    }));
+    expect(first.status, first.raw).toBe(200);
+    const fingerprint = first.payload.pinnedFingerprint;
+    expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
+
+    const second = await read(await save({ ...VALID, host: 'mail2.northwind.test', tlsVerify: false }));
+    expect(second.status, second.raw).toBe(200);
+    expect(second.payload.host).toBe('mail2.northwind.test');
+    expect(second.payload.pinnedFingerprint).toBe(fingerprint);
+  });
+
+  it('clears the pin when sent an empty string, and refuses that with verification off', async () => {
+    currentUser = USERS.admin;
+    await save({ ...VALID, tlsVerify: false, tlsPinnedCertificate: certificate });
+
+    const refused = await read(await save({ ...VALID, tlsVerify: false, tlsPinnedCertificate: '' }));
+    expect(refused.status).toBe(400);
+    expect(JSON.stringify(refused.payload)).toContain('accepts any');
+
+    const cleared = await read(await save({ ...VALID, tlsVerify: true, tlsPinnedCertificate: '' }));
+    expect(cleared.status, cleared.raw).toBe(200);
+    expect(cleared.payload.pinnedFingerprint).toBeNull();
+  });
+
+  it('drops the pin when the relay moves to plaintext', async () => {
+    currentUser = USERS.admin;
+    await save({ ...VALID, tlsPinnedCertificate: certificate });
+    const { status, payload, raw } = await read(await save({
+      ...VALID, security: 'plaintext', port: 25, acknowledgePlaintext: true,
+    }));
+    expect(status, raw).toBe(200);
+    expect(payload.pinnedFingerprint).toBeNull();
+  });
 });
 
 describe('the recipient domains', () => {
