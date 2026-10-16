@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { isUuid } from '@/lib/ids';
 import { Network } from 'lucide-react';
@@ -29,6 +30,8 @@ import type { DocumentRow } from '@/lib/ui/documents';
 import { maxUploadBytes } from '@/lib/documents/limits';
 import { categoryBySource } from '@/lib/nav/org-categories';
 import { DetailEditForm } from '@/components/detail-edit-form';
+import { ConfigurationEdit } from '@/components/configuration-edit';
+import { listInterfaces } from '@/lib/assets/devices';
 import { detailFieldsFor, subnetMaskOf } from '@/lib/assets/detail-fields';
 import { ExternalCheckNote, type ExternalCheckState } from '@/components/external-check-note';
 import { readExternalCheckSetting } from '@/lib/external/settings';
@@ -265,10 +268,31 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     const assignable = template && perm?.run ? await listAssignableUsers(tx) : [];
     // Files attached to this asset (0780): the circuit's LOA, the contract's PDF.
     const attachments = await listNodeAttachments(tx, node.id);
+    /*
+     * A device's interfaces (0800), and the pickers its sectioned edit form
+     * needs: the client's people and what an interface can connect to. Read
+     * only for a device; every other kind pays nothing.
+     */
+    const device = node.node_type === 'device'
+      ? {
+          interfaces: await listInterfaces(tx, node.id),
+          contacts: await tx<{ id: string; name: string }[]>`
+            SELECT id, first_name || ' ' || last_name AS name FROM contact
+            WHERE organization_id = ${node.organization_id}::uuid AND deleted_at IS NULL
+            ORDER BY last_name, first_name
+          `,
+          connectable: await tx<{ id: string; name: string }[]>`
+            SELECT id, name FROM asset_node
+            WHERE organization_id = ${node.organization_id}::uuid AND archived_at IS NULL
+              AND node_type IN ('device', 'network') AND id <> ${node.id}::uuid
+            ORDER BY name LIMIT 500
+          `,
+        }
+      : null;
 
     return {
       node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, expiries, sites, record, template, schedules,
-      attachments,
+      attachments, device,
       canDeleteAttachments: session.permissions.includes('asset:delete'),
       totp: totp ?? null,
       canReveal: perm?.reveal ?? false,
@@ -284,7 +308,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
   const {
     node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, totp, canReveal,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
-    attachments, canDeleteAttachments,
+    attachments, canDeleteAttachments, device,
   } = data;
 
   /*
@@ -428,7 +452,16 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
               {/* Edits the TEMPLATE's fields, which is why it lives on this card
                   and not beside the header's Edit: that one writes asset_node's
                   own columns and knows nothing about a schema. */}
-              {!record && canWrite && detailFields.length > 0 && (
+              {device && canWrite && (
+                <ConfigurationEdit
+                  deviceId={node.id}
+                  organizationId={node.organization_id}
+                  sites={sites}
+                  contacts={device.contacts}
+                  connectable={device.connectable}
+                />
+              )}
+              {!record && !device && canWrite && detailFields.length > 0 && (
                 <DetailEditForm
                   nodeId={node.id}
                   nodeType={node.node_type}
@@ -655,6 +688,51 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             )}
           </CardContent>
         </Card>
+        )}
+
+        {device && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Interfaces</CardTitle>
+            </CardHeader>
+            <CardContent className={device.interfaces.length === 0 ? 'p-0' : undefined}>
+              {device.interfaces.length === 0 ? (
+                <EmptyState title="No interfaces recorded" />
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="text-left text-xs text-ink-muted">
+                    <tr>
+                      <th className="py-1 pr-3 font-medium">Name</th>
+                      <th className="py-1 pr-3 font-medium">IP address</th>
+                      <th className="py-1 pr-3 font-medium">MAC</th>
+                      <th className="py-1 pr-3 font-medium">Port</th>
+                      <th className="py-1 pr-3 font-medium">Connected to</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {device.interfaces.map((i) => (
+                      <tr key={i.id} className="border-t border-border">
+                        <td className="py-1.5 pr-3 text-ink">
+                          {i.name ?? '—'}
+                          {i.isPrimary && <Badge tone="brand" className="ml-2">Primary</Badge>}
+                        </td>
+                        <td className="py-1.5 pr-3 font-mono text-ink-muted">{i.ipAddress ?? '—'}</td>
+                        <td className="py-1.5 pr-3 font-mono text-ink-muted">{i.macAddress ?? '—'}</td>
+                        <td className="py-1.5 pr-3 text-ink-muted">{i.port ?? '—'}</td>
+                        <td className="py-1.5 pr-3 text-ink-muted">
+                          {i.connectedToNodeId ? (
+                            <Link href={`/assets/${i.connectedToNodeId}`} className="text-brand hover:underline">
+                              {i.connectedToName ?? 'asset'}
+                            </Link>
+                          ) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </CardContent>
+          </Card>
         )}
 
         <NodeAttachmentsCard

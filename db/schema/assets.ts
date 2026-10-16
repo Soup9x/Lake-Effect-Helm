@@ -121,9 +121,38 @@ export const device = pgTable('device', {
   rmmDeviceId: text('rmm_device_id'),
   backupPolicy: text('backup_policy'),
   monitoringEnabled: boolean('monitoring_enabled').notNull().default(true),
+  // 0800: the configuration form's sections.
+  purchasedBy: text('purchased_by'),
+  installedAt: date('installed_at'),
+  installedBy: text('installed_by'),
+  physicalPosition: text('physical_position'),
+  contactId: uuid('contact_id'),
+  primaryIp: inet('primary_ip'),
+  defaultGateway: inet('default_gateway'),
+  platform: text('platform'),
+  osNotes: text('os_notes'),
 }, (t) => [
   index('device_hostname_idx').on(t.tenantId, t.hostname),
   index('device_serial_idx').on(t.tenantId, t.serialNumber),
+]);
+
+/** 0800: a device's interfaces; the primary one is projected onto the device. */
+export const deviceInterface = pgTable('device_interface', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  deviceId: uuid('device_id').notNull(),
+  name: text('name'),
+  ipAddress: inet('ip_address'),
+  macAddress: macaddr('mac_address'),
+  port: text('port'),
+  isPrimary: boolean('is_primary').notNull().default(false),
+  notes: text('notes'),
+  connectedToNodeId: uuid('connected_to_node_id'),
+  position: smallint('position').notNull().default(0),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+}, (t) => [
+  index('device_interface_device_idx').on(t.tenantId, t.deviceId),
 ]);
 
 export const ipAddress = pgTable('ip_address', {

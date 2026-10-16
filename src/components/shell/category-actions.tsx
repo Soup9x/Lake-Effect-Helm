@@ -30,6 +30,7 @@ import { ImportDialog } from './import-dialog';
 import { ContactForm } from './contact-form';
 import { NewProcedureForm } from '../new-procedure-form';
 import { NewAssetForm } from '../new-asset-form';
+import { ConfigurationForm } from '../configuration-form';
 import { NewSecretForm } from '../new-secret-form';
 import { SiteForm } from '../site-form';
 import { Button } from '../ui/button';
@@ -46,6 +47,9 @@ export interface CategoryActionsProps {
   importSpec?: { templateHeader: string; hint: string } | undefined;
   /** Sites for the asset form's picker. */
   sites: readonly { id: string; name: string }[];
+  /** For the configuration form (0800): the client's people, and what an interface can connect to. */
+  contacts?: readonly { id: string; name: string }[] | undefined;
+  connectable?: readonly { id: string; name: string }[] | undefined;
   /** Whether + New can do anything here. */
   canCreate: boolean;
 }
@@ -57,6 +61,8 @@ export function CategoryActions({
   nodeType,
   importSpec,
   sites,
+  contacts = [],
+  connectable = [],
   canCreate,
 }: CategoryActionsProps) {
   const form = createFormFor(category, nodeType);
@@ -120,6 +126,16 @@ export function CategoryActions({
           organizationId={organizationId}
           open={creating}
           onOpenChange={setCreating}
+        />
+      )}
+      {creating && form === 'configuration' && (
+        <ConfigurationForm
+          organizationId={organizationId}
+          open={creating}
+          onOpenChange={setCreating}
+          sites={sites}
+          contacts={contacts}
+          connectable={connectable}
         />
       )}
       {creating && form === 'asset' && nodeType && (

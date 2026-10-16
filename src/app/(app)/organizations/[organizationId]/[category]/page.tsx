@@ -72,6 +72,67 @@ export default async function CategoryPage({
     const [rank] = await tx<{ rank: number }[]>`SELECT helm.current_role_rank() AS rank`;
     const actorRoleRank = rank?.rank ?? 0;
 
+    if (category.source === 'device') {
+      /*
+       * Configurations, with the columns the reference list shows: status,
+       * type, OS, primary IP, serial, warranty expiry and location (0800).
+       * Its own query rather than a widening of the generic one below, which
+       * joins credential metadata nothing here needs.
+       */
+      const rows = await tx<{
+        id: string; name: string; status: string; updated_at: Date; updated_by_name: string | null;
+        is_internal_only: boolean; device_type: string; operating_system: string | null;
+        os_version: string | null; primary_ip: string | null; serial_number: string | null;
+        warranty_expires_at: Date | null; site_name: string | null;
+      }[]>`
+        SELECT n.id, n.name, n.status::text, n.updated_at, u.name AS updated_by_name, n.is_internal_only,
+               d.device_type::text, d.operating_system, d.os_version, host(d.primary_ip) AS primary_ip,
+               d.serial_number, d.warranty_expires_at, s.name AS site_name
+        FROM asset_node n
+        JOIN device d ON d.id = n.id
+        LEFT JOIN app_user u ON u.id = n.updated_by
+        LEFT JOIN site s ON s.id = n.site_id
+        WHERE n.organization_id = ${organizationId}::uuid AND n.node_type = 'device'
+          ${includeArchived ? tx`` : tx`AND n.archived_at IS NULL`}
+          ${view === 'all' ? tx`` : tx`AND n.is_internal_only = ${view === 'internal'}`}
+        ORDER BY n.name
+        LIMIT 500
+      `;
+      const [totalRow] = await tx<{ n: string; shared: string; internal: string }[]>`
+        SELECT count(*)::text AS n,
+               count(*) FILTER (WHERE NOT is_internal_only)::text AS shared,
+               count(*) FILTER (WHERE is_internal_only)::text     AS internal
+        FROM asset_node
+        WHERE organization_id = ${organizationId}::uuid AND node_type = 'device'
+          ${includeArchived ? tx`` : tx`AND archived_at IS NULL`}
+      `;
+      return {
+        org,
+        actorRoleRank,
+        total: Number(totalRow?.n ?? 0),
+        tabCounts: { shared: Number(totalRow?.shared ?? 0), internal: Number(totalRow?.internal ?? 0) },
+        records: rows.map<CategoryRecord>((r) => ({
+          id: r.id,
+          name: r.name,
+          href: `/assets/${r.id}`,
+          secondary: r.device_type.replace(/_/g, ' '),
+          type: r.status,
+          extra: [r.operating_system, r.os_version].filter(Boolean).join(' ') || null,
+          internalOnly: r.is_internal_only,
+          updatedAt: r.updated_at.toISOString(),
+          updatedBy: r.updated_by_name,
+          removeKind: 'node',
+          permissions: { internalOnly: r.is_internal_only },
+          cells: {
+            primaryIp: r.primary_ip,
+            serial: r.serial_number,
+            expires: r.warranty_expires_at ? r.warranty_expires_at.toISOString().slice(0, 10) : null,
+            location: r.site_name,
+          },
+        })),
+      };
+    }
+
     if (category.kind === 'node') {
       /*
        * One query serves every node category, credentials included.
@@ -318,6 +379,26 @@ export default async function CategoryPage({
           ORDER BY name
         `)
     : [];
+  // The configuration form's pickers (0800): the client's people, and the
+  // devices and networks an interface can be connected to.
+  const pickers = canWrite && category.source === 'device'
+    ? await withTenant(actorOf(identity), async (tx) => {
+        const [contacts, connectable] = await Promise.all([
+          tx<{ id: string; name: string }[]>`
+            SELECT id, first_name || ' ' || last_name AS name FROM contact
+            WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+            ORDER BY last_name, first_name
+          `,
+          tx<{ id: string; name: string }[]>`
+            SELECT id, name FROM asset_node
+            WHERE organization_id = ${organizationId}::uuid AND archived_at IS NULL
+              AND node_type IN ('device', 'network')
+            ORDER BY name LIMIT 500
+          `,
+        ]);
+        return { contacts, connectable };
+      })
+    : { contacts: [], connectable: [] };
   const base = `/organizations/${organizationId}`;
 
   const importSpec = importSpecFor(category.slug);
@@ -358,7 +439,9 @@ export default async function CategoryPage({
    * nonsense for documents, where that slot holds a content type.
    */
   const labels =
-    category.source === 'contact'
+    category.source === 'device'
+      ? { secondary: 'Type', type: 'Status', extra: 'OS' }
+      : category.source === 'contact'
       ? { secondary: 'Email', type: 'Title', extra: 'Phone' }
       : category.source === 'site'
         ? { secondary: 'City', type: 'Code', extra: 'Phone' }
@@ -392,6 +475,8 @@ export default async function CategoryPage({
                 ? { importSpec: { templateHeader: templateFor(importSpec), hint: importSpec.hint } }
                 : {})}
               sites={sites}
+              contacts={pickers.contacts}
+              connectable={pickers.connectable}
               canCreate={canCreate}
             />
           ) : null
@@ -418,6 +503,16 @@ export default async function CategoryPage({
         labels={labels}
         actorRoleRank={data.actorRoleRank}
         columnScope={category.slug}
+        extraColumns={
+          category.source === 'device'
+            ? [
+                { key: 'primaryIp', header: 'Primary IP' },
+                { key: 'serial', header: 'Serial number' },
+                { key: 'expires', header: 'Expires', secondary: true },
+                { key: 'location', header: 'Location', secondary: true },
+              ]
+            : []
+        }
       />
     </>
   );
