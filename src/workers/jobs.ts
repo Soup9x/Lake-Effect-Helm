@@ -19,6 +19,7 @@
  *   03  (retired)              07  auth.prune           0b  external.checks
  *   04  audit.anchor           08  notifications.fanout 0c  reminders.raise
  *                                                       0d  reminders.deliver
+ *                                                       0e  checklists.schedule
  *
  * 03 belonged to integration.sync, the generic RMM/PSA adapter, removed because
  * nothing could configure a connection for it. Do not reuse it: an old worker
@@ -32,6 +33,7 @@ import { fanOutNotificationsJob, deliverNotificationsJob } from './notifications
 import { unifiSyncJob } from './unifi-sync';
 import { externalChecksJob } from './external-checks';
 import { deliverRemindersJob, raiseRemindersJob } from './reminders';
+import { scheduleChecklistsJob } from './schedules';
 import type { Job } from './runtime';
 
 export function allJobs(): Job[] {
@@ -66,5 +68,9 @@ export function allJobs(): Job[] {
      */
     raiseRemindersJob(),
     deliverRemindersJob(),
+    // Recurring checklists (0770): raises a run for every schedule whose slot
+    // has arrived, as the tenant's sync worker identity, then moves the slot
+    // on. Idle for a tenant with no schedules, like the reminders above.
+    scheduleChecklistsJob(),
   ];
 }

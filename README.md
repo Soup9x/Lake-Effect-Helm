@@ -38,7 +38,8 @@ enforced by PostgreSQL itself rather than by application code.
 - **Flexible asset types.** Technician-authored JSON Schema types, versioned,
   validated as untrusted input.
 - **Documents and checklists.** Encrypted document storage per client;
-  procedures with runnable, assignable checklists and due-date reminders.
+  procedures with runnable, assignable checklists, due-date reminders and
+  schedules that raise a run every so many days on their own.
 - **Expiry tracking.** Certificates, domains, warranties and contracts, with
   warnings at configurable lead times (Settings → Expiry warnings).
 - **Notifications.** Webhooks (generic, Slack, Teams, Discord), email through
@@ -49,9 +50,10 @@ enforced by PostgreSQL itself rather than by application code.
   certificate pinning and signed webhooks.
 - **Sign-in.** Local passwords (the break-glass path), Microsoft Entra ID, any
   OpenID Connect provider, and RADIUS. All produce the same revocable session.
-- **Personal API tokens.** Issued from the account page, scoped to a subset of
-  what the person holds, expiring within a year, revocable at once, for
-  scripts and integrations that act as a technician.
+- **API tokens.** Personal tokens from the account page, scoped to a subset of
+  what the person holds; service accounts from Settings for automation that
+  outlives a person, with a role, a scope and an optional IP allow-list. Both
+  expire within a year and are revocable at once.
 - **Tamper-evident audit log.** Per-tenant SHA-256 hash chain, anchored to an
   external receipt on a schedule.
 

@@ -258,6 +258,38 @@ export const sopRunStep = pgTable('sop_run_step', {
   }),
 ]);
 
+/**
+ * A procedure that raises a run every interval_days from next_run_at (0770).
+ * organization_id is the procedure's, bound by trigger; the composite keys to
+ * sop, organization, site and membership are declared in SQL.
+ */
+export const sopSchedule = pgTable('sop_schedule', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  sopId: uuid('sop_id').notNull(),
+  siteId: uuid('site_id'),
+  assignedTo: uuid('assigned_to'),
+  intervalDays: integer('interval_days').notNull(),
+  nextRunAt: tstz('next_run_at').notNull(),
+  dueAfterDays: integer('due_after_days'),
+  title: text('title'),
+  enabled: boolean('enabled').notNull().default(true),
+  lastRaisedAt: tstz('last_raised_at'),
+  lastRunId: uuid('last_run_id').references(() => sopRun.id, { onDelete: 'set null' }),
+  lastError: text('last_error'),
+  createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+}, (t) => [
+  index('sop_schedule_sop_idx').on(t.tenantId, t.sopId),
+  foreignKey({
+    name: 'sop_schedule_assignee_fk',
+    columns: [t.tenantId, t.assignedTo],
+    foreignColumns: [membership.tenantId, membership.userId],
+  }),
+]);
+
 // ---------------------------------------------------------------------------
 // Expirations and alerts
 // ---------------------------------------------------------------------------

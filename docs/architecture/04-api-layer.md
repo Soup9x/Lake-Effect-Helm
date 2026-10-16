@@ -105,8 +105,15 @@ resolved for that session, expiring within a year, and shown exactly once.
 request which authenticated with a token cannot issue another — a leaked
 30-day token must not become an unbounded chain of them. Revocation
 (`DELETE /api/account/tokens/:id`) is immediate: the session context re-reads
-`revoked_at` on every request. Service-account tokens have no issuing route
-yet; they need an administrator screen for service accounts first.
+`revoked_at` on every request.
+
+A SERVICE ACCOUNT is the identity for automation that outlives a person.
+Settings → Service accounts creates one with a role and a scope, under 0350's
+rule that nobody grants above their own rank, and issues it tokens whose
+scopes are bounded by the account's role rather than the administrator's
+(`helm.issue_service_account_token()`, 0760). Disabling the account refuses
+every token it holds on the next request. The built-in worker identities get
+no tokens: they run in-process as the worker role.
 
 ### Token format
 
@@ -376,6 +383,12 @@ no security meaning.
 | `/api/audit` | GET | `audit:read` | Chain columns deliberately withheld |
 | `/api/account/tokens` | GET/POST | — | Your personal tokens; the token is in the POST response once |
 | `/api/account/tokens/:id` | DELETE | — | Revoke one of yours; somebody else's is "no such token" |
+| `/api/tenant/service-accounts` | GET/POST | `user:read` / `user:write` | Machine identities and the roles the caller may grant |
+| `/api/tenant/service-accounts/:id` | PATCH | `user:write` | Disable or enable; no DELETE, the audit log names it |
+| `/api/tenant/service-accounts/:id/tokens` | GET/POST | `user:read` / `user:write` | Scopes bounded by the account's role; IP allow-list optional |
+| `/api/tenant/service-accounts/:id/tokens/:tokenId` | DELETE | `user:write` | Revoke |
+| `/api/sops/:sopId/schedules` | GET/POST | `sop:read` / `sop:execute` | Recurring runs; POST refuses an unpublished procedure |
+| `/api/sops/:sopId/schedules/:id` | PATCH/DELETE | `sop:execute` | Pause, resume, edit, remove; raised runs stay |
 
 Every route is `force-dynamic`. Nothing in a credential vault may be prerendered
 or cached at the edge, and making that the root default is safer than each route

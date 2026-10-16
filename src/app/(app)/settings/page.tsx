@@ -31,6 +31,8 @@ import {
   NOTIFICATION_EVENTS,
 } from '@/lib/notifications/queries';
 import { listOrganizationOptions, listUnifiMappings } from '@/lib/unifi/queries';
+import { listGrantableRoles, listServiceAccounts } from '@/lib/auth/service-accounts';
+import { ServiceAccountsCard } from '@/components/service-accounts-card';
 import { headers } from 'next/headers';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -66,11 +68,12 @@ export default async function SettingsPage() {
     keys, workers, tenant, radius, oidc, destinations, deliveries,
     unifi, organizations, canManageNetwork, flexibleTypeCount,
     sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow, smtp,
-    expiryAlerts, canManageAlerts,
-  } = await withTenant(actorOf(identity), async (tx) => {
+    expiryAlerts, canManageAlerts, serviceAccounts, grantableRoles, canReadUsers, canManageUsers,
+  } = await withTenant(actorOf(identity), async (tx, session) => {
+    const canReadUsers = session.permissions.includes('user:read');
     const [keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
            networkRows, flexibleTypeRows, sidebarDefaultRow, externalChecks,
-           healthWindow, smtp, expiryAlerts, alertPermissionRows] = await Promise.all([
+           healthWindow, smtp, expiryAlerts, alertPermissionRows, serviceAccounts, grantableRoles] = await Promise.all([
       listKeyCustody(tx),
       listSystemWorkers(tx),
       readTenantSummary(tx, identity.actorId),
@@ -106,8 +109,15 @@ export default async function SettingsPage() {
       readSmtpSetting(tx),
       readExpiryAlertSetting(tx),
       tx<{ allowed: boolean }[]>`SELECT helm.has_permission('alert:manage') AS allowed`,
+      // Machine identities and the roles this actor may give one. Both are
+      // SECURITY DEFINER readers that check user:read themselves; skipped for
+      // an actor without it so the card can be absent rather than a 403.
+      canReadUsers ? listServiceAccounts(tx) : Promise.resolve([]),
+      canReadUsers ? listGrantableRoles(tx) : Promise.resolve([]),
     ]);
     return {
+      serviceAccounts, grantableRoles, canReadUsers,
+      canManageUsers: session.permissions.includes('user:write'),
       keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
       canManageNetwork: networkRows[0]?.permitted ?? false,
       flexibleTypeCount: flexibleTypeRows[0]?.n ?? 0,
@@ -304,6 +314,24 @@ export default async function SettingsPage() {
             </Table>
           </CardContent>
         </Card>
+
+        {canReadUsers && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Bot className="size-4 text-ink-faint" aria-hidden /> Service accounts
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ServiceAccountsCard
+                accounts={serviceAccounts}
+                roles={grantableRoles}
+                organizations={organizations}
+                canManage={canManageUsers}
+              />
+            </CardContent>
+          </Card>
+        )}
 
         {/*
           Asset types get a card and their own page rather than living here.
