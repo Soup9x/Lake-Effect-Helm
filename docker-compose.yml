@@ -28,6 +28,13 @@ x-helm-image: &helm-image
   restart: unless-stopped
 
 x-helm-env: &helm-env
+  # --- Backups (0820) --------------------------------------------------------
+  # Only so Settings can say what the backup service is able to do; the
+  # service itself gets the real values below.
+  HELM_BACKUP_ROOT: /var/lib/helm/backups
+  HELM_BACKUP_PASSPHRASE_FILE: ${HELM_BACKUP_PASSPHRASE_FILE:-/run/helm/backup.pass}
+  HELM_BACKUP_S3_ACCESS_KEY_ID: ${HELM_BACKUP_S3_ACCESS_KEY_ID:-}
+  HELM_BACKUP_S3_SECRET_ACCESS_KEY: ${HELM_BACKUP_S3_SECRET_ACCESS_KEY:-}
   # --- Database -------------------------------------------------------------
   # Five roles, five connection strings. The separation is the product's
   # security model, not deployment ceremony: a bug in the request path cannot
@@ -234,6 +241,44 @@ services:
   # ---------------------------------------------------------------------------
   # Web tier
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # Backups (0820). Runs on the schedule set under Settings → Backups, writes
+  # sealed sets to HELM_BACKUP_DIR on the host (or an object store), records
+  # each run where Settings can see it, and rehearses a restore weekly.
+  #
+  # The passphrase that seals the archives is a file beside the master key,
+  # mounted read-only; the master key itself is deliberately NOT mounted here,
+  # so no backup can ever contain it (install guide §7.1).
+  # ---------------------------------------------------------------------------
+  backup:
+    build:
+      context: .
+      target: backup
+    image: lake-effect-helm-backup:local
+    restart: unless-stopped
+    environment:
+      DATABASE_URL_MIGRATOR: postgresql://postgres:${HELM_DB_PASSWORD_SUPERUSER:?}@postgres:5432/helm
+      HELM_BACKUP_ROOT: /var/lib/helm/backups
+      HELM_BACKUP_PASSPHRASE_FILE: /run/helm/backup.pass
+      HELM_BACKUP_S3_ACCESS_KEY_ID: ${HELM_BACKUP_S3_ACCESS_KEY_ID:-}
+      HELM_BACKUP_S3_SECRET_ACCESS_KEY: ${HELM_BACKUP_S3_SECRET_ACCESS_KEY:-}
+      HELM_DOCUMENT_DIR: /var/lib/helm/documents
+      HELM_PASSPHRASE_DIR: /var/lib/helm/passphrases
+      HELM_ANCHOR_DIR: /var/lib/helm/anchors
+      HELM_CADDY_DATA_DIR: /var/lib/helm/caddy
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ${HELM_BACKUP_DIR:-./backups}:/var/lib/helm/backups
+      - ./deploy/secrets/backup.pass:/run/helm/backup.pass:ro
+      - helm-documents:/var/lib/helm/documents:ro
+      - helm-passphrases:/var/lib/helm/passphrases:ro
+      - helm-anchors:/var/lib/helm/anchors:ro
+      - caddy-data:/var/lib/helm/caddy:ro
+
   web:
     <<: *helm-image
     environment:

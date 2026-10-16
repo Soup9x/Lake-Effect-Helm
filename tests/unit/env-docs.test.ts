@@ -61,6 +61,9 @@ const INDIRECT: Record<string, string> = {
 const EXTERNAL: Record<string, string> = {
   AUTH_SECRET: 'Auth.js reads this itself',
   NODE_EXTRA_CA_CERTS: 'Node reads this at start-up, before any Helm code runs',
+  // docker-compose.yml expands it into the backup service's bind mount; the
+  // container only ever sees the fixed path inside.
+  HELM_BACKUP_DIR: 'docker-compose.yml bind mount for the backup service',
 };
 
 /** Supplied by the environment, not configuration an operator sets for Helm. */

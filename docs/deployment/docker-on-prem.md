@@ -719,6 +719,63 @@ Two separation rules that are part of the security design, not preferences:
 * **(4) must not live in the same archive as `helm-exports`.** A bundle and its
   passphrase travelling together is an unencrypted bundle.
 
+### 7.1a Built-in backups
+
+Since `0820` the stack has a `backup` service that does §7.2 and §7.4 for you
+on a schedule, and records each run where Settings can show it.
+
+* **Where it is configured:** Settings → Backups, by anyone with
+  `tenant:write`. Schedule (cron, UTC, with presets), destination (a folder
+  under `HELM_BACKUP_DIR`, or an S3-compatible bucket), retention (keep for N
+  days, always keep the newest N), which volumes to include, and the weekday
+  of the restore rehearsal. **Back up now** and **Verify now** queue a run.
+* **What lives in `.env` instead:** `HELM_BACKUP_DIR` (the host directory the
+  container writes to; point it at a second disk or a NAS) and, for an object
+  store, `HELM_BACKUP_S3_ACCESS_KEY_ID` / `HELM_BACKUP_S3_SECRET_ACCESS_KEY`.
+  The keys never pass through Settings.
+* **What a set contains:** `helm.dump.enc` (a `pg_dump -Fc` of the whole
+  database), one `<volume>.tar.gz.enc` per included volume (documents,
+  passphrases, anchors, Caddy CA), and a plaintext `manifest.json` naming each
+  file with its size and the SHA-256 of its contents before sealing. Every
+  file is sealed with AES-256-GCM under a key derived (scrypt) from
+  `deploy/secrets/backup.pass`, which `init-secrets.sh` generates.
+* **What it never contains:** the master key and `.env`. §7.1's rule stands:
+  back those up by hand to a different medium (§7.3). The backup container
+  does not even mount the key.
+* **Opening a set:**
+
+  ```bash
+  docker compose run --rm backup node_modules/.bin/tsx scripts/backup.ts decrypt \
+    /var/lib/helm/backups/nightly/helm-20261016T020000Z /var/lib/helm/backups/opened
+  ```
+
+  which leaves `helm.dump` and the volume archives in `opened/`, ready for
+  §7.6. The passphrase file must be present; without it the archives are
+  noise, which is the point.
+* **The restore rehearsal** restores the newest local set into a scratch
+  database on the same cluster, compares row counts of the main tables with
+  the live database, and records the result as a run. A rehearsal that fails
+  shows in Settings as a failed run with the counts.
+* **When it fails:** the run row carries the error, the Settings card turns
+  amber once no backup has succeeded for two schedule intervals, and
+  `docker compose logs backup` has the detail.
+* **An install from before 0820** has a master key and no `backup.pass`.
+  Re-run `sudo ./deploy/setup.sh` after pulling: it leaves the key and `.env`
+  alone and creates the passphrase file and the `backups/` directory. Doing it
+  by hand is three lines:
+
+  ```bash
+  sudo sh -c 'umask 077; openssl rand -base64 48 | tr -d "\n" > deploy/secrets/backup.pass'
+  sudo chown 10001:10001 deploy/secrets/backup.pass && sudo chmod 0400 deploy/secrets/backup.pass
+  sudo install -d -o 10001 -g 10001 -m 0700 backups
+  ```
+
+  Without the file, compose mounts an empty directory in its place and every
+  run fails with an `EISDIR` error that the Settings card shows.
+
+The cron script in §7.5 remains correct and is still the way to copy the key
+material; the built-in service replaces its database and volume steps.
+
 ### 7.2 Backing up the database
 
 Use a **logical dump**, not a copy of the volume. Copying `postgres-data` while

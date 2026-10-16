@@ -16,6 +16,8 @@ import { readExpiryAlertSetting } from '@/lib/alerts/queries';
 import { readHealthSetting } from '@/lib/health/queries';
 import { readSmtpSetting } from '@/lib/email/settings';
 import { SmtpSettingsCard } from '@/components/smtp-settings';
+import { BackupSettingsCard } from '@/components/backup-settings';
+import { backupCapabilities, listBackupRuns, readBackupSettings } from '@/lib/backups/settings';
 import { readExternalCheckSetting } from '@/lib/external/settings';
 import { readTenantSidebarDefault } from '@/lib/nav/sidebar-queries';
 import { ORG_CATEGORIES } from '@/lib/nav/org-categories';
@@ -68,7 +70,7 @@ export default async function SettingsPage() {
     keys, workers, tenant, radius, oidc, destinations, deliveries,
     unifi, organizations, canManageNetwork, flexibleTypeCount,
     sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow, smtp,
-    expiryAlerts, canManageAlerts, serviceAccounts, grantableRoles, canReadUsers, canManageUsers,
+    expiryAlerts, canManageAlerts, serviceAccounts, grantableRoles, canReadUsers, canManageUsers, backups,
   } = await withTenant(actorOf(identity), async (tx, session) => {
     const canReadUsers = session.permissions.includes('user:read');
     const [keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
@@ -118,6 +120,11 @@ export default async function SettingsPage() {
     return {
       serviceAccounts, grantableRoles, canReadUsers,
       canManageUsers: session.permissions.includes('user:write'),
+      // 0820: instance-wide, so only for somebody who may change it; the
+      // functions refuse everyone else and the card would have nothing to say.
+      backups: session.permissions.includes('tenant:write')
+        ? { settings: await readBackupSettings(tx), runs: await listBackupRuns(tx, 20) }
+        : null,
       keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
       canManageNetwork: networkRows[0]?.permitted ?? false,
       flexibleTypeCount: flexibleTypeRows[0]?.n ?? 0,
@@ -178,6 +185,15 @@ export default async function SettingsPage() {
           * dependent control first teaches people to hit the error.
           */}
         <SmtpSettingsCard initial={smtp} canManage={tenant?.can_write_tenant ?? false} />
+
+        {backups && (
+          <BackupSettingsCard
+            initial={backups.settings}
+            runs={backups.runs}
+            capabilities={backupCapabilities()}
+            canManage={tenant?.can_write_tenant ?? false}
+          />
+        )}
 
         <NotificationSettingsCard
           destinations={destinations}
