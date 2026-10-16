@@ -374,6 +374,7 @@ no security meaning.
 | `/api/organizations` | GET | `organization:read` | Scope decides what is listed |
 | `/api/assets/:nodeId` | GET | `asset:read` | Metadata + secret *metadata*, no ciphertext |
 | `/api/assets/:nodeId/graph` | GET | `asset:read` | `neighbours` / `dependencies` / `impact` |
+| `/api/assets/:nodeId/detail` | PATCH | `asset:write` | The subtype row (a network's CIDR, a device's serial), from the catalogue in `lib/assets/detail-fields.ts`; Postgres validates |
 | `/api/assets/links` | POST/DELETE | `asset:link` | Idempotent in both directions |
 | `/api/secrets/:id/reveal` | POST | `secret:reveal` | Audited; returns the event id |
 | `/api/secrets/:id/copy` | POST | `secret:read` | Clipboard is its own event |

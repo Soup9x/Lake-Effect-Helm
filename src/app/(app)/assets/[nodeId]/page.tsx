@@ -28,6 +28,8 @@ import { listNodeAttachments } from '@/lib/clients/queries';
 import type { DocumentRow } from '@/lib/ui/documents';
 import { maxUploadBytes } from '@/lib/documents/limits';
 import { categoryBySource } from '@/lib/nav/org-categories';
+import { DetailEditForm } from '@/components/detail-edit-form';
+import { detailFieldsFor, subnetMaskOf } from '@/lib/assets/detail-fields';
 import { ExternalCheckNote, type ExternalCheckState } from '@/components/external-check-note';
 import { readExternalCheckSetting } from '@/lib/external/settings';
 
@@ -265,7 +267,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     const attachments = await listNodeAttachments(tx, node.id);
 
     return {
-      node, detail: detailRows, edges, secrets, expiries, sites, record, template, schedules,
+      node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, expiries, sites, record, template, schedules,
       attachments,
       canDeleteAttachments: session.permissions.includes('asset:delete'),
       totp: totp ?? null,
@@ -280,10 +282,33 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   if (!data) notFound();
   const {
-    node, detail, edges, secrets, expiries, sites, record, template, schedules, totp, canReveal,
+    node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, totp, canReveal,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
     attachments, canDeleteAttachments,
   } = data;
+
+  /*
+   * The catalogue for this kind of asset: the Details card labels and formats
+   * its rows from it, and Edit details writes through it. A kind with no
+   * catalogue entry (a procedure, a flexible record) keeps the generic list.
+   */
+  const detailFields = detailFieldsFor(node.node_type);
+  const fieldByKey = new Map(detailFields.map((f) => [f.key, f]));
+  const detailLabel = (key: string) => fieldByKey.get(key)?.label ?? humanise(key);
+  // A host address comes out of Postgres as 10.10.4.1/32; nobody writes the
+  // /32, so nobody should have to read it. A subnet keeps its prefix.
+  const host = (v: unknown) => (typeof v === 'string' ? v.replace(/\/(32|128)$/, '') : v);
+  const detailValue = (key: string, value: unknown): string => {
+    const field = fieldByKey.get(key);
+    const kind = field?.kind;
+    if (field?.pg === 'inet') return renderValue(host(value));
+    if (field?.pg === 'inet[]' && Array.isArray(value)) return renderValue(value.map(host));
+    if (kind === 'date' && typeof value === 'string') return formatDate(value);
+    if (kind === 'datetime' && typeof value === 'string') return formatDateTime(value);
+    if (kind === 'select' && typeof value === 'string') return humanise(value);
+    return renderValue(value);
+  };
+  const subnetMask = node.node_type === 'network' ? subnetMaskOf(detail.cidr as string | undefined) : null;
 
   const attachmentRows: DocumentRow[] = attachments.map((d) => ({
     id: d.id,
@@ -403,6 +428,14 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
               {/* Edits the TEMPLATE's fields, which is why it lives on this card
                   and not beside the header's Edit: that one writes asset_node's
                   own columns and knows nothing about a schema. */}
+              {!record && canWrite && detailFields.length > 0 && (
+                <DetailEditForm
+                  nodeId={node.id}
+                  nodeType={node.node_type}
+                  fields={detailFields}
+                  values={detailRaw}
+                />
+              )}
               {record && record.editableFields !== null && canWrite && (
                 <FlexibleRecordForm
                   type={{
@@ -452,13 +485,22 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
                   </dl>
                 )
               ) : Object.keys(detail).length === 0 ? (
-                <p className="text-sm text-ink-faint">No type-specific detail recorded.</p>
+                <p className="text-sm text-ink-faint">
+                  {detailFields.length > 0 && canWrite
+                    ? 'Nothing recorded yet. Edit details to fill this in.'
+                    : 'No type-specific detail recorded.'}
+                </p>
               ) : (
                 <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
                   {Object.entries(detail).map(([key, value]) => (
                     <div key={key} className="contents">
-                      <dt className="truncate text-ink-muted">{humanise(key)}</dt>
-                      <dd className="min-w-0 break-words text-ink">{renderValue(value)}</dd>
+                      <dt className="truncate text-ink-muted">{detailLabel(key)}</dt>
+                      <dd className="min-w-0 break-words text-ink">
+                        {detailValue(key, value)}
+                        {key === 'cidr' && subnetMask && (
+                          <span className="ml-2 text-xs text-ink-faint">mask {subnetMask}</span>
+                        )}
+                      </dd>
                     </div>
                   ))}
                 </dl>
@@ -788,9 +830,9 @@ async function detailFor(
   tx: Parameters<Parameters<typeof withTenant>[1]>[0],
   nodeType: string,
   nodeId: string,
-): Promise<Record<string, unknown>> {
+): Promise<{ shown: Record<string, unknown>; raw: Record<string, unknown> }> {
   const table = DETAIL_TABLES.get(nodeType);
-  if (!table) return {};
+  if (!table) return { shown: {}, raw: {} };
 
   const rows = await tx<{ row: Record<string, unknown> }[]>`
     SELECT to_jsonb(t) - 'id' - 'tenant_id' - 'node_type' AS row
@@ -834,13 +876,30 @@ async function detailFor(
    * matters, the page resolves the name and says it in prose.
    */
   const isPersonId = (key: string) => key.endsWith('_user_id') || key.endsWith('_by');
-  return Object.fromEntries(
+  /*
+   * Relationships are shown by the Dependencies card as names, not here as
+   * uuids. And a default that nobody set is not a detail: an unticked flag, an
+   * empty list, an empty object are what the schema wrote when the row was
+   * created, and listing "Guest network No · Auto renew No · Fsmo roles {}"
+   * under a thing nobody has described yet was the complaint about this card.
+   */
+  const RELATIONSHIPS = new Set([
+    'vendor_id', 'registrar_vendor_id', 'domain_id', 'application_id', 'sso_directory_id',
+    'signed_by_contact_id', 'parent_device_id', 'primary_network_id',
+  ]);
+  const isRelationship = (key: string) => key.endsWith('_node_id') || RELATIONSHIPS.has(key);
+  const isDefault = (value: unknown) =>
+    value === false
+    || (Array.isArray(value) && value.length === 0)
+    || (typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).length === 0);
+  const shown = Object.fromEntries(
     Object.entries(row).filter(
       ([key, value]) =>
-        value !== null && value !== ''
-        && !key.endsWith('_secret_id') && !isPersonId(key) && !HIDDEN.has(key),
+        value !== null && value !== '' && !isDefault(value)
+        && !key.endsWith('_secret_id') && !isPersonId(key) && !isRelationship(key) && !HIDDEN.has(key),
     ),
   );
+  return { shown, raw: row };
 }
 
 function renderValue(value: unknown): string {
