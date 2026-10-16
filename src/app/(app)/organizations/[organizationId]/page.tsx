@@ -11,6 +11,7 @@ import { TopologyDesigner } from '@/components/topology-designer';
 import { CredentialEditForm } from '@/components/credential-edit-form';
 import { NewAssetForm } from '@/components/new-asset-form';
 import { InlineRename } from '@/components/inline-rename';
+import { RelationshipPicker } from '@/components/relationship-picker';
 import { TagEditor } from '@/components/tag-editor';
 import { SectionBrowser } from '@/components/section-browser';
 import { DocumentsCard } from '@/components/documents-card';
@@ -244,6 +245,11 @@ export default async function OrganizationPage({
               organizationId={organization.id}
               name={organization.name}
               src={logo}
+              canWrite={canWriteOrganization}
+            />
+            <RelationshipPicker
+              organizationId={organization.id}
+              relationship={organization.relationship}
               canWrite={canWriteOrganization}
             />
             <HealthDot
