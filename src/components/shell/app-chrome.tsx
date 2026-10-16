@@ -21,7 +21,6 @@
 import type { ReactNode } from 'react';
 import { ShellProvider } from './shell-context';
 import { TopNav } from './top-nav';
-import { SupportBadge } from './support-badge';
 import { NotificationBell } from './notification-bell';
 import { AccountMenu } from '../account-menu';
 import { RecentlyViewed } from '../recently-viewed';
@@ -80,7 +79,6 @@ export function AppChrome({
         />
         <div className="flex min-w-0 flex-1 flex-col">{children}</div>
       </div>
-      <SupportBadge />
     </ShellProvider>
   );
 }
