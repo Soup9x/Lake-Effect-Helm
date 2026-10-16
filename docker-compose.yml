@@ -79,7 +79,10 @@ x-helm-env: &helm-env
   # Caddy appends exactly one entry to X-Forwarded-For. The client address is
   # read that many places from the RIGHT; the leftmost entry is entirely
   # client-controlled, and trusting it defeats API token IP allowlisting.
-  HELM_TRUSTED_PROXY_HOPS: "1"
+  # Two behind a tunnel or load balancer that Caddy trusts (see the Caddyfile);
+  # or name the edge's own header instead. Both come from .env.
+  HELM_TRUSTED_PROXY_HOPS: "${HELM_TRUSTED_PROXY_HOPS:-1}"
+  HELM_CLIENT_IP_HEADER: ${HELM_CLIENT_IP_HEADER:-}
 
   AUTH_MICROSOFT_ENTRA_ID_ID: ${AUTH_MICROSOFT_ENTRA_ID_ID:-}
   AUTH_MICROSOFT_ENTRA_ID_SECRET: ${AUTH_MICROSOFT_ENTRA_ID_SECRET:-}

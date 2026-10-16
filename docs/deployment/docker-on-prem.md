@@ -308,6 +308,53 @@ Leave `HELM_TRUSTED_PROXY_HOPS=1` alone unless you put another proxy in front
 of Caddy. It is how Helm finds the real client address for rate limiting and
 API-token IP allowlisting, counted from the *right* of `X-Forwarded-For`.
 
+### Behind a Cloudflare Tunnel, or any proxy in front of Caddy
+
+The client address has to survive two proxies, and by default it does not:
+Caddy discards an incoming `X-Forwarded-For` from a source it does not trust
+and writes the connector's address instead, so every request Helm sees comes
+from the tunnel. The per-IP sign-in lockout then counts everyone together — a
+few wrong passwords from anyone lock everyone out — and the audit log's `ip`
+column records the tunnel. The bundled Caddyfile trusts private-range sources
+for exactly this reason. Then pick one of two settings in `.env`:
+
+```ini
+# Either: count the extra hop (Cloudflare appends the client, Caddy appends
+# the connector).
+HELM_TRUSTED_PROXY_HOPS=2
+
+# Or: read Cloudflare's own header, which it sets on every request.
+HELM_CLIENT_IP_HEADER=cf-connecting-ip
+```
+
+The header is the more robust choice behind Cloudflare, because it does not
+depend on the hop count being right. It is safe only while nothing can reach
+Caddy except through the tunnel — a request that arrives another way could
+name any address it likes — so do not publish Caddy's ports to the internet
+alongside it.
+
+Point the tunnel at Caddy's **https** port (http only redirects) and tell it to
+trust Caddy's root certificate, which `setup.sh` writes to `helm-root.crt`:
+
+```yaml
+ingress:
+  - hostname: helm.example.com
+    service: https://localhost:443
+    originRequest:
+      originServerName: helm.example.com
+      caPool: /opt/lake-effect-helm/helm-root.crt
+```
+
+Confirm after a sign-in, as the superuser:
+
+```sql
+SELECT ip, outcome, occurred_at FROM auth_attempt ORDER BY occurred_at DESC LIMIT 3;
+```
+
+The address should be the client's, not a `172.x` or `127.0.0.1` one. A vault
+on a public hostname also deserves an identity check in front of the sign-in
+page; Cloudflare Access on the tunnel's hostname is the usual way.
+
 ### Trusting a private certificate authority
 
 On-premises identity providers usually present a certificate from an internal

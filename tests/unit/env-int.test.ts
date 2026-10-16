@@ -47,4 +47,25 @@ describe('clientIp', () => {
     expect(clientIp(withXff('6.6.6.6, unknown'))).toBeUndefined();
     expect(clientIp({ headers: new Headers({ 'x-real-ip': 'not-an-ip' }) })).toBeUndefined();
   });
+
+  it('counts two hops when told to, for a proxy in front of Caddy', () => {
+    vi.stubEnv('HELM_TRUSTED_PROXY_HOPS', '2');
+    // client-forged, Cloudflare-appended (the client), Caddy-appended (the tunnel)
+    expect(clientIp(withXff('6.6.6.6, 203.0.113.9, 172.18.0.1'))).toBe('203.0.113.9');
+  });
+
+  it('prefers the named edge header when one is configured', () => {
+    vi.stubEnv('HELM_CLIENT_IP_HEADER', 'CF-Connecting-IP');
+    expect(clientIp(withXff('6.6.6.6, 172.18.0.1', { 'cf-connecting-ip': '203.0.113.9' }))).toBe('203.0.113.9');
+  });
+
+  it('falls back to X-Forwarded-For when the named header is absent or not an address', () => {
+    vi.stubEnv('HELM_CLIENT_IP_HEADER', 'cf-connecting-ip');
+    expect(clientIp(withXff('6.6.6.6, 203.0.113.9'))).toBe('203.0.113.9');
+    expect(clientIp(withXff('6.6.6.6, 203.0.113.9', { 'cf-connecting-ip': 'nope' }))).toBe('203.0.113.9');
+  });
+
+  it('ignores the named header when nothing is configured, so a client cannot elect one', () => {
+    expect(clientIp(withXff('6.6.6.6, 203.0.113.9', { 'cf-connecting-ip': '1.1.1.1' }))).toBe('203.0.113.9');
+  });
 });
