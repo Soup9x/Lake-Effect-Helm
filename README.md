@@ -37,7 +37,9 @@ enforced by PostgreSQL itself rather than by application code.
   transaction.
 - **Flexible asset types.** Technician-authored JSON Schema types, versioned,
   validated as untrusted input.
-- **Documents and checklists.** Encrypted document storage per client;
+- **Documents and checklists.** A document tree per client holding both
+  encrypted uploads and documents written in Helm's own editor, with files
+  attached to them;
   procedures with runnable, assignable checklists, due-date reminders and
   schedules that raise a run every so many days on their own.
 - **Expiry tracking.** Certificates, domains, warranties and contracts, with

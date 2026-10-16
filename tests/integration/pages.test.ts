@@ -85,6 +85,10 @@ const p = <T,>(value: T) => Promise.resolve(value);
 let flexibleTypeId = '';
 /** Set in beforeAll: a real run, because the run page takes one in its path. */
 let runId = '';
+/** Set in beforeAll: a written document (0810), because its page takes one in its path. */
+let pageId = '';
+/** Set in beforeAll: the folder both live in, for the Documents directory's folder view. */
+let renderedFolderId = '';
 
 beforeAll(async () => {
   resetDatabase();
@@ -136,6 +140,18 @@ beforeAll(async () => {
       RETURNING id
     `;
     flexibleTypeId = type!.id;
+
+    // A written document in the folder above, so its page and the Documents
+    // directory both have a row to render.
+    const [page] = await tx<{ id: string }[]>`
+      INSERT INTO document_page (tenant_id, organization_id, folder_id, title, body, body_text, created_by, updated_by)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, ${folder!.id}, 'Rendered runbook',
+              '{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]}]}'::jsonb,
+              'Hello', ${IDS.admin1}::uuid, ${IDS.admin1}::uuid)
+      RETURNING id
+    `;
+    pageId = page!.id;
+    renderedFolderId = folder!.id;
 
     /*
      * A checklist run, for the same reason: the run page takes one in its path.
@@ -284,6 +300,13 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
       }),
   },
   {
+    name: 'the written document page',
+    load: async () =>
+      (await import('../../src/app/(app)/documents/[pageId]/page')).default({
+        params: p({ pageId }),
+      }),
+  },
+  {
     name: 'the asset page, for a certificate',
     load: async () =>
       (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
@@ -428,6 +451,16 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
   {
     name: 'global',
     load: async () => (await import('../../src/app/(app)/global/page')).default(),
+  },
+  {
+    // The Documents directory inside a folder: its own query branch (0810),
+    // with the folder's path in the header and pages beside files.
+    name: 'the Documents directory, in a folder',
+    load: async () =>
+      (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({
+        params: p({ organizationId: IDS.orgAcme, category: 'documents' }),
+        searchParams: p({ folder: renderedFolderId }),
+      }),
   },
   {
     name: 'the per-category grid',

@@ -171,6 +171,20 @@ export function listDocumentFolders(tx: HelmTx, organizationId: string): Promise
       `;
 }
 
+/** The files attached to one written document (0810). */
+export function listPageAttachments(tx: HelmTx, pageId: string): Promise<DocumentQueryRow[]> {
+  return tx<DocumentQueryRow[]>`
+        SELECT a.id, a.folder_id, a.filename, a.content_type, a.byte_size,
+               a.is_internal_only, a.archived_at, a.uploaded_at,
+               coalesce(u.name, u.email::text) AS uploaded_by_name
+        FROM attachment a
+        LEFT JOIN app_user u ON u.id = a.uploaded_by
+        WHERE a.page_id = ${pageId}::uuid AND a.deleted_at IS NULL
+        ORDER BY a.archived_at IS NOT NULL, lower(a.filename)
+        LIMIT 500
+      `;
+}
+
 /** The files attached to one asset (0780): not documents, so not in the tree. */
 export function listNodeAttachments(tx: HelmTx, nodeId: string): Promise<DocumentQueryRow[]> {
   return tx<DocumentQueryRow[]>`

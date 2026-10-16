@@ -379,6 +379,8 @@ no security meaning.
 | `/api/contacts/:id` | GET/PATCH/DELETE | `asset:read` / `asset:write` | Every address and number; PATCH replaces a list whole |
 | `/api/devices` | POST | `asset:write` | A configuration whole: node, device columns (by catalogue), contact, interfaces (0800) |
 | `/api/devices/:id` | GET/PATCH | `asset:read` / `asset:write` | The same, read back and corrected; interfaces replaced whole |
+| `/api/document-pages` | POST | `asset:write` | A written document (0810) in the client's tree; one title per folder |
+| `/api/document-pages/:id` | GET/PATCH/DELETE | `asset:read` / `asset:write` / `asset:delete` | Body versions on save; archive-first delete takes its attachments with it |
 | `/api/assets/links` | POST/DELETE | `asset:link` | Idempotent in both directions |
 | `/api/secrets/:id/reveal` | POST | `secret:reveal` | Audited; returns the event id |
 | `/api/secrets/:id/copy` | POST | `secret:read` | Clipboard is its own event |

@@ -7,6 +7,8 @@ import { CategoryGrid, type CategoryRecord } from '@/components/shell/category-g
 import { ViewHeader } from '@/components/shell/view-header';
 import { TabNav } from '@/components/shell/tab-nav';
 import { CategoryActions } from '@/components/shell/category-actions';
+import { DocumentsActions } from '@/components/shell/documents-actions';
+import { maxUploadBytes } from '@/lib/documents/limits';
 import { importSpecFor, templateFor } from '@/lib/import/specs';
 import { isClientRole } from '@/lib/ui/roles';
 
@@ -293,22 +295,30 @@ export default async function CategoryPage({
      * exercises the grid's folder row. Top-level folders come back as their own
      * rows with a child count; loose documents follow them.
      */
-    const [folders, docs, totalRows] = await Promise.all([
+    /*
+     * The Documents directory (0810). `?folder=` is the folder being looked at;
+     * its subfolders, its files and its written documents are listed, and a
+     * folder row opens that folder here rather than sending everyone to the
+     * same page. The folder's own path is the header's trail.
+     */
+    const current = typeof search.folder === 'string' && isUuid(search.folder) ? search.folder : null;
+    const [here, folders, docs, pages, totalRows] = await Promise.all([
+      current
+        ? tx<{ id: string; name: string; path: string[]; parent_id: string | null }[]>`
+            SELECT f.id, f.name, helm.document_folder_path(f.id) AS path, f.parent_id
+            FROM document_folder f WHERE f.id = ${current}::uuid
+          `
+        : Promise.resolve([]),
       tx<{ id: string; name: string; n: string }[]>`
-        SELECT f.id, f.name, count(a.id)::text AS n
+        SELECT f.id, f.name,
+               ((SELECT count(*) FROM attachment a WHERE a.folder_id = f.id AND a.is_document AND a.deleted_at IS NULL)
+                + (SELECT count(*) FROM document_page p WHERE p.folder_id = f.id AND p.deleted_at IS NULL)
+                + (SELECT count(*) FROM document_folder c WHERE c.parent_id = f.id))::text AS n
         FROM document_folder f
-        LEFT JOIN attachment a
-          ON a.folder_id = f.id AND a.is_document AND a.deleted_at IS NULL
-        WHERE f.organization_id = ${organizationId}::uuid AND f.parent_id IS NULL
-        GROUP BY f.id, f.name
+        WHERE f.organization_id = ${organizationId}::uuid
+          AND f.parent_id IS NOT DISTINCT FROM ${current}::uuid
         ORDER BY f.name
       `,
-      /*
-       * `uploaded_at`, not created_at: an attachment records when it ARRIVED,
-       * which is the only timestamp it has. deleted_at and archived_at are both
-       * respected — a soft-deleted document is gone, and an archived one appears
-       * only when the toolbar asks for it.
-       */
       tx<{
         id: string; filename: string; content_type: string; byte_size: number;
         uploaded_at: Date; uploaded_by_name: string | null; is_internal_only: boolean;
@@ -318,34 +328,59 @@ export default async function CategoryPage({
         FROM attachment a
         LEFT JOIN app_user u ON u.id = a.uploaded_by
         WHERE a.organization_id = ${organizationId}::uuid
-          AND a.is_document AND a.folder_id IS NULL AND a.deleted_at IS NULL
+          AND a.is_document AND a.folder_id IS NOT DISTINCT FROM ${current}::uuid AND a.deleted_at IS NULL
           ${includeArchived ? tx`` : tx`AND a.archived_at IS NULL`}
         ORDER BY a.filename
         LIMIT 500
       `,
-      // Same archived predicate as the list, for the reason given on the node
-      // branch above: "X of Y" is only readable if both come from one population.
+      tx<{
+        id: string; title: string; version: number; updated_at: Date; updated_by_name: string | null;
+        is_internal_only: boolean;
+      }[]>`
+        SELECT p.id, p.title, p.version, p.updated_at, coalesce(u.name, u.email::text) AS updated_by_name,
+               p.is_internal_only
+        FROM document_page p
+        LEFT JOIN app_user u ON u.id = p.updated_by
+        WHERE p.organization_id = ${organizationId}::uuid
+          AND p.folder_id IS NOT DISTINCT FROM ${current}::uuid AND p.deleted_at IS NULL
+          ${includeArchived ? tx`` : tx`AND p.archived_at IS NULL`}
+        ORDER BY lower(p.title)
+        LIMIT 500
+      `,
+      // The whole client's count, for "X of Y": one population, as everywhere.
       tx<{ n: string }[]>`
-        SELECT count(*)::text AS n FROM attachment
-        WHERE organization_id = ${organizationId}::uuid
-          AND is_document AND deleted_at IS NULL
-          ${includeArchived ? tx`` : tx`AND archived_at IS NULL`}
+        SELECT ((SELECT count(*) FROM attachment WHERE organization_id = ${organizationId}::uuid
+                   AND is_document AND deleted_at IS NULL ${includeArchived ? tx`` : tx`AND archived_at IS NULL`})
+              + (SELECT count(*) FROM document_page WHERE organization_id = ${organizationId}::uuid
+                   AND deleted_at IS NULL ${includeArchived ? tx`` : tx`AND archived_at IS NULL`}))::text AS n
       `,
     ]);
+    if (current && here.length === 0) return null;
 
     return {
       org,
       actorRoleRank,
       total: Number(totalRows[0]?.n ?? 0),
+      folder: here[0] ? { id: here[0].id, name: here[0].name, path: here[0].path, parentId: here[0].parent_id } : null,
       records: [
         ...folders.map<CategoryRecord>((f) => ({
           id: f.id,
           name: f.name,
           folder: {
             itemCount: Number(f.n),
-            itemNoun: 'Document',
-            href: `/organizations/${organizationId}/documents`,
+            itemNoun: 'Item',
+            href: `/organizations/${organizationId}/documents?folder=${f.id}`,
           },
+        })),
+        ...pages.map<CategoryRecord>((p) => ({
+          id: p.id,
+          name: p.title,
+          href: `/documents/${p.id}`,
+          secondary: 'Written document',
+          extra: `v${p.version}`,
+          internalOnly: p.is_internal_only,
+          updatedAt: p.updated_at.toISOString(),
+          updatedBy: p.updated_by_name,
         })),
         ...docs.map<CategoryRecord>((d) => ({
           id: d.id,
@@ -446,7 +481,7 @@ export default async function CategoryPage({
       : category.source === 'site'
         ? { secondary: 'City', type: 'Code', extra: 'Phone' }
         : category.source === 'attachment'
-          ? { secondary: 'Content type', type: 'Status', extra: 'Size' }
+          ? { secondary: 'Kind', type: 'Status', extra: 'Size' }
           : category.source === 'credential'
             ? { secondary: 'Username', type: 'Status', extra: 'Vault entry' }
             : { secondary: 'Address', type: 'Status', extra: 'Detail' };
@@ -454,10 +489,24 @@ export default async function CategoryPage({
   return (
     <>
       <ViewHeader
-        trail={[{ label: data.org.name, href: base }]}
-        title={category.label}
+        trail={
+          'folder' in data && data.folder
+            ? [
+                { label: data.org.name, href: base },
+                { label: 'Documents', href: `${base}/documents` },
+                ...data.folder.path.slice(0, -1).map((name) => ({ label: name })),
+              ]
+            : [{ label: data.org.name, href: base }]
+        }
+        title={'folder' in data && data.folder ? data.folder.name : category.label}
         actions={
-          canWrite ? (
+          canWrite && category.source === 'attachment' ? (
+            <DocumentsActions
+              organizationId={organizationId}
+              folderId={'folder' in data && data.folder ? data.folder.id : null}
+              maxBytes={maxUploadBytes()}
+            />
+          ) : canWrite ? (
             <CategoryActions
               organizationId={organizationId}
               category={category.slug}

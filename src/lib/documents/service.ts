@@ -95,6 +95,8 @@ export class DocumentService {
        * shapes apart. The node must be the organisation's own.
        */
       nodeId?: string | null;
+      /** A written document (0810) to attach the file to: an image in a page. */
+      pageId?: string | null;
       filename: string;
       contentType: string;
       isInternalOnly: boolean;
@@ -105,8 +107,12 @@ export class DocumentService {
       throw new DocumentError('missing_bytes', 'the file is empty');
     }
     const nodeId = input.nodeId ?? null;
-    if (nodeId !== null && input.folderId !== null) {
-      throw new DocumentError('no_such_folder', 'an attachment on an asset has no folder');
+    const pageId = input.pageId ?? null;
+    if ((nodeId !== null || pageId !== null) && input.folderId !== null) {
+      throw new DocumentError('no_such_folder', 'an attachment on an asset or a document has no folder');
+    }
+    if (nodeId !== null && pageId !== null) {
+      throw new DocumentError('no_such_folder', 'an attachment belongs to one thing');
     }
 
     const attachmentId = randomUUID();
@@ -122,6 +128,13 @@ export class DocumentService {
             AND archived_at IS NULL
         `;
         if (!node) throw new DocumentError('not_found', 'no such asset in this client');
+      }
+      if (pageId !== null) {
+        const [page] = await tx<{ ok: boolean }[]>`
+          SELECT true AS ok FROM document_page
+          WHERE id = ${pageId}::uuid AND organization_id = ${input.organizationId}::uuid AND deleted_at IS NULL
+        `;
+        if (!page) throw new DocumentError('not_found', 'no such document in this client');
       }
       const key = await activeDataKey(tx, actor.tenantId);
       const dek = await this.deps.dekCache.get({
@@ -144,14 +157,14 @@ export class DocumentService {
           { id: string; filename: string; byte_size: string; is_internal_only: boolean }[]
         >`
           INSERT INTO attachment (
-            id, tenant_id, organization_id, is_document, folder_id, node_id,
+            id, tenant_id, organization_id, is_document, folder_id, node_id, page_id,
             filename, content_type, byte_size, storage_key, content_sha256,
             data_key_id, encryption_nonce, is_internal_only,
             scan_status, uploaded_by
           )
           VALUES (
             ${attachmentId}::uuid, ${actor.tenantId}::uuid, ${input.organizationId}::uuid,
-            ${nodeId === null}, ${input.folderId}, ${nodeId}::uuid,
+            ${nodeId === null && pageId === null}, ${input.folderId}, ${nodeId}::uuid, ${pageId}::uuid,
             ${input.filename}, ${input.contentType}, ${input.bytes.length},
             ${storageKey}, ${sha256},
             ${sealed.dataKeyId}::uuid, ${sealed.nonce}, ${input.isInternalOnly},
@@ -285,6 +298,29 @@ export class DocumentService {
    * destroyed. The bytes go AFTER the transaction commits: unlinking first
    * would destroy a file that a rollback then un-deletes.
    */
+  /**
+   * Permanently delete an archived written document (0810) and the files
+   * attached to it. helm.delete_document_page() decides and audits; the
+   * attachment rows go by cascade and their bytes after the commit, best
+   * effort, for the reason remove() gives.
+   */
+  async removePage(actor: ActorRef, pageId: string): Promise<void> {
+    const result = await withTenant(actor, async (tx) => {
+      const [row] = await tx<{
+        result: { deleted: boolean; reason?: 'not_found' | 'forbidden' | 'not_archived'; message?: string; storage_keys?: string[] };
+      }[]>`SELECT helm.delete_document_page(${pageId}::uuid) AS result`;
+      if (!row) throw new DocumentError('not_found', 'no such document');
+      return row.result;
+    });
+    if (!result.deleted) {
+      const reason = result.reason ?? 'not_found';
+      throw new DocumentError(reason, result.message ?? (reason === 'not_found' ? 'no such document' : 'that is not permitted'));
+    }
+    for (const key of result.storage_keys ?? []) {
+      await this.storage.remove(key).catch(() => {});
+    }
+  }
+
   async remove(actor: ActorRef, attachmentId: string): Promise<void> {
     const result = await withTenant(actor, async (tx) => {
       const [row] = await tx<

@@ -15,6 +15,7 @@ import { SectionBrowser } from '@/components/section-browser';
 import { DocumentsCard } from '@/components/documents-card';
 import { SectionBoundary } from '@/components/section-boundary';
 import { maxUploadBytes } from '@/lib/documents/limits';
+import { listPages } from '@/lib/documents/pages';
 import type { DocumentRow, FolderRow } from '@/lib/ui/documents';
 import { isClientRole } from '@/lib/ui/roles';
 import {
@@ -72,7 +73,7 @@ export default async function OrganizationPage({
     await recordView(tx, { organizationId });
 
     const [
-      sites, contacts, assets, credentials, expiries, health, pinned, folders, documents,
+      sites, contacts, assets, credentials, expiries, health, pinned, folders, documents, pages,
       recentlyUpdated, recentlyViewed, activity, runs, documentationHealth,
     ] = await Promise.all([
       listSites(tx, organizationId),
@@ -84,6 +85,7 @@ export default async function OrganizationPage({
       isFavorite(tx, organizationId),
       listDocumentFolders(tx, organizationId),
       listDocuments(tx, organizationId),
+      listPages(tx, organizationId),
       /*
        * The three widget reads. In the same Promise.all as everything else and
        * on the same transaction, so they add round trips rather than a second
@@ -119,7 +121,7 @@ export default async function OrganizationPage({
 
     return {
       organization, sites, contacts, assets, credentials, expiries,
-      health, pinned, folders, documents,
+      health, pinned, folders, documents, pages,
       recentlyUpdated, recentlyViewed, activity, runs, documentationHealth,
       canWriteOrganization: session.permissions.includes('organization:write'),
       canDeleteDocuments: session.permissions.includes('asset:delete'),
@@ -152,7 +154,7 @@ export default async function OrganizationPage({
 
   const {
     organization, sites, contacts, assets, credentials, expiries, health, pinned,
-    folders, documents, recentlyUpdated, recentlyViewed, activity, runs,
+    folders, documents, pages, recentlyUpdated, recentlyViewed, activity, runs,
     canDeleteDocuments, canReadAudit, canSeeAccessCounts,
     documentationHealth, canWriteOrganization,
   } = data;
@@ -672,6 +674,9 @@ export default async function OrganizationPage({
               organizationId={organization.id}
               folders={folderRows}
               documents={documentRows}
+              pages={pages.map((p) => ({
+                id: p.id, folderId: p.folderId, title: p.title, isInternalOnly: p.isInternalOnly, archived: p.archived,
+              }))}
               canWrite={canWrite}
               canDelete={canDeleteDocuments}
               maxBytes={maxUploadBytes()}
