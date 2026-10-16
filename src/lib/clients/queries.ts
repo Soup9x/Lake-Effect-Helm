@@ -13,6 +13,8 @@ import type { HelmTx } from '../db/client';
 
 export interface OrgRow {
   id: string; name: string; legal_name: string | null; status: string;
+  /** What the organisation is to the MSP (0600); see lib/ui/organization-relationship. */
+  relationship: string;
   industry: string | null; employee_count: number | null; timezone: string | null;
   website: string | null; onboarded_at: Date | null; notes: string | null;
   tags: string[];
@@ -76,7 +78,7 @@ export interface HealthRow {
 
 export async function readOrganization(tx: HelmTx, organizationId: string): Promise<OrgRow | undefined> {
   const [row] = await tx<OrgRow[]>`
-      SELECT id, name, legal_name, status::text, industry, employee_count,
+      SELECT id, name, legal_name, status::text, relationship::text, industry, employee_count,
              timezone, website, onboarded_at, notes, tags, logo_url,
              -- EXISTS rather than a join: one bit is wanted, the bytes are
              -- never read here, and organization_logo is RLS-scoped in its own

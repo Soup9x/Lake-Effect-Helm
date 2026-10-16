@@ -32,6 +32,7 @@ import {
 } from './harness';
 
 import { POST as postOrganization } from '../../src/app/api/organizations/route';
+import { readOrganization } from '../../src/lib/clients/queries';
 import { PATCH as patchOrganization } from '../../src/app/api/organizations/[organizationId]/route';
 
 let h: Harness;
@@ -258,6 +259,18 @@ describe('the API carries relationship', () => {
     expect(after.organization.relationship).toBe('competitor');
     // Untouched: the two columns move independently, which is the whole point.
     expect(after.organization.status).toBe('active');
+  });
+
+  it('reaches the client page, so the picker shows what the row holds', async () => {
+    // The column existed, the API accepted it, the list filtered on it — and
+    // the page read everything about an organisation except this, so no
+    // control could show it. The page's own read now carries it.
+    const created = await postOrganization(
+      json({ name: 'Rival Inc', slug: 'rival-inc', relationship: 'competitor' }),
+    );
+    const { organization } = (await created.json()) as { organization: { id: string } };
+    const row = await withTenant(asActor, (tx) => readOrganization(tx, organization.id));
+    expect(row?.relationship).toBe('competitor');
   });
 
   it('refuses a relationship outside the enum', async () => {

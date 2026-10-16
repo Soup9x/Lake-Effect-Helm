@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Modal } from './ui/modal';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { apiFetch } from '@/lib/ui/api';
+import { RELATIONSHIP_KEYS, RELATIONSHIPS } from '@/lib/ui/organization-relationship';
 
 /**
  * Adding a client.
@@ -46,6 +47,9 @@ export function NewOrganizationForm() {
   const [slug, setSlug] = useState('');
   const [slugTouched, setSlugTouched] = useState(false);
   const [status, setStatus] = useState('active');
+  // Not derived from status: a prospect that signs becomes a client by
+  // changing both, deliberately (0600).
+  const [relationship, setRelationship] = useState<string>('client');
   const [industry, setIndustry] = useState('');
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
@@ -56,6 +60,7 @@ export function NewOrganizationForm() {
     setSlug('');
     setSlugTouched(false);
     setStatus('active');
+    setRelationship('client');
     setIndustry('');
     setNotes('');
     setError(null);
@@ -72,6 +77,7 @@ export function NewOrganizationForm() {
           name: name.trim(),
           slug: slugTouched ? slug.trim() : slugify(name),
           status,
+          relationship,
           ...(industry.trim() ? { industry: industry.trim() } : {}),
           ...(notes.trim() ? { notes: notes.trim() } : {}),
         },
@@ -143,6 +149,22 @@ export function NewOrganizationForm() {
               <FieldHint>
                 Used in URLs and integration mappings. It outlives a rename, so keep it stable.
               </FieldHint>
+            </div>
+
+            <div>
+              <Label htmlFor="org-relationship">Type</Label>
+              <Select
+                id="org-relationship"
+                value={relationship}
+                onChange={(e) => setRelationship(e.target.value)}
+              >
+                {RELATIONSHIP_KEYS.map((key) => (
+                  <option key={key} value={key}>
+                    {RELATIONSHIPS[key].label}
+                  </option>
+                ))}
+              </Select>
+              <FieldHint>{RELATIONSHIPS[relationship as (typeof RELATIONSHIP_KEYS)[number]]?.hint}</FieldHint>
             </div>
 
             <div>
