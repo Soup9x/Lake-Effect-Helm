@@ -121,6 +121,16 @@ HELM_TLS_DIRECTIVE=tls internal
 HELM_HTTP_PORT=80
 HELM_HTTPS_PORT=443
 
+# What sits in front of Helm, and where Caddy's ports are published. setup.sh
+# asks and writes these; the edge decides where the client address is read
+# from (HELM_CLIENT_IP_HEADER / HELM_TRUSTED_PROXY_HOPS below are set to
+# match). direct | cloudflare | proxy. 127.0.0.1 publishes to this host only,
+# the right choice behind a Cloudflare connector running here.
+HELM_EDGE=direct
+HELM_BIND_ADDRESS=0.0.0.0
+HELM_CLIENT_IP_HEADER=
+HELM_TRUSTED_PROXY_HOPS=1
+
 # --- Master key -----------------------------------------------------------
 # local-keyfile: the key lives on this host, in deploy/secrets/master.key.
 # vault-transit: the key never enters the Helm process. Set VAULT_ADDR and
