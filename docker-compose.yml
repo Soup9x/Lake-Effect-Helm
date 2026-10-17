@@ -396,9 +396,13 @@ services:
     environment:
       HELM_PUBLIC_HOST: ${HELM_PUBLIC_HOST:?set in .env, e.g. helm.internal.example.com}
       HELM_TLS_DIRECTIVE: ${HELM_TLS_DIRECTIVE:-tls internal}
+    # HELM_BIND_ADDRESS is the host address the ports are published on. 0.0.0.0
+    # reaches the LAN. 127.0.0.1 is reachable only from this host — what
+    # setup.sh chooses behind a Cloudflare Tunnel whose connector runs here, so
+    # the tunnel is the only way in and the address it reports cannot be forged.
     ports:
-      - "${HELM_HTTP_PORT:-80}:80"
-      - "${HELM_HTTPS_PORT:-443}:443"
+      - "${HELM_BIND_ADDRESS:-0.0.0.0}:${HELM_HTTP_PORT:-80}:80"
+      - "${HELM_BIND_ADDRESS:-0.0.0.0}:${HELM_HTTPS_PORT:-443}:443"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

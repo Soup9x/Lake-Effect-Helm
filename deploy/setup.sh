@@ -6,9 +6,11 @@
 #
 # Runs the five steps of a first install in order, checking as it goes:
 #
-#   1. Preflight   Docker, Compose, versions, permissions, ports, disk
+#   1. Preflight   Docker, Compose, versions, permissions, disk
 #   2. Secrets     ./deploy/init-secrets.sh — master key ring and .env
-#   3. Configure   the address people will type, written into .env
+#   3. Configure   the address people will type, the ports, and what sits in
+#                  front of Helm (nothing, a Cloudflare Tunnel, another proxy),
+#                  written into .env
 #   4. Start       build, then `docker compose up -d --wait`
 #   5. Bootstrap   the first tenant, administrator and data key
 #
@@ -46,6 +48,10 @@ MIN_COMPOSE=2.20
 # Any value supplied here skips its prompt, so the script can run from a
 # provisioning tool. Anything left unset is asked for.
 OPT_HOST=""
+OPT_HTTP_PORT=""
+OPT_HTTPS_PORT=""
+OPT_EDGE=""
+OPT_BIND=""
 OPT_TENANT=""
 OPT_SLUG=""
 OPT_ADMIN_EMAIL=""
@@ -77,11 +83,24 @@ Lake Effect Helm — turnkey on-premises setup
 
 Options (any supplied value skips its prompt):
   --host <name>            Address people will type, e.g. helm.internal.example.com
+                           Behind a tunnel: the PUBLIC name the tunnel publishes.
+  --https-port <port>      Port Caddy serves HTTPS on (default 443)
+  --http-port <port>       Port Caddy redirects to HTTPS from (default 80)
+  --edge <kind>            What sits in front of Helm:
+                             direct      nothing; people reach this host (default)
+                             cloudflare  a Cloudflare Tunnel; Helm reads the client
+                                         address from CF-Connecting-IP
+                             proxy       another reverse proxy or load balancer that
+                                         appends X-Forwarded-For
+  --bind <address>         Address Caddy's ports are published on. 0.0.0.0 reaches
+                           the LAN; 127.0.0.1 is reachable only from this host — the
+                           default behind a Cloudflare connector running here.
   --tenant <name>          MSP display name, e.g. "Northwind Managed Services"
   --slug <slug>            URL-safe MSP identifier, 3-40 chars [a-z0-9-]
   --admin-email <email>    First administrator's sign-in address
   --admin-name <name>      First administrator's display name
-  --yes                    Do not pause for confirmation before starting
+  --yes                    Do not pause for confirmation, and take the defaults
+                           for anything optional (ports, edge, bind) not supplied
   -h, --help               This message
 
 With every option supplied and --yes, the script runs unattended.
@@ -93,6 +112,10 @@ USAGE
 while [ $# -gt 0 ]; do
   case "$1" in
     --host)        OPT_HOST=${2:?--host needs a value}; shift 2 ;;
+    --https-port)  OPT_HTTPS_PORT=${2:?--https-port needs a value}; shift 2 ;;
+    --http-port)   OPT_HTTP_PORT=${2:?--http-port needs a value}; shift 2 ;;
+    --edge)        OPT_EDGE=${2:?--edge needs a value}; shift 2 ;;
+    --bind)        OPT_BIND=${2:?--bind needs a value}; shift 2 ;;
     --tenant)      OPT_TENANT=${2:?--tenant needs a value}; shift 2 ;;
     --slug)        OPT_SLUG=${2:?--slug needs a value}; shift 2 ;;
     --admin-email) OPT_ADMIN_EMAIL=${2:?--admin-email needs a value}; shift 2 ;;
@@ -289,29 +312,6 @@ preflight() {
     ok "$((avail_kb / 1048576)) GB free"
   fi
 
-  # Ports are checked against what .env asks for, which may not be 80/443.
-  local http_port https_port
-  http_port=$(get_env HELM_HTTP_PORT 2>/dev/null || true); http_port=${http_port:-80}
-  https_port=$(get_env HELM_HTTPS_PORT 2>/dev/null || true); https_port=${https_port:-443}
-  local clash=0 unknown=0 rc
-  for p in "$http_port" "$https_port"; do
-    rc=0; port_in_use "$p" || rc=$?
-    case "$rc" in
-      0) warn "something is already listening on port $p"; clash=1 ;;
-      2) unknown=1 ;;
-    esac
-  done
-  if [ "$clash" -eq 1 ]; then
-    note "Caddy will fail to bind. Stop the other service, or set HELM_HTTP_PORT"
-    note "and HELM_HTTPS_PORT in .env and re-run."
-    confirm "Continue anyway?" || die "stopped so you can free the ports."
-  elif [ "$unknown" -eq 1 ]; then
-    warn "could not check whether ports $http_port and $https_port are free"
-    note "No ss, netstat or /proc/net/tcp on this host. If they are taken,"
-    note "Caddy will say so when it tries to bind."
-  else
-    ok "ports $http_port and $https_port are free"
-  fi
 }
 
 # -----------------------------------------------------------------------------
@@ -403,8 +403,9 @@ $(printf '%s\n' "$born_missing" | sed 's/^/        /')
 # 3. Configure
 # -----------------------------------------------------------------------------
 configure() {
-  step "3/5  Address"
+  step "3/5  Address, ports and what sits in front"
 
+  # ---- the name ------------------------------------------------------------
   local current host
   current=$(get_env HELM_PUBLIC_HOST 2>/dev/null || true)
 
@@ -414,7 +415,8 @@ configure() {
       || die "--host '$host' is not a hostname or IP address"
   else
     info "The address technicians will type. It must match the certificate and"
-    info "what appears in the browser's address bar."
+    info "what appears in the browser's address bar. Behind a tunnel, this is the"
+    info "PUBLIC name the tunnel publishes — Helm answers to one name only."
     note "A hostname is strongly preferred over a bare IP: Entra SSO will not"
     note "accept a redirect URI on an IP, and re-addressing the host later"
     note "means editing .env rather than updating DNS. See §6.3."
@@ -425,8 +427,125 @@ configure() {
                 "That is not a hostname or IP address.")
   fi
 
-  local https_port url
+  # ---- the ports -----------------------------------------------------------
+  # Asked here, not in preflight, so a port that turns out to be taken can be
+  # answered on the spot by picking another one.
+  local https_port http_port
   https_port=$(get_env HELM_HTTPS_PORT 2>/dev/null || true); https_port=${https_port:-443}
+  http_port=$(get_env HELM_HTTP_PORT 2>/dev/null || true);   http_port=${http_port:-80}
+  [ -n "$OPT_HTTPS_PORT" ] && https_port=$OPT_HTTPS_PORT
+  [ -n "$OPT_HTTP_PORT" ]  && http_port=$OPT_HTTP_PORT
+
+  if [ -z "$OPT_HTTPS_PORT$OPT_HTTP_PORT" ] && [ "$ASSUME_YES" -eq 0 ]; then
+    printf '\n'
+    info "The ports Caddy listens on. 443 and 80 unless this host already serves"
+    info "something on them. A non-standard HTTPS port becomes part of the address"
+    info "(https://${host}:8443) and of every link Helm sends."
+    printf '\n'
+    https_port=$(ask "HTTPS port" "$https_port" '^[0-9]{1,5}$' "A port number, 1-65535.")
+    http_port=$(ask "HTTP port (redirects to HTTPS)" "$http_port" '^[0-9]{1,5}$' "A port number, 1-65535.")
+  fi
+  for p in "$https_port" "$http_port"; do
+    [ "$p" -ge 1 ] 2>/dev/null && [ "$p" -le 65535 ] || die "'$p' is not a port number (1-65535)."
+  done
+  [ "$https_port" != "$http_port" ] || die "the HTTPS and HTTP ports must differ."
+
+  # Taken already? Ports Caddy itself holds from an earlier run do not count.
+  local clash=0 unknown=0 rc caddy_up=0
+  docker compose ps --status running caddy 2>/dev/null | grep -q caddy && caddy_up=1
+  for p in "$https_port" "$http_port"; do
+    rc=0; port_in_use "$p" || rc=$?
+    case "$rc" in
+      0) if [ "$caddy_up" -eq 1 ]; then note "port $p is held by the running Helm stack"; else warn "something is already listening on port $p"; clash=1; fi ;;
+      2) unknown=1 ;;
+    esac
+  done
+  if [ "$clash" -eq 1 ]; then
+    note "Caddy will fail to bind. Stop the other service, or re-run with"
+    note "--https-port / --http-port (or answer the prompt) to pick free ones."
+    confirm "Continue anyway?" || die "stopped so you can free or change the ports."
+  elif [ "$unknown" -eq 1 ]; then
+    warn "could not check whether ports $https_port and $http_port are free"
+    note "No ss, netstat or /proc/net/tcp on this host. If they are taken,"
+    note "Caddy will say so when it tries to bind."
+  else
+    ok "ports $https_port and $http_port are free"
+  fi
+
+  # ---- what sits in front --------------------------------------------------
+  # The answer decides where Helm reads the client address from (the per-IP
+  # sign-in lockout, the audit log and token allow-lists all use it) and
+  # where Caddy's ports are published.
+  local edge current_edge
+  current_edge=$(get_env HELM_EDGE 2>/dev/null || true); current_edge=${current_edge:-direct}
+  if [ -n "$OPT_EDGE" ]; then
+    edge=$OPT_EDGE
+  elif [ "$ASSUME_YES" -eq 1 ]; then
+    edge=$current_edge
+  else
+    printf '\n'
+    info "How will people reach Helm?"
+    printf '\n'
+    info "  direct      Straight to this host, on the LAN or over a VPN."
+    info "  cloudflare  Through a Cloudflare Tunnel. The public name above is the"
+    info "              tunnel's hostname; Helm reads each visitor's address from"
+    info "              the header Cloudflare sets."
+    info "  proxy       Through another reverse proxy or load balancer that"
+    info "              appends X-Forwarded-For."
+    printf '\n'
+    edge=$(ask "Edge" "$current_edge" '^(direct|cloudflare|proxy)$' "One of: direct, cloudflare, proxy.")
+  fi
+  case $edge in direct|cloudflare|proxy) ;; *) die "--edge '$edge' must be one of: direct, cloudflare, proxy" ;; esac
+
+  if [ "$edge" = "cloudflare" ] && ! printf '%s' "$host" | grep -qE '[A-Za-z]'; then
+    die "a Cloudflare Tunnel publishes a hostname, not an IP address. Use the tunnel's public name as --host."
+  fi
+
+  # ---- where the ports are published --------------------------------------
+  # Reading CF-Connecting-IP is only safe while nothing can reach Caddy except
+  # through the tunnel: a request that arrives another way could name any
+  # address it likes. When the connector runs on this host, publishing on
+  # 127.0.0.1 makes that hold by construction. Publishing to the LAN as well is
+  # allowed, with the trade-off said out loud.
+  local bind current_bind
+  current_bind=$(get_env HELM_BIND_ADDRESS 2>/dev/null || true)
+  if [ -n "$OPT_BIND" ]; then
+    bind=$OPT_BIND
+  elif [ "$edge" != "cloudflare" ]; then
+    bind=${current_bind:-0.0.0.0}
+    [ "$bind" = "127.0.0.1" ] && [ "$ASSUME_YES" -eq 0 ] && bind=0.0.0.0
+  elif [ "$ASSUME_YES" -eq 1 ]; then
+    bind=${current_bind:-127.0.0.1}
+  else
+    printf '\n'
+    info "Where does the cloudflared connector run?"
+    note "On this host, Helm can be published on 127.0.0.1 so the tunnel is the"
+    note "only way in — then the client address Cloudflare reports cannot be"
+    note "forged by anything on the LAN. On another machine, Helm has to be"
+    note "reachable on the LAN."
+    printf '\n'
+    local here
+    here=$(ask "Connector on this host? (yes/no)" "yes" '^(yes|no|y|n)$' "yes or no.")
+    case $here in
+      y|yes)
+        local lan
+        lan=$(ask "Also let the LAN reach Helm directly, bypassing the tunnel? (yes/no)" "no" '^(yes|no|y|n)$' "yes or no.")
+        case $lan in
+          y|yes)
+            bind=0.0.0.0
+            warn "A machine on the LAN can then send its own CF-Connecting-IP header and"
+            warn "name any address it likes in the audit log and the sign-in lockout."
+            ;;
+          *) bind=127.0.0.1 ;;
+        esac
+        ;;
+      *) bind=0.0.0.0 ;;
+    esac
+  fi
+  printf '%s' "$bind" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || die "--bind '$bind' is not an IPv4 address (0.0.0.0 or 127.0.0.1)."
+
+  # ---- write it ------------------------------------------------------------
+  local url
   if [ "$https_port" = "443" ]; then
     url="https://${host}"
   else
@@ -435,11 +554,31 @@ configure() {
     url="https://${host}:${https_port}"
   fi
 
-  set_env HELM_PUBLIC_HOST "$host"
-  set_env HELM_PUBLIC_URL  "$url"
+  set_env HELM_PUBLIC_HOST  "$host"
+  set_env HELM_PUBLIC_URL   "$url"
+  set_env HELM_HTTPS_PORT   "$https_port"
+  set_env HELM_HTTP_PORT    "$http_port"
+  set_env HELM_EDGE         "$edge"
+  set_env HELM_BIND_ADDRESS "$bind"
+  case $edge in
+    cloudflare) set_env HELM_CLIENT_IP_HEADER "cf-connecting-ip"; set_env HELM_TRUSTED_PROXY_HOPS "1" ;;
+    proxy)      set_env HELM_CLIENT_IP_HEADER "";                 set_env HELM_TRUSTED_PROXY_HOPS "2" ;;
+    direct)     set_env HELM_CLIENT_IP_HEADER "";                 set_env HELM_TRUSTED_PROXY_HOPS "1" ;;
+  esac
 
+  printf '\n'
   ok "HELM_PUBLIC_HOST=$host"
   ok "HELM_PUBLIC_URL=$url"
+  ok "ports ${https_port} (https) and ${http_port} (http), published on ${bind}"
+  case $edge in
+    cloudflare) ok "edge: Cloudflare Tunnel — client address from CF-Connecting-IP" ;;
+    proxy)      ok "edge: reverse proxy — client address two hops back in X-Forwarded-For" ;;
+    direct)     ok "edge: none — client address from the connection" ;;
+  esac
+  if [ -n "$current" ] && [ "$current" != "$host" ]; then
+    note "The name changed from ${current}. Browser sessions were issued for it,"
+    note "so everyone signs in again at the new address."
+  fi
 }
 
 # -----------------------------------------------------------------------------
@@ -564,6 +703,60 @@ finish() {
     printf '\n'
   fi
 
+  # Behind a tunnel the connector has to be told where Helm is and how to
+  # trust it. Everything below is derived from what step 3 wrote.
+  local edge https_port bind
+  edge=$(get_env HELM_EDGE 2>/dev/null || true)
+  https_port=$(get_env HELM_HTTPS_PORT 2>/dev/null || true); https_port=${https_port:-443}
+  bind=$(get_env HELM_BIND_ADDRESS 2>/dev/null || true); bind=${bind:-0.0.0.0}
+  if [ "$edge" = "cloudflare" ]; then
+    local origin
+    if [ "$bind" = "127.0.0.1" ]; then origin="https://localhost:${https_port}"; else
+      local lan_ip
+      lan_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true)
+      origin="https://${lan_ip:-<LAN address of this host>}:${https_port}"
+    fi
+    cat <<TUNNEL
+    ${BOLD}Point the tunnel at Helm${RESET} — Cloudflare Zero Trust → Networks → Tunnels →
+    your tunnel → Public Hostname:
+
+      Public hostname            ${host}
+      Service URL                ${origin}
+      HTTP → Host header         leave the default; the names match
+      TLS → Origin Server Name   ${host}
+                                 Required: Caddy picks its certificate by this
+                                 name, and a connection to localhost or an IP
+                                 sends none.
+      TLS → verification         No TLS Verify = on, or CA Pool = the path on
+                                 the connector's host to ./helm-root.crt
+
+    A locally managed connector takes the same thing in config.yml:
+
+      ingress:
+        - hostname: ${host}
+          service: ${origin}
+          originRequest:
+            originServerName: ${host}
+            noTLSVerify: true        # or caPool: /path/to/helm-root.crt
+        - service: http_status:404
+
+    After one sign-in through the tunnel, confirm the client address survived:
+    the Audit page, or as the superuser
+      SELECT ip, outcome, occurred_at FROM auth_attempt ORDER BY occurred_at DESC LIMIT 3;
+    The address should be the visitor's, not the connector's.
+
+TUNNEL
+    if [ "$bind" = "127.0.0.1" ]; then
+      note "Helm is published on 127.0.0.1 only: the tunnel is the one way in, which is"
+      note "what makes the address Cloudflare reports trustworthy. Re-run with"
+      note "--bind 0.0.0.0 to open it to the LAN as well."
+    else
+      warn "Helm is reachable on the LAN as well as through the tunnel. A machine on"
+      warn "the LAN can send its own CF-Connecting-IP header and name any address."
+    fi
+    printf '\n'
+  fi
+
   cat <<NEXT
     Next:
 
@@ -571,8 +764,8 @@ finish() {
          and sign in with the password printed a moment ago. Helm will
          insist you change it.
 
-      2. Make sure ${host} resolves on your network — internal DNS A
-         record, or a hosts entry on each machine.                      §6.1
+      2. Make sure ${host} resolves — internal DNS A record or a hosts
+         entry on each machine; behind a tunnel, Cloudflare's DNS does it. §6.1
 
       3. Back up deploy/secrets/master.key and .env, off this host,
          encrypted. Then set up the nightly job.                        §7

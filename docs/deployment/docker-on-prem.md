@@ -79,6 +79,14 @@ sudo ./deploy/setup.sh --yes \
   --admin-name  "Dana Whitfield"
 ```
 
+With `--yes`, anything optional that is not supplied takes its default: ports
+443 and 80, nothing in front (`--edge direct`), published to the LAN. Behind a
+Cloudflare Tunnel whose connector runs on the same host:
+
+```bash
+sudo ./deploy/setup.sh --yes --host helm.example.com --edge cloudflare ...
+```
+
 `sudo ./deploy/setup.sh --help` lists every option.
 
 ### Two things left when it finishes
@@ -209,8 +217,13 @@ reachable *only* on the internal Compose network.
 | 80/tcp | caddy | Redirect to HTTPS only |
 | 443/tcp | caddy | The application |
 
-Override with `HELM_HTTP_PORT` / `HELM_HTTPS_PORT` in `.env` if 80 and 443 are
-taken.
+`setup.sh` asks for both ports and writes `HELM_HTTP_PORT` / `HELM_HTTPS_PORT`
+to `.env`; change them there later and `docker compose up -d`. A non-standard
+HTTPS port becomes part of the address (`https://helm.example.com:8443`) and of
+every link Helm sends, which the script handles. `HELM_BIND_ADDRESS` chooses
+the host address the ports are published on: `0.0.0.0` reaches the LAN,
+`127.0.0.1` only this host — the choice behind a Cloudflare Tunnel whose
+connector runs here (§3.1).
 
 Outbound access is needed only for: pulling images (first run), your RMM/PSA
 integrations, Microsoft Entra ID if you use SSO, and Let's Encrypt if you
@@ -264,7 +277,10 @@ stat -c '%a %u:%g %n' deploy/secrets/master.key
 
 ## 3. Configure `.env`
 
-*`deploy/setup.sh` sets the two variables below for you; the rest is yours.*
+*`deploy/setup.sh` asks for everything in this section and writes it; the rest
+of `.env` is yours. Re-running the script re-asks, with the current values as
+defaults, so re-addressing an install or moving it behind a tunnel later is the
+same command.*
 
 Open `.env` and set the address people will actually type:
 
@@ -276,7 +292,30 @@ HELM_PUBLIC_URL=https://helm.internal.example.com
 These must agree with each other, with the certificate, and with what appears
 in the browser's address bar. `AUTH_URL` is derived from `HELM_PUBLIC_URL`, and
 an Auth.js callback that disagrees with the address bar fails in a way that is
-tedious to diagnose.
+tedious to diagnose. With a non-standard HTTPS port the URL carries it:
+`https://helm.internal.example.com:8443`.
+
+### 3.1 What sits in front of Helm
+
+Helm answers to exactly one name, and it needs to know where the visitor's
+address comes from: the per-IP sign-in lockout, the audit log and API token
+allow-lists all read it. `setup.sh` asks once and writes the four variables
+that follow from the answer.
+
+| Edge | When | What it writes |
+| --- | --- | --- |
+| `direct` | People reach this host on the LAN or over a VPN | `HELM_TRUSTED_PROXY_HOPS=1`, header blank, published on `0.0.0.0` |
+| `cloudflare` | A Cloudflare Tunnel publishes the name | `HELM_CLIENT_IP_HEADER=cf-connecting-ip`; published on `127.0.0.1` when the connector runs on this host |
+| `proxy` | Another reverse proxy or load balancer appends `X-Forwarded-For` | `HELM_TRUSTED_PROXY_HOPS=2`, header blank, published on `0.0.0.0` |
+
+Behind a tunnel, `HELM_PUBLIC_HOST` is the **public** name the tunnel
+publishes, not an internal one. Cloudflare forwards the browser's Host header
+unchanged, Caddy serves only `HELM_PUBLIC_HOST`, and the sign-in redirect goes
+to `HELM_PUBLIC_URL`: a tunnel for `helm.example.com` in front of an install
+addressed as `helm.internal` gets an empty reply from Caddy, and would bounce
+sign-ins to a name the internet cannot resolve even if it did not. The script
+prints the tunnel's settings when it finishes; the rest of the story is in
+"Behind a Cloudflare Tunnel" below.
 
 Everything else has a working default. The settings you are most likely to
 touch:
@@ -284,7 +323,8 @@ touch:
 | Variable | Default | Change it when |
 | --- | --- | --- |
 | `HELM_TLS_DIRECTIVE` | `tls internal` | You have your own certificate — §6 |
-| `HELM_HTTPS_PORT` | `443` | 443 is already in use on the host |
+| `HELM_HTTPS_PORT` | `443` | 443 is already in use on the host (setup.sh asks) |
+| `HELM_EDGE`, `HELM_BIND_ADDRESS` | `direct`, `0.0.0.0` | A tunnel or proxy sits in front — §3.1 (setup.sh asks) |
 | `HELM_KEK_PROVIDER` | `local-keyfile` | You want the key off this host — see the Vault section of the operations runbook |
 | `AUTH_MICROSOFT_ENTRA_ID_*` | empty | You are wiring Entra SSO |
 | `NODE_EXTRA_CA_CERTS` | empty | Your identity provider (or any https service Helm calls) uses a private CA — §6.1 |
@@ -310,6 +350,10 @@ API-token IP allowlisting, counted from the *right* of `X-Forwarded-For`.
 
 ### Behind a Cloudflare Tunnel, or any proxy in front of Caddy
 
+*`setup.sh --edge cloudflare` (or `proxy`) writes every variable in this
+section and prints the tunnel's settings; §3.1 says what it chooses. What
+follows is why.*
+
 The client address has to survive two proxies, and by default it does not:
 Caddy discards an incoming `X-Forwarded-For` from a source it does not trust
 and writes the connector's address instead, so every request Helm sees comes
@@ -333,8 +377,11 @@ Caddy except through the tunnel — a request that arrives another way could
 name any address it likes — so do not publish Caddy's ports to the internet
 alongside it.
 
-Point the tunnel at Caddy's **https** port (http only redirects) and tell it to
-trust Caddy's root certificate, which `setup.sh` writes to `helm-root.crt`:
+Point the tunnel at Caddy's **https** port (http only redirects), name the
+site in `originServerName` (Caddy picks its certificate by that name, and a
+connection to `localhost` or an IP sends none, so the handshake fails without
+it), and tell it to trust Caddy's root certificate, which `setup.sh` writes to
+`helm-root.crt`, or to skip verification:
 
 ```yaml
 ingress:
@@ -342,8 +389,16 @@ ingress:
     service: https://localhost:443
     originRequest:
       originServerName: helm.example.com
-      caPool: /opt/lake-effect-helm/helm-root.crt
+      caPool: /opt/lake-effect-helm/helm-root.crt    # or noTLSVerify: true
+  - service: http_status:404
 ```
+
+In the Cloudflare dashboard the same three things are the Service URL, **TLS →
+Origin Server Name** and **TLS → No TLS Verify / CA Pool** on the public
+hostname. When the connector runs on the Helm host, `setup.sh` publishes
+Caddy's ports on `127.0.0.1` so the tunnel is the only way in, which is what
+makes the header trustworthy; `--bind 0.0.0.0` opens the LAN as well, at the
+cost that a LAN machine can forge the header.
 
 Confirm after a sign-in, as the superuser:
 
