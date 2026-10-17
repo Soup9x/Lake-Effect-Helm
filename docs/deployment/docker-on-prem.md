@@ -310,6 +310,25 @@ API-token IP allowlisting, counted from the *right* of `X-Forwarded-For`.
 
 ### Behind a Cloudflare Tunnel, or any proxy in front of Caddy
 
+Helm answers to exactly one name, so the name the tunnel publishes has to be
+Helm's name: Cloudflare forwards the browser's Host header unchanged, Caddy
+serves only `HELM_PUBLIC_HOST`, and the sign-in redirect goes to
+`HELM_PUBLIC_URL`. A tunnel for `helm.example.com` in front of an install
+addressed as `helm.internal` gets an empty reply from Caddy, and would bounce
+sign-ins to a name the internet cannot resolve even if it did not. The script
+does the host side of the change in one go and prints the rest:
+
+```bash
+sudo ./deploy/publish-via-tunnel.sh --host helm.example.com
+```
+
+It sets the two address variables and `HELM_CLIENT_IP_HEADER` (below),
+restarts the stack, confirms Caddy answers for the new name, exports Caddy's
+root certificate, and prints the Cloudflare application settings, the internal
+DNS record that lets LAN users reach the same name directly, and the query
+that confirms the client address survived. What follows is what it does and
+why.
+
 The client address has to survive two proxies, and by default it does not:
 Caddy discards an incoming `X-Forwarded-For` from a source it does not trust
 and writes the connector's address instead, so every request Helm sees comes
