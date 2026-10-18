@@ -416,6 +416,21 @@ jobs:
             *) echo "  FAIL  health is not ok"; exit 1 ;;
           esac
 
+      # Somebody will type the IP. setup.sh detects the host's LAN address, and
+      # Caddy must answer it with a redirect to the name rather than a TLS
+      # handshake failure (no SNI is sent to an IP, so without default_sni
+      # there is no certificate to choose).
+      - name: Typing the IP address redirects to the name
+        run: |
+          lan=$(sudo awk -F= '$1=="HELM_LAN_ADDRESS" {print $2}' .env)
+          echo "  HELM_LAN_ADDRESS=$lan"
+          [ -n "$lan" ] || { echo "  FAIL  setup.sh detected no LAN address"; exit 1; }
+          for scheme in https http; do
+            out=$(curl -sk -o /dev/null -w '%{http_code} %{redirect_url}' "$scheme://$lan/sign-in")
+            echo "  $scheme://$lan/sign-in -> $out"
+            [ "$out" = "308 https://helm.ci.internal/sign-in" ] || { echo "  FAIL  expected a 308 to the name"; exit 1; }
+          done
+
       - name: Tear down
         if: always()
         run: sudo docker compose down -v --remove-orphans || true

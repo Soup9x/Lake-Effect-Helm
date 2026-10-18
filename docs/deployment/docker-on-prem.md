@@ -317,6 +317,23 @@ sign-ins to a name the internet cannot resolve even if it did not. The script
 prints the tunnel's settings when it finishes; the rest of the story is in
 "Behind a Cloudflare Tunnel" below.
 
+### 3.2 Typing the IP address
+
+Someone will type the host's IP instead of its name. A browser connecting to
+an IP sends no server name in the TLS handshake, so without help Caddy has no
+certificate to choose and the browser shows `ERR_SSL_PROTOCOL_ERROR`.
+`setup.sh` detects the host's LAN address and writes it to `HELM_LAN_ADDRESS`;
+Caddy then answers `https://` and `http://` on that address with a redirect to
+`HELM_PUBLIC_URL`, using a certificate from its internal CA that names the IP,
+so a machine that trusts `helm-root.crt` sees no warning on the way.
+
+It redirects rather than serving Helm on the IP as well: sign-in cookies and
+callbacks belong to the one public URL, and a session begun on the IP would
+end signed out on the name. Change the address with
+`sudo ./deploy/setup.sh --lan-address <ip>`, or turn the redirect off with
+`--lan-address none`. It is skipped when Helm is addressed by IP already, and
+when its ports are published on `127.0.0.1` only.
+
 Everything else has a working default. The settings you are most likely to
 touch:
 
@@ -325,6 +342,7 @@ touch:
 | `HELM_TLS_DIRECTIVE` | `tls internal` | You have your own certificate — §6 |
 | `HELM_HTTPS_PORT` | `443` | 443 is already in use on the host (setup.sh asks) |
 | `HELM_EDGE`, `HELM_BIND_ADDRESS` | `direct`, `0.0.0.0` | A tunnel or proxy sits in front — §3.1 (setup.sh asks) |
+| `HELM_LAN_ADDRESS` | detected | The host's IP changes, or the redirect from it should stop — §3.2 (setup.sh asks) |
 | `HELM_KEK_PROVIDER` | `local-keyfile` | You want the key off this host — see the Vault section of the operations runbook |
 | `AUTH_MICROSOFT_ENTRA_ID_*` | empty | You are wiring Entra SSO |
 | `NODE_EXTRA_CA_CERTS` | empty | Your identity provider (or any https service Helm calls) uses a private CA — §6.1 |
@@ -1092,6 +1110,7 @@ untested.
 | `migrate` exits non-zero: `checksum mismatch` | A migration file was edited after being applied | Never edit an applied migration; add a new one |
 | `pg_restore`: `role "helm_app" does not exist` | Restored into a cluster initialised without your `.env` | §7.6 |
 | Bootstrap: `tenant "…" already exists` | It already ran | Working as intended — add users in the app |
+| `ERR_SSL_PROTOCOL_ERROR` when browsing to the IP | No server name in the handshake, and no `HELM_LAN_ADDRESS` for that IP | `sudo ./deploy/setup.sh --lan-address <ip>` — §3.2 — or browse by name |
 | Entra sign-in loops back to `/sign-in` | Redirect URI or `HELM_PUBLIC_URL` mismatch | Both must be exactly `https://<host>/api/auth/callback/microsoft-entra-id` and `https://<host>` |
 | Everything is healthy, reveal fails with a decryption error | Database and master key are from different generations | Restore the matching key. There is no other recovery. |
 

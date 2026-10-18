@@ -52,6 +52,7 @@ OPT_HTTP_PORT=""
 OPT_HTTPS_PORT=""
 OPT_EDGE=""
 OPT_BIND=""
+OPT_LAN=""
 OPT_TENANT=""
 OPT_SLUG=""
 OPT_ADMIN_EMAIL=""
@@ -95,6 +96,8 @@ Options (any supplied value skips its prompt):
   --bind <address>         Address Caddy's ports are published on. 0.0.0.0 reaches
                            the LAN; 127.0.0.1 is reachable only from this host — the
                            default behind a Cloudflare connector running here.
+  --lan-address <ip|none>  This host's LAN address. Typing it in a browser redirects
+                           to the hostname instead of failing. Detected by default.
   --tenant <name>          MSP display name, e.g. "Northwind Managed Services"
   --slug <slug>            URL-safe MSP identifier, 3-40 chars [a-z0-9-]
   --admin-email <email>    First administrator's sign-in address
@@ -116,6 +119,7 @@ while [ $# -gt 0 ]; do
     --http-port)   OPT_HTTP_PORT=${2:?--http-port needs a value}; shift 2 ;;
     --edge)        OPT_EDGE=${2:?--edge needs a value}; shift 2 ;;
     --bind)        OPT_BIND=${2:?--bind needs a value}; shift 2 ;;
+    --lan-address) OPT_LAN=${2:?--lan-address needs a value}; shift 2 ;;
     --tenant)      OPT_TENANT=${2:?--tenant needs a value}; shift 2 ;;
     --slug)        OPT_SLUG=${2:?--slug needs a value}; shift 2 ;;
     --admin-email) OPT_ADMIN_EMAIL=${2:?--admin-email needs a value}; shift 2 ;;
@@ -254,6 +258,13 @@ port_in_use() {
   awk -v hex="$hex" '$4 == "0A" && substr($2, length($2) - 3) == hex { found = 1 }
                      END { exit found ? 0 : 1 }' "${files[@]}" && return 0
   return 1
+}
+
+# This host's address on the LAN: the source address of its default route.
+# Empty when there is no default route or no `ip` command.
+detect_lan_ip() {
+  ip -4 route get 1.1.1.1 2>/dev/null \
+    | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
 }
 
 # psql inside the postgres container.
@@ -544,6 +555,36 @@ configure() {
   fi
   printf '%s' "$bind" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || die "--bind '$bind' is not an IPv4 address (0.0.0.0 or 127.0.0.1)."
 
+  # ---- the address people type instead of the name -------------------------
+  # Someone will type the IP. Without this the browser gets a TLS handshake
+  # failure (ERR_SSL_PROTOCOL_ERROR) that says nothing useful; with it, Caddy
+  # answers the IP with a redirect to the name. Not the application itself:
+  # sign-in belongs to HELM_PUBLIC_URL, and a session begun on the IP would
+  # end signed out on the name.
+  local lan_addr current_lan detected ipv4='^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
+  current_lan=$(get_env HELM_LAN_ADDRESS 2>/dev/null || true)
+  detected=$(detect_lan_ip)
+  if printf '%s' "$host" | grep -qE "$ipv4"; then
+    lan_addr=''      # addressed by IP already: the IP IS the name
+  elif [ "$bind" = "127.0.0.1" ]; then
+    lan_addr=''      # the LAN cannot reach Caddy at all
+  elif [ -n "$OPT_LAN" ]; then
+    lan_addr=$OPT_LAN
+  elif [ "$ASSUME_YES" -eq 1 ]; then
+    lan_addr=${current_lan:-$detected}
+  else
+    printf '\n'
+    info "This host's LAN address. Anyone who types it into a browser is sent to"
+    info "https://${host} instead of seeing a connection error. 'none' to skip."
+    printf '\n'
+    lan_addr=$(ask "LAN address" "${current_lan:-${detected:-none}}" \
+                   '^(none|[0-9]{1,3}(\.[0-9]{1,3}){3})$' "An IPv4 address, or none.")
+  fi
+  [ "$lan_addr" = "none" ] && lan_addr=''
+  if [ -n "$lan_addr" ]; then
+    printf '%s' "$lan_addr" | grep -qE "$ipv4" || die "--lan-address '$lan_addr' is not an IPv4 address (or 'none')."
+  fi
+
   # ---- write it ------------------------------------------------------------
   local url
   if [ "$https_port" = "443" ]; then
@@ -560,6 +601,7 @@ configure() {
   set_env HELM_HTTP_PORT    "$http_port"
   set_env HELM_EDGE         "$edge"
   set_env HELM_BIND_ADDRESS "$bind"
+  set_env HELM_LAN_ADDRESS  "$lan_addr"
   case $edge in
     cloudflare) set_env HELM_CLIENT_IP_HEADER "cf-connecting-ip"; set_env HELM_TRUSTED_PROXY_HOPS "1" ;;
     proxy)      set_env HELM_CLIENT_IP_HEADER "";                 set_env HELM_TRUSTED_PROXY_HOPS "2" ;;
@@ -570,6 +612,9 @@ configure() {
   ok "HELM_PUBLIC_HOST=$host"
   ok "HELM_PUBLIC_URL=$url"
   ok "ports ${https_port} (https) and ${http_port} (http), published on ${bind}"
+  if [ -n "$lan_addr" ]; then
+    ok "https://${lan_addr} redirects to ${url}"
+  fi
   case $edge in
     cloudflare) ok "edge: Cloudflare Tunnel — client address from CF-Connecting-IP" ;;
     proxy)      ok "edge: reverse proxy — client address two hops back in X-Forwarded-For" ;;
@@ -713,7 +758,8 @@ finish() {
     local origin
     if [ "$bind" = "127.0.0.1" ]; then origin="https://localhost:${https_port}"; else
       local lan_ip
-      lan_ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true)
+      lan_ip=$(get_env HELM_LAN_ADDRESS 2>/dev/null || true)
+      [ -n "$lan_ip" ] || lan_ip=$(detect_lan_ip)
       origin="https://${lan_ip:-<LAN address of this host>}:${https_port}"
     fi
     cat <<TUNNEL

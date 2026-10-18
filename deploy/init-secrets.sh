@@ -128,6 +128,9 @@ HELM_HTTPS_PORT=443
 # the right choice behind a Cloudflare connector running here.
 HELM_EDGE=direct
 HELM_BIND_ADDRESS=0.0.0.0
+# This host's LAN IP. Typing it in a browser redirects to HELM_PUBLIC_URL
+# instead of failing the TLS handshake. setup.sh detects it.
+HELM_LAN_ADDRESS=
 HELM_CLIENT_IP_HEADER=
 HELM_TRUSTED_PROXY_HOPS=1
 

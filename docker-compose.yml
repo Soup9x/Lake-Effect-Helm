@@ -395,7 +395,13 @@ services:
     restart: unless-stopped
     environment:
       HELM_PUBLIC_HOST: ${HELM_PUBLIC_HOST:?set in .env, e.g. helm.internal.example.com}
+      HELM_PUBLIC_URL: ${HELM_PUBLIC_URL:?set in .env}
       HELM_TLS_DIRECTIVE: ${HELM_TLS_DIRECTIVE:-tls internal}
+      # HELM_LAN_ADDRESS is the host's own address on the LAN. Typing it in a
+      # browser redirects to HELM_PUBLIC_URL (deploy/Caddyfile, last block)
+      # instead of failing the TLS handshake. setup.sh fills it in.
+      HELM_DEFAULT_SNI: ${HELM_LAN_ADDRESS:-${HELM_PUBLIC_HOST:?}}
+      HELM_REDIRECT_ADDRESS: ${HELM_LAN_ADDRESS:-redirect.invalid}
     # HELM_BIND_ADDRESS is the host address the ports are published on. 0.0.0.0
     # reaches the LAN. 127.0.0.1 is reachable only from this host — what
     # setup.sh chooses behind a Cloudflare Tunnel whose connector runs here, so
