@@ -6,10 +6,20 @@
 # over plain http — without TLS, sign-in appears to succeed and every
 # subsequent page reports you as signed out.
 #
-# HELM_TLS_DIRECTIVE defaults to `tls internal`: Caddy mints a certificate from
-# its own CA, which needs no public DNS and no ACME reachability. That is the
-# right default for a box on an internal network, and it costs one step —
-# trusting Caddy's root on the technicians' machines (setup guide §4).
+# HELM ANSWERS ON ANY ADDRESS THAT REACHES IT. The host's IP on the LAN, a
+# hostname in internal DNS, the public name of a Cloudflare Tunnel or any
+# other proxy: Caddy serves the application for all of them, and sign-in
+# follows whichever address the browser used (AUTH_URL is deliberately left
+# unset; see docker-compose.yml). Publishing Helm somewhere new needs nothing
+# here — point the tunnel or proxy at this host's HTTPS port.
+#
+# Certificates come from HELM_TLS_DIRECTIVE, `tls internal` by default: Caddy
+# mints them from its own CA, which needs no public DNS and no ACME. It issues
+# one for every address in HELM_SITE_ADDRESSES (the LAN IP, plus a hostname if
+# one was given), and hands the LAN IP's certificate to a browser that asks
+# for any other name or for none. A tunnel or proxy terminates the browser's
+# TLS itself, so the certificate it sees here only has to be accepted by the
+# connector (No TLS Verify, or trust helm-root.crt).
 #
 # To use your own certificate instead, put the files in deploy/tls/ and set:
 #   HELM_TLS_DIRECTIVE="tls /etc/helm/tls/helm.crt /etc/helm/tls/helm.key"
@@ -24,12 +34,13 @@
 	admin off
 
 	# A browser that connects to an IP address sends no server name in the TLS
-	# handshake (RFC 6066 forbids IP addresses there), so without this Caddy has
-	# nothing to choose a certificate by and aborts the handshake: the browser
-	# shows ERR_SSL_PROTOCOL_ERROR. docker-compose.yml sets this to
-	# HELM_LAN_ADDRESS when there is one, and to HELM_PUBLIC_HOST otherwise
-	# (which is what an install addressed by IP needs).
+	# handshake (RFC 6066 forbids IP addresses there), and one arriving through
+	# a name nobody listed sends a name Caddy has no certificate for. Without
+	# these two lines Caddy has nothing to choose a certificate by and aborts
+	# the handshake (ERR_SSL_PROTOCOL_ERROR). docker-compose.yml sets this to
+	# HELM_LAN_ADDRESS, or to HELM_PUBLIC_HOST when there is none.
 	default_sni {$HELM_DEFAULT_SNI}
+	fallback_sni {$HELM_DEFAULT_SNI}
 
 	# Keep X-Forwarded-For from a proxy on a private address — a Cloudflare
 	# Tunnel connector, a load balancer on the LAN — instead of discarding it.
@@ -51,7 +62,10 @@
 	}
 }
 
-{$HELM_PUBLIC_HOST} {
+# The listed addresses get certificates; the bare `https://` makes the site
+# answer every other Host as well, which is what lets a tunnel or proxy
+# publish Helm under a name this file has never heard of.
+{$HELM_SITE_ADDRESSES}, https:// {
 	{$HELM_TLS_DIRECTIVE}
 
 	encode gzip
@@ -80,24 +94,13 @@
 	}
 }
 
-# Plain http exists only to redirect. Caddy does this by default for a site
-# with TLS, and it is spelled out so the behaviour is not a surprise.
-
-# The address people type instead of the name — the host's LAN IP — answers
-# with a redirect to the name, never with the application. Helm's sign-in
-# cookies and callbacks belong to HELM_PUBLIC_URL, so a session begun on the
-# IP would end signed out on the name; the redirect sends them where sign-in
-# works. The certificate comes from Caddy's internal CA with the IP in it, so
-# a machine that trusts helm-root.crt sees no warning here either.
-#
-# docker-compose.yml sets HELM_REDIRECT_ADDRESS to HELM_LAN_ADDRESS, or to the
-# reserved name redirect.invalid when there is none, so this block always
-# parses and, with no LAN address, matches nothing a browser would send.
-https://{$HELM_REDIRECT_ADDRESS} {
-	tls internal
-	redir {$HELM_PUBLIC_URL}{uri} 308
-}
-
-http://{$HELM_REDIRECT_ADDRESS} {
-	redir {$HELM_PUBLIC_URL}{uri} 308
+# Plain http exists only to redirect, for every address, to the same address
+# over https. The port is added only when HTTPS is not on 443, because the
+# host's published port is not one Caddy can see from inside its container.
+http:// {
+	map {$HELM_HTTPS_PORT} {https_suffix} {
+		443 ""
+		default ":{$HELM_HTTPS_PORT}"
+	}
+	redir https://{host}{https_suffix}{uri} 308
 }

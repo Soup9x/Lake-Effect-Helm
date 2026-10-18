@@ -8,9 +8,9 @@
 #
 #   1. Preflight   Docker, Compose, versions, permissions, disk
 #   2. Secrets     ./deploy/init-secrets.sh — master key ring and .env
-#   3. Configure   the address people will type, the ports, and what sits in
-#                  front of Helm (nothing, a Cloudflare Tunnel, another proxy),
-#                  written into .env
+#   3. Configure   this host's LAN address, an optional hostname, the ports,
+#                  and what sits in front of Helm, written into .env. Helm
+#                  answers on any address that reaches it.
 #   4. Start       build, then `docker compose up -d --wait`
 #   5. Bootstrap   the first tenant, administrator and data key
 #
@@ -83,8 +83,11 @@ Lake Effect Helm — turnkey on-premises setup
   sudo ./deploy/setup.sh [options]
 
 Options (any supplied value skips its prompt):
-  --host <name>            Address people will type, e.g. helm.internal.example.com
-                           Behind a tunnel: the PUBLIC name the tunnel publishes.
+  --lan-address <ip|none>  This host's LAN address; people open https://<ip>.
+                           Detected by default.
+  --host <name|none>       Optional hostname. It gets a certificate and is used in
+                           the links Helm emails; behind a tunnel, the tunnel's
+                           public name. Helm answers on any name either way.
   --https-port <port>      Port Caddy serves HTTPS on (default 443)
   --http-port <port>       Port Caddy redirects to HTTPS from (default 80)
   --edge <kind>            What sits in front of Helm:
@@ -96,8 +99,6 @@ Options (any supplied value skips its prompt):
   --bind <address>         Address Caddy's ports are published on. 0.0.0.0 reaches
                            the LAN; 127.0.0.1 is reachable only from this host — the
                            default behind a Cloudflare connector running here.
-  --lan-address <ip|none>  This host's LAN address. Typing it in a browser redirects
-                           to the hostname instead of failing. Detected by default.
   --tenant <name>          MSP display name, e.g. "Northwind Managed Services"
   --slug <slug>            URL-safe MSP identifier, 3-40 chars [a-z0-9-]
   --admin-email <email>    First administrator's sign-in address
@@ -416,27 +417,68 @@ $(printf '%s\n' "$born_missing" | sed 's/^/        /')
 configure() {
   step "3/5  Address, ports and what sits in front"
 
-  # ---- the name ------------------------------------------------------------
-  local current host
+  # ---- how Helm is reached ------------------------------------------------
+  # Helm answers on ANY address that reaches it (deploy/Caddyfile): this
+  # host's IP, a name in DNS, a tunnel's or proxy's public name. Nothing here
+  # has to know about a tunnel or a proxy. These two answers decide only
+  # which addresses get certificates, and which one goes into the links Helm
+  # emails, where there is no browser request to take an address from.
+  local ipv4='^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
+  local hostname_re='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
+  local current current_lan current_name='' detected lan_addr host
   current=$(get_env HELM_PUBLIC_HOST 2>/dev/null || true)
+  current_lan=$(get_env HELM_LAN_ADDRESS 2>/dev/null || true)
+  detected=$(detect_lan_ip)
+  # The placeholder init-secrets.sh writes is not a name anybody chose.
+  if [ -n "$current" ] && [ "$current" != "helm.internal.example.com" ] \
+     && ! printf '%s' "$current" | grep -qE "$ipv4"; then
+    current_name=$current
+  fi
+
+  if [ -n "$OPT_LAN" ]; then
+    lan_addr=$OPT_LAN
+  elif [ "$ASSUME_YES" -eq 1 ]; then
+    lan_addr=${current_lan:-$detected}
+  else
+    info "Helm answers on any address that reaches it: this host's IP, a name in"
+    info "your DNS, a tunnel's or proxy's public name. None of them has to be set"
+    info "up here first — publish Helm however you like and it will answer."
+    printf '\n'
+    info "This host's LAN address. People on the network open https://<address>."
+    printf '\n'
+    lan_addr=$(ask "LAN address" "${current_lan:-${detected:-none}}" \
+                   '^(none|[0-9]{1,3}(\.[0-9]{1,3}){3})$' "An IPv4 address, or none.")
+  fi
+  [ "$lan_addr" = "none" ] && lan_addr=''
+  if [ -n "$lan_addr" ]; then
+    printf '%s' "$lan_addr" | grep -qE "$ipv4" || die "--lan-address '$lan_addr' is not an IPv4 address (or 'none')."
+  fi
 
   if [ -n "$OPT_HOST" ]; then
     host=$OPT_HOST
-    printf '%s' "$host" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' \
-      || die "--host '$host' is not a hostname or IP address"
+  elif [ "$ASSUME_YES" -eq 1 ]; then
+    host=$current_name
   else
-    info "The address technicians will type. It must match the certificate and"
-    info "what appears in the browser's address bar. Behind a tunnel, this is the"
-    info "PUBLIC name the tunnel publishes — Helm answers to one name only."
-    note "A hostname is strongly preferred over a bare IP: Entra SSO will not"
-    note "accept a redirect URI on an IP, and re-addressing the host later"
-    note "means editing .env rather than updating DNS. See §6.3."
     printf '\n'
-    host=$(ask "Public hostname" \
-                "${current:-helm.internal.example.com}" \
-                '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' \
-                "That is not a hostname or IP address.")
+    info "A hostname, if Helm has one. Optional: it gets a certificate of its own"
+    info "and becomes the address in the links Helm emails (password resets,"
+    info "reminders). Behind a tunnel, give the tunnel's public name here so those"
+    info "links work away from the office. 'none' to use the LAN address."
+    printf '\n'
+    host=$(ask "Hostname" "${current_name:-none}" \
+               '^(none|[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)$' "A hostname, or none.")
   fi
+  [ "$host" = "none" ] && host=''
+  if [ -n "$host" ]; then
+    printf '%s' "$host" | grep -qE "$hostname_re" || die "--host '$host' is not a hostname."
+    # An IP given as the "hostname" is the LAN address by another name.
+    if printf '%s' "$host" | grep -qE "$ipv4"; then
+      [ -n "$lan_addr" ] || lan_addr=$host
+      [ "$host" = "$lan_addr" ] && host=''
+    fi
+  fi
+  [ -n "$host$lan_addr" ] || die "Helm needs at least one address: a LAN address (--lan-address) or a hostname (--host)."
+  local primary=${host:-$lan_addr}
 
   # ---- the ports -----------------------------------------------------------
   # Asked here, not in preflight, so a port that turns out to be taken can be
@@ -451,7 +493,7 @@ configure() {
     printf '\n'
     info "The ports Caddy listens on. 443 and 80 unless this host already serves"
     info "something on them. A non-standard HTTPS port becomes part of the address"
-    info "(https://${host}:8443) and of every link Helm sends."
+    info "(https://${primary}:8443) and of every link Helm sends."
     printf '\n'
     https_port=$(ask "HTTPS port" "$https_port" '^[0-9]{1,5}$' "A port number, 1-65535.")
     http_port=$(ask "HTTP port (redirects to HTTPS)" "$http_port" '^[0-9]{1,5}$' "A port number, 1-65535.")
@@ -498,19 +540,15 @@ configure() {
     info "How will people reach Helm?"
     printf '\n'
     info "  direct      Straight to this host, on the LAN or over a VPN."
-    info "  cloudflare  Through a Cloudflare Tunnel. The public name above is the"
-    info "              tunnel's hostname; Helm reads each visitor's address from"
-    info "              the header Cloudflare sets."
+    info "  cloudflare  Through a Cloudflare Tunnel. Helm reads each visitor's"
+    info "              address from the header Cloudflare sets, so the sign-in"
+    info "              lockout and the audit log see people, not the tunnel."
     info "  proxy       Through another reverse proxy or load balancer that"
     info "              appends X-Forwarded-For."
     printf '\n'
     edge=$(ask "Edge" "$current_edge" '^(direct|cloudflare|proxy)$' "One of: direct, cloudflare, proxy.")
   fi
   case $edge in direct|cloudflare|proxy) ;; *) die "--edge '$edge' must be one of: direct, cloudflare, proxy" ;; esac
-
-  if [ "$edge" = "cloudflare" ] && ! printf '%s' "$host" | grep -qE '[A-Za-z]'; then
-    die "a Cloudflare Tunnel publishes a hostname, not an IP address. Use the tunnel's public name as --host."
-  fi
 
   # ---- where the ports are published --------------------------------------
   # Reading CF-Connecting-IP is only safe while nothing can reach Caddy except
@@ -555,48 +593,16 @@ configure() {
   fi
   printf '%s' "$bind" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || die "--bind '$bind' is not an IPv4 address (0.0.0.0 or 127.0.0.1)."
 
-  # ---- the address people type instead of the name -------------------------
-  # Someone will type the IP. Without this the browser gets a TLS handshake
-  # failure (ERR_SSL_PROTOCOL_ERROR) that says nothing useful; with it, Caddy
-  # answers the IP with a redirect to the name. Not the application itself:
-  # sign-in belongs to HELM_PUBLIC_URL, and a session begun on the IP would
-  # end signed out on the name.
-  local lan_addr current_lan detected ipv4='^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
-  current_lan=$(get_env HELM_LAN_ADDRESS 2>/dev/null || true)
-  detected=$(detect_lan_ip)
-  if printf '%s' "$host" | grep -qE "$ipv4"; then
-    lan_addr=''      # addressed by IP already: the IP IS the name
-  elif [ "$bind" = "127.0.0.1" ]; then
-    lan_addr=''      # the LAN cannot reach Caddy at all
-  elif [ -n "$OPT_LAN" ]; then
-    lan_addr=$OPT_LAN
-  elif [ "$ASSUME_YES" -eq 1 ]; then
-    lan_addr=${current_lan:-$detected}
-  else
-    printf '\n'
-    info "This host's LAN address. Anyone who types it into a browser is sent to"
-    info "https://${host} instead of seeing a connection error. 'none' to skip."
-    printf '\n'
-    lan_addr=$(ask "LAN address" "${current_lan:-${detected:-none}}" \
-                   '^(none|[0-9]{1,3}(\.[0-9]{1,3}){3})$' "An IPv4 address, or none.")
-  fi
-  [ "$lan_addr" = "none" ] && lan_addr=''
-  if [ -n "$lan_addr" ]; then
-    printf '%s' "$lan_addr" | grep -qE "$ipv4" || die "--lan-address '$lan_addr' is not an IPv4 address (or 'none')."
-  fi
-
   # ---- write it ------------------------------------------------------------
-  local url
-  if [ "$https_port" = "443" ]; then
-    url="https://${host}"
-  else
-    # AUTH_URL is derived from this, and an Auth.js callback that disagrees
-    # with the address bar fails in a way that is tedious to diagnose.
-    url="https://${host}:${https_port}"
-  fi
+  local url sites
+  if [ "$https_port" = "443" ]; then url="https://${primary}"; else url="https://${primary}:${https_port}"; fi
+  # The addresses Caddy gets certificates for. It answers every other one too.
+  sites=$lan_addr
+  if [ -n "$host" ]; then sites=${sites:+$sites, }$host; fi
 
-  set_env HELM_PUBLIC_HOST  "$host"
-  set_env HELM_PUBLIC_URL   "$url"
+  set_env HELM_PUBLIC_HOST    "$primary"
+  set_env HELM_PUBLIC_URL     "$url"
+  set_env HELM_SITE_ADDRESSES "$sites"
   set_env HELM_HTTPS_PORT   "$https_port"
   set_env HELM_HTTP_PORT    "$http_port"
   set_env HELM_EDGE         "$edge"
@@ -608,22 +614,27 @@ configure() {
     direct)     set_env HELM_CLIENT_IP_HEADER "";                 set_env HELM_TRUSTED_PROXY_HOPS "1" ;;
   esac
 
+  local port_suffix=''
+  [ "$https_port" = "443" ] || port_suffix=":${https_port}"
   printf '\n'
-  ok "HELM_PUBLIC_HOST=$host"
-  ok "HELM_PUBLIC_URL=$url"
+  if [ "$bind" = "127.0.0.1" ]; then
+    ok "Helm answers on this host only (127.0.0.1); the tunnel is the way in"
+  elif [ -n "$lan_addr" ]; then
+    ok "Helm answers on https://${lan_addr}${port_suffix}${host:+ and https://${host}${port_suffix}}, and on any other name pointed here"
+  else
+    ok "Helm answers on https://${host}${port_suffix}, and on any other name pointed here"
+  fi
+  ok "links Helm emails use ${url}"
   ok "ports ${https_port} (https) and ${http_port} (http), published on ${bind}"
-  if [ -n "$lan_addr" ]; then
-    ok "https://${lan_addr} redirects to ${url}"
+  if [ -z "$host" ] && [ "$edge" != "direct" ]; then
+    note "Emailed links point at the LAN address, which only works on the LAN. Re-run"
+    note "with --host <the public name> to have them work through the ${edge} too."
   fi
   case $edge in
     cloudflare) ok "edge: Cloudflare Tunnel — client address from CF-Connecting-IP" ;;
     proxy)      ok "edge: reverse proxy — client address two hops back in X-Forwarded-For" ;;
     direct)     ok "edge: none — client address from the connection" ;;
   esac
-  if [ -n "$current" ] && [ "$current" != "$host" ]; then
-    note "The name changed from ${current}. Browser sessions were issued for it,"
-    note "so everyone signs in again at the new address."
-  fi
 }
 
 # -----------------------------------------------------------------------------
@@ -726,12 +737,26 @@ bootstrap() {
 # Finish
 # -----------------------------------------------------------------------------
 finish() {
-  local host url tls
+  local host url tls lan sites edge https_port bind suffix=''
   host=$(get_env HELM_PUBLIC_HOST); url=$(get_env HELM_PUBLIC_URL)
   tls=$(get_env HELM_TLS_DIRECTIVE 2>/dev/null || true)
+  lan=$(get_env HELM_LAN_ADDRESS 2>/dev/null || true)
+  sites=$(get_env HELM_SITE_ADDRESSES 2>/dev/null || true)
+  edge=$(get_env HELM_EDGE 2>/dev/null || true)
+  https_port=$(get_env HELM_HTTPS_PORT 2>/dev/null || true); https_port=${https_port:-443}
+  bind=$(get_env HELM_BIND_ADDRESS 2>/dev/null || true); bind=${bind:-0.0.0.0}
+  [ "$https_port" = "443" ] || suffix=":${https_port}"
+  sites=${sites:-$host}
 
   step "Done"
-  info "Helm is running at ${BOLD}${url}${RESET}"
+  if [ "$bind" = "127.0.0.1" ]; then
+    info "Helm is running, reachable from this host only (through the tunnel)."
+  else
+    info "Helm is running. Open any of these — and any name you point here later:"
+    local a
+    IFS=',' read -ra _addrs <<< "$sites"
+    for a in "${_addrs[@]}"; do a=${a// /}; [ -n "$a" ] && info "  ${BOLD}https://${a}${suffix}${RESET}"; done
+  fi
   printf '\n'
 
   # With the default internal CA there is one step left before a browser will
@@ -748,42 +773,31 @@ finish() {
     printf '\n'
   fi
 
-  # Behind a tunnel the connector has to be told where Helm is and how to
-  # trust it. Everything below is derived from what step 3 wrote.
-  local edge https_port bind
-  edge=$(get_env HELM_EDGE 2>/dev/null || true)
-  https_port=$(get_env HELM_HTTPS_PORT 2>/dev/null || true); https_port=${https_port:-443}
-  bind=$(get_env HELM_BIND_ADDRESS 2>/dev/null || true); bind=${bind:-0.0.0.0}
+  # Publishing Helm through a tunnel or proxy needs nothing from Helm: point
+  # it at the HTTPS port and accept Caddy's certificate. Spelled out for
+  # Cloudflare because its dialog has the most knobs to get wrong.
   if [ "$edge" = "cloudflare" ]; then
     local origin
     if [ "$bind" = "127.0.0.1" ]; then origin="https://localhost:${https_port}"; else
-      local lan_ip
-      lan_ip=$(get_env HELM_LAN_ADDRESS 2>/dev/null || true)
-      [ -n "$lan_ip" ] || lan_ip=$(detect_lan_ip)
-      origin="https://${lan_ip:-<LAN address of this host>}:${https_port}"
+      origin="https://${lan:-$(detect_lan_ip)}:${https_port}"
     fi
     cat <<TUNNEL
     ${BOLD}Point the tunnel at Helm${RESET} — Cloudflare Zero Trust → Networks → Tunnels →
-    your tunnel → Public Hostname:
+    your tunnel → Public Hostname. Any public name works; Helm answers on it.
 
-      Public hostname            ${host}
+      Public hostname            the name you want (subdomain + domain)
       Service URL                ${origin}
-      HTTP → Host header         leave the default; the names match
-      TLS → Origin Server Name   ${host}
-                                 Required: Caddy picks its certificate by this
-                                 name, and a connection to localhost or an IP
-                                 sends none.
-      TLS → verification         No TLS Verify = on, or CA Pool = the path on
-                                 the connector's host to ./helm-root.crt
+      TLS → No TLS Verify        on   (or CA Pool = ./helm-root.crt on the
+                                       connector's host)
+      Everything else            leave the defaults
 
     A locally managed connector takes the same thing in config.yml:
 
       ingress:
-        - hostname: ${host}
+        - hostname: helm.example.com
           service: ${origin}
           originRequest:
-            originServerName: ${host}
-            noTLSVerify: true        # or caPool: /path/to/helm-root.crt
+            noTLSVerify: true
         - service: http_status:404
 
     After one sign-in through the tunnel, confirm the client address survived:
@@ -810,15 +824,16 @@ TUNNEL
          and sign in with the password printed a moment ago. Helm will
          insist you change it.
 
-      2. Make sure ${host} resolves — internal DNS A record or a hosts
-         entry on each machine; behind a tunnel, Cloudflare's DNS does it. §6.1
+      2. Links Helm emails (password resets, reminders) use ${url}.
+         Re-run with --host <name> if people should get a different one.
 
       3. Back up deploy/secrets/master.key and .env, off this host,
          encrypted. Then set up the nightly job.                        §7
 
       4. Optional: wire Microsoft Entra ID for SSO — on-premises.md §5.1.
-         Keep the local password working too: it is what gets you in
-         when Entra cannot be reached.              docker-on-prem.md §5.2
+         Entra needs a hostname for its redirect URI, not an IP. Keep the
+         local password working too: it is what gets you in when Entra
+         cannot be reached.                         docker-on-prem.md §5.2
 
     Full reference: docs/deployment/docker-on-prem.md
 NEXT

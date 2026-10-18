@@ -81,8 +81,18 @@ x-helm-env: &helm-env
 
   # --- Auth -----------------------------------------------------------------
   AUTH_SECRET: ${AUTH_SECRET:?run ./deploy/init-secrets.sh}
-  AUTH_URL: ${HELM_PUBLIC_URL:?set in .env}
+  # AUTH_URL is deliberately NOT set. With it, Auth.js pins every sign-in
+  # redirect to that one address, and Helm reached any other way — its IP,
+  # a tunnel's public name — bounces the browser somewhere else and ends
+  # signed out. Without it, and with AUTH_TRUST_HOST, sign-in follows the
+  # address the browser actually used (the Host Caddy forwards).
   AUTH_TRUST_HOST: "true"
+  # The address in links Helm SENDS — password resets, reminders — where
+  # there is no browser request to take it from. Built from configuration,
+  # never from a request's Host header: a reset link built from that header
+  # would let anyone who can request a reset point the emailed link at a
+  # domain of their choosing.
+  HELM_PUBLIC_URL: ${HELM_PUBLIC_URL:-}
   # Caddy appends exactly one entry to X-Forwarded-For. The client address is
   # read that many places from the RIGHT; the leftmost entry is entirely
   # client-controlled, and trusting it defeats API token IP allowlisting.
@@ -394,14 +404,17 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     environment:
-      HELM_PUBLIC_HOST: ${HELM_PUBLIC_HOST:?set in .env, e.g. helm.internal.example.com}
-      HELM_PUBLIC_URL: ${HELM_PUBLIC_URL:?set in .env}
       HELM_TLS_DIRECTIVE: ${HELM_TLS_DIRECTIVE:-tls internal}
-      # HELM_LAN_ADDRESS is the host's own address on the LAN. Typing it in a
-      # browser redirects to HELM_PUBLIC_URL (deploy/Caddyfile, last block)
-      # instead of failing the TLS handshake. setup.sh fills it in.
+      # Caddy serves every address that reaches it (deploy/Caddyfile). These
+      # say which ones get certificates — the LAN IP and a hostname if there
+      # is one, written by setup.sh — and which certificate a browser gets
+      # when it names no server or one nobody listed: the LAN IP's. An
+      # install from before setup.sh wrote them falls back to its one name.
+      HELM_SITE_ADDRESSES: ${HELM_SITE_ADDRESSES:-${HELM_PUBLIC_HOST:?set in .env; run deploy/setup.sh}}
       HELM_DEFAULT_SNI: ${HELM_LAN_ADDRESS:-${HELM_PUBLIC_HOST:?}}
-      HELM_REDIRECT_ADDRESS: ${HELM_LAN_ADDRESS:-redirect.invalid}
+      # Only so plain-http redirects can name the published port when it is
+      # not 443; Caddy itself always listens on 443 inside the container.
+      HELM_HTTPS_PORT: ${HELM_HTTPS_PORT:-443}
     # HELM_BIND_ADDRESS is the host address the ports are published on. 0.0.0.0
     # reaches the LAN. 127.0.0.1 is reachable only from this host — what
     # setup.sh chooses behind a Cloudflare Tunnel whose connector runs here, so
@@ -415,30 +428,20 @@ services:
       - caddy-config:/config
       # Only used when HELM_TLS_DIRECTIVE points at your own certificate.
       - ./deploy/tls:/etc/helm/tls:ro
-    # The healthcheck below connects to Helm's own public name. This resolves it
-    # to the loopback address inside this container, so the request never leaves
-    # the box and needs no DNS.
-    extra_hosts:
-      - "${HELM_PUBLIC_HOST:?}:127.0.0.1"
     healthcheck:
       # End to end: TLS terminates here AND the proxy can reach the web tier.
       # That is the whole request path a browser takes, which is what makes it
       # worth checking; Caddy's own admin API is off (deploy/Caddyfile) and
       # would only have proved the process was up.
       #
-      # THE URL MUST USE THE HOSTNAME, NOT 127.0.0.1. This check used to request
-      # https://127.0.0.1/api/health and pass the name in a Host header. The
-      # Host header selects the site for HTTP routing, but the TLS handshake
-      # happens first and never got that far: RFC 6066 forbids IP addresses in
-      # SNI, so connecting to a bare address sends NO server name, Caddy has no
-      # name to match against its one site, it cannot choose a certificate, and
-      # it aborts the handshake:
-      #
-      #   SSL routines:ssl3_read_bytes:tlsv1 alert internal error (alert 80)
-      #
-      # Caddy served browsers perfectly the whole time; only the check was
-      # wrong, which is the worst kind of wrong — it made `up --wait` fail an
-      # install that had actually succeeded.
+      # The check asks for https://localhost. It used to request a bare
+      # 127.0.0.1, which sends NO server name (RFC 6066 forbids IP addresses in
+      # SNI); with nothing to match, Caddy could not choose a certificate and
+      # aborted the handshake with alert 80, failing `up --wait` on an install
+      # that had succeeded. The Caddyfile's default_sni/fallback_sni now give
+      # every handshake a certificate, and its site answers any Host, so the
+      # loopback name works and the check no longer depends on DNS or on what
+      # Helm is called.
       #
       # --no-check-certificate because `tls internal` mints a certificate from
       # Caddy's own CA. Caddy does install that root into this container's trust
@@ -453,7 +456,7 @@ services:
         - -q
         - -O
         - /dev/null
-        - "https://${HELM_PUBLIC_HOST:?}/api/health"
+        - "https://localhost/api/health"
       interval: 30s
       timeout: 10s
       retries: 3

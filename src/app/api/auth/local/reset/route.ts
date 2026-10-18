@@ -212,8 +212,10 @@ async function issueOutOfBand(
 /**
  * The absolute URL the person opens.
  *
- * HELM_PUBLIC_URL is authoritative, and the compose stack always has it —
- * AUTH_URL is derived from it and marked required. The request's own origin is
+ * HELM_PUBLIC_URL is authoritative, and setup.sh always writes it (AUTH_URL is
+ * honoured if a deployment sets that instead). Never the request's Host: a
+ * link built from it would let whoever asks for a reset choose where the
+ * emailed link points. The request's own origin is
  * the fallback for a deployment that set neither, because the alternative was a
  * bare path: an administrator reading a reset link down the phone can do
  * nothing with "/sign-in/reset?token=...", which would quietly break the one

@@ -251,7 +251,8 @@ name rather than being treated as zero.
 | `HELM_DEK_CACHE_TTL_SECONDS` | no | How long an unwrapped data key stays in memory (300) |
 | `HELM_BLIND_INDEX_KEY_B64` | UniFi | Separate key for blind indexes; required for network sync, optional otherwise |
 | `AUTH_SECRET` | yes | Auth.js signing secret |
-| `HELM_PUBLIC_URL`, `AUTH_URL` | yes | The address people use; links in mail and reset codes are built from it |
+| `HELM_PUBLIC_URL` | yes | The address in links Helm emails (resets, reminders). Helm answers on any address; this is only where links point |
+| `AUTH_URL` | no | Pins sign-in to one address. The bundled stack leaves it unset so sign-in follows the address used |
 | `AUTH_TRUST_HOST`, `HELM_TRUSTED_PROXY_HOPS` | no | Proxy trust. Hops must match the proxies in front of Helm (1 behind the bundled Caddy) |
 | `AUTH_MICROSOFT_ENTRA_ID_*` | no | Entra ID sign-in. Generic OIDC and RADIUS are configured in Settings, not here |
 | `NODE_EXTRA_CA_CERTS` | no | A private CA for Vault, an IdP or a mail relay |

@@ -61,10 +61,10 @@ interface ClaimRow {
  * Where a step lives, for the link in the message.
  *
  * HELM_PUBLIC_URL and not a guess. A reminder whose link points at `localhost`
- * is a reminder nobody can act on from their phone, and the deploy artefacts
- * already carry this value — the Caddyfile expands HELM_PUBLIC_HOST, and
- * tests/unit/env-docs.test.ts asserts every variable the code reads is
- * documented.
+ * is a reminder nobody can act on from their phone. setup.sh writes it and
+ * docker-compose.yml passes it to the worker (it once did not, and reminders
+ * went out with bare paths); tests/unit/env-docs.test.ts asserts every
+ * variable the code reads is documented.
  */
 function runUrl(runId: string): string {
   const base = (process.env.HELM_PUBLIC_URL ?? '').replace(/\/+$/, '');
