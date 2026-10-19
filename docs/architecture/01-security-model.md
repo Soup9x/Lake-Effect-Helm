@@ -107,6 +107,28 @@ Organisation scope uses an explicit sentinel rather than NULL:
 
 "NULL means everything" is one accidental outer join away from a breach.
 
+### 3.0 Custom roles
+
+Besides the built-in ladder, a tenant can define its own roles (0830): a name,
+MSP staff or client-side, an access level, and an exact set of permissions,
+chosen from the catalogue on the People screen. A custom role is an `app_role`
+row with a `tenant_id`, its permissions in `role_permission`, so
+`set_session_context()` builds a holder's permissions exactly as for a built-in
+role, and an edit reaches every holder on their next request.
+
+| Rule | Why |
+| --- | --- |
+| **Only `tenant:write` defines roles**, through `create_custom_role` / `update_custom_role` / `delete_custom_role`; the request role still cannot write the catalogue | Changing what a role means is a change to the authority model — the same call 0480 made for overrides |
+| **A role is visible and assignable only in its own tenant.** `app_role` and `role_permission` gained RLS (built-in rows visible to all), and a trigger on `membership` and `service_account` refuses another tenant's role even from a `SECURITY DEFINER` path or the superuser | Several functions look roles up by key past RLS |
+| **Nobody gives out a permission they do not hold** — when defining a role, and when assigning one to a person or a service account (`helm.enforce_role_assignment()`, every column, like 0350) | Rank alone protected the built-in ladder because every role that can manage people holds everything below it. A custom role breaks that: rank 40 with `tenant:write` would be one click from `tier3` assigning it to itself |
+| **The access level is bounded**: at most your own; at least 40 for MSP staff; at most 30 for a client-side role | Rank still gates RLS writes and each secret's `min_role_rank`; a customer login must not clear a rank-40 gate |
+| **MSP-only permissions stay off client-side roles**, and the kind of role is fixed at creation | The 0020 trigger already enforces the first; flipping the kind later would strand tenant-wide memberships |
+| **A role somebody holds cannot be deleted** | The audit log names it, and a membership must always resolve to a role |
+
+`helm.grantable_roles()` is the one answer to "what may I assign", used by the
+People screen, the users API and the service-account form, so the pickers never
+offer what the triggers would refuse.
+
 ### 3.1 Per-user permission overrides
 
 A role carries a permission set. `membership_permission` adds to it or subtracts
