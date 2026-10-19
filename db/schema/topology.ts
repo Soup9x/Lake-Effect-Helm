@@ -1,5 +1,5 @@
 /**
- * Per-site network topology (0570, reduced to manual-only by 0580).
+ * Network diagrams (0570, manual-only since 0580, one per network entry since 0860).
  *
  * NOT `assetLink`. That table models reliance — what breaks when this breaks —
  * and canonicalises its edges because direction there is a claim about impact.
@@ -34,9 +34,10 @@ import { tenant } from './tenancy';
 export const topologyNode = pgTable('topology_node', {
   id: uuid('id').primaryKey().defaultRandom(),
   tenantId: uuid('tenant_id').notNull().references(() => tenant.id, { onDelete: 'cascade' }),
-  /** Composite FK (site_id, tenant_id) -> site, declared in 0570: Drizzle has no
+  /** The network entry whose diagram this is (0860). Composite FK
+   *  (network_id, tenant_id) -> asset_node, declared in SQL: Drizzle has no
    *  syntax for a composite reference, and db/sql is the authority regardless. */
-  siteId: uuid('site_id').notNull(),
+  networkId: uuid('network_id').notNull(),
 
   /**
    * The real asset, when there is one. Null is ordinary, not a gap: an ISP
@@ -61,7 +62,7 @@ export const topologyNode = pgTable('topology_node', {
   createdAt: tstz('created_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
 }, (t) => [
-  index('topology_node_site_idx').on(t.tenantId, t.siteId),
+  index('topology_node_network_idx').on(t.tenantId, t.networkId),
   index('topology_node_asset_idx').on(t.assetNodeId),
 ]);
 
@@ -76,7 +77,7 @@ export const topologyNode = pgTable('topology_node', {
 export const topologyLink = pgTable('topology_link', {
   id: uuid('id').primaryKey().defaultRandom(),
   tenantId: uuid('tenant_id').notNull().references(() => tenant.id, { onDelete: 'cascade' }),
-  siteId: uuid('site_id').notNull(),
+  networkId: uuid('network_id').notNull(),
 
   fromNodeId: uuid('from_node_id').notNull(),
   toNodeId: uuid('to_node_id').notNull(),
@@ -87,7 +88,7 @@ export const topologyLink = pgTable('topology_link', {
   createdAt: tstz('created_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
 }, (t) => [
-  index('topology_link_site_idx').on(t.tenantId, t.siteId),
+  index('topology_link_network_idx').on(t.tenantId, t.networkId),
   index('topology_link_from_idx').on(t.fromNodeId),
   index('topology_link_to_idx').on(t.toNodeId),
 ]);

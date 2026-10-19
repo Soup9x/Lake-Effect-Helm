@@ -3,7 +3,8 @@ import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 
 /**
- * POST /api/sites/{siteId}/topology/nodes — add a box by hand.
+ * POST /api/networks/{networkId}/topology/nodes — add a box: drawn by hand, or
+ * standing for one of the client's configurations (assetNodeId).
  *
  * Every node is drawn by a person — a switch, an ISP handoff, a patch panel, a
  * printer nobody manages. Nothing else writes to this table (0580), so there is
@@ -30,9 +31,9 @@ const createSchema = z.object({
 
 export const POST = tenantRoute(
   async ({ tx, request, params }) => {
-    const siteId = params.siteId;
-    if (!siteId || !z.guid().safeParse(siteId).success) {
-      throw ApiError.invalid('siteId must be a UUID');
+    const networkId = params.networkId;
+    if (!networkId || !z.guid().safeParse(networkId).success) {
+      throw ApiError.invalid('networkId must be a UUID');
     }
 
     const body = await readJson(request, (raw) => {
@@ -54,10 +55,10 @@ export const POST = tenantRoute(
     try {
       const [node] = await tx<{ id: string }[]>`
         INSERT INTO topology_node (
-          tenant_id, site_id, asset_node_id, label, ip_address, subnet,
+          tenant_id, network_id, asset_node_id, label, ip_address, subnet,
           device_type, pos_x, pos_y)
         VALUES (
-          helm.require_tenant_id(), ${siteId}::uuid, ${body.assetNodeId ?? null}::uuid,
+          helm.require_tenant_id(), ${networkId}::uuid, ${body.assetNodeId ?? null}::uuid,
           ${body.label}, ${body.ipAddress ?? null}, ${body.subnet ?? null},
           ${body.deviceType}::topology_device_type,
           ${body.posX ?? null}, ${body.posY ?? null})
@@ -66,10 +67,15 @@ export const POST = tenantRoute(
       if (!node) throw ApiError.conflict('the node could not be created');
       return { nodeId: node.id };
     } catch (error) {
-      // The site FK and the asset FK are both composite on tenant_id, so an id
-      // from another tenant — or one that simply is not there — lands here.
+      // The network FK and the asset FK are both composite on tenant_id, so an
+      // id from another tenant — or one that simply is not there — lands here.
       if ((error as { code?: string }).code === '23503') {
-        throw ApiError.invalid('no such site or asset');
+        throw ApiError.invalid('no such network or entry');
+      }
+      // 0860's guard: the owner is not a network entry, or the box stands for
+      // another client's entry.
+      if ((error as { code?: string }).code === '23514') {
+        throw ApiError.invalid('a box can only stand for one of this client’s entries, on a network’s diagram');
       }
       throw error;
     }
