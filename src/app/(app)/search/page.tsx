@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/field';
 import { humanise } from '@/lib/ui/format';
+import { isUuid } from '@/lib/ids';
 import { KIND_LABELS, RESULT_KINDS, isResultKind, search, type ResultKind } from '@/lib/search/service';
 
 const ICONS: Record<ResultKind, typeof Search> = {
@@ -20,7 +21,8 @@ const ICONS: Record<ResultKind, typeof Search> = {
 };
 
 /**
- * Global search across every client in the tenant.
+ * Global search across every client in the tenant — or one of them, with
+ * ?org=, which is what the top bar's search box sends for "This client".
  *
  * A plain form with a GET, not a live-filtering client component. Search
  * results are tenant data, and a keystroke-per-request design would put a
@@ -41,7 +43,7 @@ const ICONS: Record<ResultKind, typeof Search> = {
 export default async function SearchPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; kind?: string | string[] }>;
+  searchParams: Promise<{ q?: string; kind?: string | string[]; org?: string }>;
 }) {
   const identity = await getServerIdentity();
   const params = await searchParams;
@@ -50,12 +52,24 @@ export default async function SearchPage({
   const requested = (Array.isArray(params.kind) ? params.kind : params.kind ? [params.kind] : [])
     .filter(isResultKind);
 
+  /*
+   * One client, when the search box sent "This client" (?org=). Read under
+   * RLS: an id the reader cannot see finds no client and the search is
+   * everywhere they can see, which is the same as no ?org at all.
+   */
+  const scope = typeof params.org === 'string' && isUuid(params.org)
+    ? (await withTenant(actorOf(identity), (tx) =>
+        tx<{ id: string; name: string }[]>`SELECT id, name FROM organization WHERE id = ${params.org!}::uuid`,
+      ))[0] ?? null
+    : null;
+
   const results = query
     ? await withTenant(actorOf(identity), (tx) =>
         search(tx, {
           query,
           limit: 60,
           ...(requested.length > 0 ? { kinds: requested } : {}),
+          ...(scope ? { organizationId: scope.id } : {}),
         }),
       )
     : null;
@@ -70,9 +84,10 @@ export default async function SearchPage({
       })
     : new Map<string, string>();
 
-  const link = (kind: ResultKind | null) => {
+  const link = (kind: ResultKind | null, org: string | null = scope?.id ?? null) => {
     const q = new URLSearchParams({ q: query });
     if (kind) q.set('kind', kind);
+    if (org) q.set('org', org);
     return `/search?${q.toString()}`;
   };
 
@@ -98,6 +113,7 @@ export default async function SearchPage({
               {requested.map((kind) => (
                 <input key={kind} type="hidden" name="kind" value={kind} />
               ))}
+              {scope && <input type="hidden" name="org" value={scope.id} />}
               <Button type="submit" variant="primary">
                 <Search aria-hidden />
                 Search
@@ -105,6 +121,17 @@ export default async function SearchPage({
             </form>
           </CardContent>
         </Card>
+
+        {scope && (
+          <nav className="flex flex-wrap items-center gap-1.5" aria-label="Where to search">
+            <FilterChip href={link(requested.length === 1 ? requested[0]! : null)} active>
+              This client · {scope.name}
+            </FilterChip>
+            <FilterChip href={link(requested.length === 1 ? requested[0]! : null, null)} active={false}>
+              All clients
+            </FilterChip>
+          </nav>
+        )}
 
         {results && (
           <nav className="flex flex-wrap items-center gap-1.5">
@@ -135,7 +162,7 @@ export default async function SearchPage({
             <CardContent className="p-0">
               <EmptyState
                 icon={Search}
-                title={`Nothing matches “${query}”`}
+                title={`Nothing matches “${query}”${scope ? ` in ${scope.name}` : ''}`}
                 description="Search covers names, notes, addresses, filenames, identifiers and tags — and matches parts of words, not only whole ones. It never covers credential material."
               />
             </CardContent>

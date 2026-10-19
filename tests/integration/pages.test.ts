@@ -434,6 +434,15 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
       }),
   },
   {
+    // "This client" from the top bar's search box: one client, and the chips
+    // that switch to all of them.
+    name: 'search, in one client',
+    load: async () =>
+      (await import('../../src/app/(app)/search/page')).default({
+        searchParams: p({ q: 'acme', org: IDS.orgAcme }),
+      }),
+  },
+  {
     name: 'search, empty',
     load: async () =>
       (await import('../../src/app/(app)/search/page')).default({ searchParams: p({}) }),
