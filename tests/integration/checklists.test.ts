@@ -35,7 +35,7 @@ import { POST as publishVersion } from '../../src/app/api/sops/[sopId]/versions/
 import { POST as startRun } from '../../src/app/api/sop-runs/route';
 import { PATCH as patchRun } from '../../src/app/api/sop-runs/[runId]/route';
 import { PATCH as patchStep } from '../../src/app/api/sop-runs/[runId]/steps/[stepId]/route';
-import { listRunsForOrganization, readRun, readTemplate } from '../../src/lib/sops/queries';
+import { listRunsForOrganization, listRunsForSop, readRun, readTemplate } from '../../src/lib/sops/queries';
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
@@ -880,6 +880,33 @@ describe('what the pages read', () => {
       .toEqual({ total: 3, done: 1, left: 2 });
     expect({ total: second!.totalSteps, done: second!.doneSteps, left: second!.remainingRequired })
       .toEqual({ total: 3, done: 3, left: 0 });
+  });
+
+  it('lists a procedure’s runs for its own page, naming who completed each and for which client', async () => {
+    asAdmin();
+    const finished = (await ok(await startRun(post('/api/sop-runs', {
+      sopId: IDS.sopOffboard, organizationId: IDS.orgAcme, title: 'Finished first',
+    })))).runId as string;
+    const steps = await withTenant(admin, (tx) => tx<{ id: string }[]>`
+      SELECT id FROM sop_run_step WHERE run_id = ${finished}::uuid ORDER BY position
+    `);
+    for (const step of steps) {
+      await ok(await patchStep(
+        patch(`/api/sop-runs/${finished}/steps/${step.id}`, { status: 'done' }),
+        withParams({ runId: finished, stepId: step.id }),
+      ));
+    }
+    await ok(await patchRun(
+      patch(`/api/sop-runs/${finished}`, { status: 'completed' }),
+      withParams({ runId: finished }),
+    ));
+
+    const runs = await withTenant(admin, (tx) => listRunsForSop(tx, IDS.sopOffboard));
+    const completed = runs.find((r) => r.title === 'Finished first');
+    expect(completed?.status).toBe('completed');
+    expect(completed?.completedBy, 'the Completed tab says who finished it').toBeTruthy();
+    expect(completed?.organizationName).toBeTruthy();
+    expect(runs.every((r) => r.sopId === IDS.sopOffboard)).toBe(true);
   });
 
   it('reads a run"s steps in the order they are meant to be done', async () => {

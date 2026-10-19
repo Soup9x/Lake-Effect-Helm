@@ -107,24 +107,44 @@ export interface RunSummary {
   /** The run's default assignee, by name. Null when nobody was named. */
   assignedTo: string | null;
   dueAt: string | null;
+  /** Who finished it, for the Completed tab. */
+  completedBy: string | null;
+  organizationId: string;
+  organizationName: string;
 }
 
 /** Runs for one client, newest first. Open ones are what somebody came for. */
-export async function listRunsForOrganization(
+export function listRunsForOrganization(
   tx: HelmTx,
   organizationId: string,
-  limit = 50,
+  limit = 200,
+): Promise<RunSummary[]> {
+  return listRuns(tx, { organizationId }, limit);
+}
+
+/** Runs of one procedure, for the Runs card on its own page. */
+export function listRunsForSop(tx: HelmTx, sopId: string, limit = 200): Promise<RunSummary[]> {
+  return listRuns(tx, { sopId }, limit);
+}
+
+async function listRuns(
+  tx: HelmTx,
+  where: { organizationId: string } | { sopId: string },
+  limit: number,
 ): Promise<RunSummary[]> {
   const rows = await tx<{
     run_id: string; title: string; status: string; sop_id: string; sop_name: string;
     ticket_ref: string | null; started_at: Date | null; completed_at: Date | null;
     total_steps: string; done_steps: string; remaining_required_steps: string;
     assigned_to_name: string | null; due_at: Date | null;
+    completed_by_name: string | null; organization_id: string; organization_name: string;
   }[]>`
     SELECT p.run_id, p.title, p.status::text, p.sop_id, n.name AS sop_name,
            p.ticket_ref, p.started_at, p.completed_at,
            p.total_steps, p.done_steps, p.remaining_required_steps,
-           u.name AS assigned_to_name, r.due_at
+           u.name AS assigned_to_name, r.due_at,
+           coalesce(cu.name, cu.email::text) AS completed_by_name,
+           p.organization_id, o.name AS organization_name
     FROM v_sop_run_progress p
     JOIN asset_node n ON n.id = p.sop_id
     -- The view predates assignment (0090) and does not carry it. Joining the
@@ -133,7 +153,11 @@ export async function listRunsForOrganization(
     -- to its GROUP BY, which is a change every other reader pays for.
     JOIN sop_run r ON r.id = p.run_id
     LEFT JOIN app_user u ON u.id = r.assigned_to
-    WHERE p.organization_id = ${organizationId}::uuid
+    LEFT JOIN app_user cu ON cu.id = r.completed_by
+    JOIN organization o ON o.id = p.organization_id
+    WHERE ${'organizationId' in where
+      ? tx`p.organization_id = ${where.organizationId}::uuid`
+      : tx`p.sop_id = ${where.sopId}::uuid`}
     ORDER BY
       -- Open runs first, then by recency. A finished run is a record; an open
       -- one is work, and work belongs at the top.
@@ -156,6 +180,9 @@ export async function listRunsForOrganization(
     remainingRequired: Number(r.remaining_required_steps),
     assignedTo: r.assigned_to_name,
     dueAt: r.due_at?.toISOString() ?? null,
+    completedBy: r.completed_by_name,
+    organizationId: r.organization_id,
+    organizationName: r.organization_name,
   }));
 }
 
