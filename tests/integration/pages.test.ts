@@ -93,6 +93,8 @@ let renderedFolderId = '';
 let contactId = '';
 /** Set in beforeAll: a location, because the location page takes one in its path. */
 let siteId = '';
+/** Set in beforeAll: a network diagram (0880), because its page takes one in its path. */
+let diagramId = '';
 /** Set in beforeAll: a password entry with no secret, for its own page layout. */
 let credentialId = '';
 
@@ -176,6 +178,19 @@ beforeAll(async () => {
     `;
     siteId = site!.id;
     await tx`UPDATE contact SET site_id = ${siteId}::uuid WHERE id = ${contactId}::uuid`;
+
+    // A diagram at that location with a box on it, so the Diagrams grid, the
+    // diagram page and the location's "Recorded here" all have a row.
+    const [diagram] = await tx<{ id: string }[]>`
+      INSERT INTO network_diagram (tenant_id, organization_id, site_id, network_id, name)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, ${siteId}::uuid, ${IDS.network}::uuid, 'Rendered diagram')
+      RETURNING id
+    `;
+    diagramId = diagram!.id;
+    await tx`
+      INSERT INTO topology_node (tenant_id, diagram_id, asset_node_id, label)
+      VALUES (${IDS.tenant1}::uuid, ${diagramId}::uuid, ${IDS.firewall}::uuid, 'acme-fw-01')
+    `;
 
     const [credential] = await tx<{ id: string }[]>`
       INSERT INTO asset_node (tenant_id, organization_id, node_type, name, created_by, updated_by)
@@ -361,6 +376,13 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () =>
       (await import('../../src/app/(app)/locations/[siteId]/page')).default({
         params: p({ siteId }),
+      }),
+  },
+  {
+    name: 'the diagram page',
+    load: async () =>
+      (await import('../../src/app/(app)/diagrams/[diagramId]/page')).default({
+        params: p({ diagramId }),
       }),
   },
   {
@@ -577,6 +599,14 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () =>
       (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({
         params: p({ organizationId: IDS.orgAcme, category: 'locations' }),
+        searchParams: p({}),
+      }),
+  },
+  {
+    name: 'the Diagrams grid',
+    load: async () =>
+      (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({
+        params: p({ organizationId: IDS.orgAcme, category: 'diagrams' }),
         searchParams: p({}),
       }),
   },
@@ -1500,6 +1530,13 @@ describe('a malformed id in the path', () => {
       load: async () =>
         (await import('../../src/app/(app)/locations/[siteId]/page')).default({
           params: p({ siteId: NOT_A_UUID }),
+        }),
+    },
+    {
+      name: 'a diagram',
+      load: async () =>
+        (await import('../../src/app/(app)/diagrams/[diagramId]/page')).default({
+          params: p({ diagramId: NOT_A_UUID }),
         }),
     },
     {

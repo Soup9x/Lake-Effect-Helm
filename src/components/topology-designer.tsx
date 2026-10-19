@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * A network entry's diagram, drawn full width on its page (0860).
+ * A network diagram, drawn full width on its own page (0880).
  *
  * A BOX IS A CONFIGURATION OR A LABEL. "Use an existing configuration" picks
  * one of the client's configurations: the box is drawn with its name, primary
@@ -9,7 +9,7 @@
  * and IP (the server joins them on read), and clicking it opens it. "Something
  * else" is a typed label, for the ISP handoff or a patch panel with no entry.
  * "Add this location's configurations" drops in every configuration at the
- * network's location that is not on the diagram yet.
+ * diagram's location that is not on the diagram yet.
  *
  * WHY SVG AND NOT A LIBRARY. v1 draws boxes and straight lines and lets you
  * drag a box. That is a few hundred lines of pointer handling against an SVG,
@@ -83,7 +83,7 @@ interface Configuration {
 }
 
 interface Graph {
-  network: { id: string; name: string; siteId: string | null; siteName: string | null };
+  diagram: { id: string; name: string; siteId: string | null; siteName: string | null };
   nodes: TopologyNode[];
   links: TopologyLink[];
   /** The client's configurations, for the picker. */
@@ -118,15 +118,15 @@ function layout(nodes: TopologyNode[]): Map<string, { x: number; y: number }> {
 }
 
 export interface TopologyDesignerProps {
-  networkId: string;
-  networkName: string;
+  diagramId: string;
+  diagramName: string;
   /** False for a viewer: the canvas still renders, nothing is draggable. */
   canEdit: boolean;
 }
 
-export function TopologyDesigner({ networkId, networkName, canEdit }: TopologyDesignerProps) {
+export function TopologyDesigner({ diagramId, diagramName, canEdit }: TopologyDesignerProps) {
   const router = useRouter();
-  const base = `/api/networks/${networkId}/topology`;
+  const base = `/api/diagrams/${diagramId}/topology`;
   const [graph, setGraph] = useState<Graph | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -272,7 +272,7 @@ export function TopologyDesigner({ networkId, networkName, canEdit }: TopologyDe
     return (graph?.configurations ?? []).filter((c) => !placed.has(c.id));
   }, [graph]);
   const atThisLocation = useMemo(
-    () => (graph?.network.siteId ? unplaced.filter((c) => c.siteId === graph.network.siteId) : []),
+    () => (graph?.diagram.siteId ? unplaced.filter((c) => c.siteId === graph.diagram.siteId) : []),
     [unplaced, graph],
   );
 
@@ -310,7 +310,7 @@ export function TopologyDesigner({ networkId, networkName, canEdit }: TopologyDe
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Network className="size-4 text-ink-faint" aria-hidden /> Network diagram
+          <Network className="size-4 text-ink-faint" aria-hidden /> Diagram
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -331,7 +331,7 @@ export function TopologyDesigner({ networkId, networkName, canEdit }: TopologyDe
                 {atThisLocation.length > 0 && (
                   <Button size="sm" variant="secondary" onClick={() => void addLocation()} disabled={busy}>
                     <Layers className="size-4" />
-                    Add {graph?.network.siteName ?? 'this location'}’s configurations ({atThisLocation.length})
+                    Add {graph?.diagram.siteName ?? 'this location'}’s configurations ({atThisLocation.length})
                   </Button>
                 )}
                 <Button
@@ -378,7 +378,7 @@ export function TopologyDesigner({ networkId, networkName, canEdit }: TopologyDe
                 width={extent.w}
                 height={extent.h}
                 role="img"
-                aria-label={`Network diagram for ${networkName}`}
+                aria-label={`Network diagram: ${diagramName}`}
                 className="block touch-none select-none"
                 onPointerMove={onPointerMove}
                 onPointerUp={() => void onPointerUp()}

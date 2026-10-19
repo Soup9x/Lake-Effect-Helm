@@ -3090,7 +3090,7 @@ SELECT helm_test.check('and the seeding functions are gone',
       AND p.proname IN ('upsert_topology_node', 'upsert_topology_link',
                         'unifi_mapping_site_guard')));
 
-\echo '-- a drawing belongs to a network entry, and that entry to a client (0860) --'
+\echo '-- a drawing is a diagram of one client''s (0880) --'
 BEGIN;
 SELECT helm_test.ctx(:t1, :u_admin1);
 
@@ -3100,66 +3100,94 @@ VALUES ('1e900000-0000-0000-0000-0000000000a1', :t1, :t1_acme,   'network', 'Acm
 INSERT INTO network (id, tenant_id, kind)
 VALUES ('1e900000-0000-0000-0000-0000000000a1', :t1, 'subnet'), ('1e900000-0000-0000-0000-0000000000a2', :t1, 'subnet');
 
-INSERT INTO topology_node (tenant_id, network_id, label)
-VALUES (:t1, '1e900000-0000-0000-0000-0000000000a1', 'Acme core switch'),
-       (:t1, '1e900000-0000-0000-0000-0000000000a1', 'Acme firewall'),
-       (:t1, '1e900000-0000-0000-0000-0000000000a2', 'Globex switch');
+INSERT INTO network_diagram (id, tenant_id, organization_id, network_id, name)
+VALUES ('1e910000-0000-0000-0000-0000000000a1', :t1, :t1_acme, '1e900000-0000-0000-0000-0000000000a1', 'Acme office'),
+       ('1e910000-0000-0000-0000-0000000000a2', :t1, :t1_globex, NULL, 'Globex office');
+
+INSERT INTO topology_node (tenant_id, diagram_id, label)
+VALUES (:t1, '1e910000-0000-0000-0000-0000000000a1', 'Acme core switch'),
+       (:t1, '1e910000-0000-0000-0000-0000000000a1', 'Acme firewall'),
+       (:t1, '1e910000-0000-0000-0000-0000000000a2', 'Globex switch');
 
 SELECT helm_test.check('the MSP sees every client''s diagram',
-  (SELECT count(*) FROM topology_node) = 3);
+  (SELECT count(*) FROM network_diagram) = 2 AND (SELECT count(*) FROM topology_node) = 3);
 
 SELECT helm_test.check_raises('a line cannot join two different diagrams',
-  format($$INSERT INTO topology_link (tenant_id, network_id, from_node_id, to_node_id)
-           SELECT %L, '1e900000-0000-0000-0000-0000000000a1',
+  format($$INSERT INTO topology_link (tenant_id, diagram_id, from_node_id, to_node_id)
+           SELECT %L, '1e910000-0000-0000-0000-0000000000a1',
                   (SELECT id FROM topology_node WHERE label = 'Acme core switch'),
                   (SELECT id FROM topology_node WHERE label = 'Globex switch')$$, :t1));
 
-SELECT helm_test.check_raises('a diagram belongs to a network entry, not to any entry',
-  format($$INSERT INTO topology_node (tenant_id, network_id, label)
-           VALUES (%L, %L, 'On a firewall')$$, :t1, :n_fw));
+SELECT helm_test.check_raises('a diagram is about a network entry, not about any entry',
+  format($$INSERT INTO network_diagram (tenant_id, organization_id, network_id, name)
+           VALUES (%L, %L, %L, 'Of a firewall')$$, :t1, :t1_acme, :n_fw));
+
+SELECT helm_test.check_raises('...and not about another client''s network',
+  format($$INSERT INTO network_diagram (tenant_id, organization_id, network_id, name)
+           VALUES (%L, %L, '1e900000-0000-0000-0000-0000000000a2', 'Borrowed')$$, :t1, :t1_acme));
 
 SELECT helm_test.check_raises('a box cannot stand for another client''s entry',
-  format($$INSERT INTO topology_node (tenant_id, network_id, asset_node_id, label)
-           VALUES (%L, '1e900000-0000-0000-0000-0000000000a1', %L, 'Globex box')$$, :t1, :n_gx_srv));
+  format($$INSERT INTO topology_node (tenant_id, diagram_id, asset_node_id, label)
+           VALUES (%L, '1e910000-0000-0000-0000-0000000000a1', %L, 'Globex box')$$, :t1, :n_gx_srv));
 
 -- Null means "never placed", and the layout puts it somewhere. Half a
 -- coordinate would mean neither.
 SELECT helm_test.check_raises('a node cannot have one coordinate',
-  format($$INSERT INTO topology_node (tenant_id, network_id, label, pos_x)
-           VALUES (%L, '1e900000-0000-0000-0000-0000000000a1', 'Halfway', 40)$$, :t1));
+  format($$INSERT INTO topology_node (tenant_id, diagram_id, label, pos_x)
+           VALUES (%L, '1e910000-0000-0000-0000-0000000000a1', 'Halfway', 40)$$, :t1));
 
-INSERT INTO topology_link (tenant_id, network_id, from_node_id, to_node_id)
-SELECT :t1, '1e900000-0000-0000-0000-0000000000a1',
+INSERT INTO topology_link (tenant_id, diagram_id, from_node_id, to_node_id)
+SELECT :t1, '1e910000-0000-0000-0000-0000000000a1',
        (SELECT id FROM topology_node WHERE label = 'Acme core switch'),
        (SELECT id FROM topology_node WHERE label = 'Acme firewall');
 
 SELECT helm_test.check_raises('the same pair drawn the other way round is the same cable',
-  format($$INSERT INTO topology_link (tenant_id, network_id, from_node_id, to_node_id)
-           SELECT %L, '1e900000-0000-0000-0000-0000000000a1',
+  format($$INSERT INTO topology_link (tenant_id, diagram_id, from_node_id, to_node_id)
+           SELECT %L, '1e910000-0000-0000-0000-0000000000a1',
                   (SELECT id FROM topology_node WHERE label = 'Acme firewall'),
                   (SELECT id FROM topology_node WHERE label = 'Acme core switch')$$, :t1));
+
+-- The network it is about goes; the diagram stays, about no network.
+DELETE FROM asset_node WHERE id = '1e900000-0000-0000-0000-0000000000a1';
+SELECT helm_test.check('a diagram outlives the network it was about',
+  (SELECT network_id IS NULL AND tenant_id = :t1 FROM network_diagram
+    WHERE id = '1e910000-0000-0000-0000-0000000000a1')
+  AND (SELECT count(*) FROM topology_node
+        WHERE diagram_id = '1e910000-0000-0000-0000-0000000000a1') = 2);
 
 \echo '-- the co-managed client sees their own diagrams and only their own --'
 SELECT helm_test.ctx(:t1, :u_acme);
 SELECT helm_test.check('a client administrator sees only their own diagram',
-  (SELECT count(*) FROM topology_node) = 2);
+  (SELECT count(*) FROM network_diagram) = 1 AND (SELECT count(*) FROM topology_node) = 2);
 SELECT helm_test.check('...and none of the other client''s lines',
   (SELECT count(*) FROM topology_link
-    WHERE network_id = '1e900000-0000-0000-0000-0000000000a2') = 0);
+    WHERE diagram_id = '1e910000-0000-0000-0000-0000000000a2') = 0);
 
 -- Rank 30 against a rank-40 write policy. The client roles hold asset:write, so
 -- the route would let this through; the database is the gate that closes.
 SELECT helm_test.check_raises('a client administrator cannot draw',
-  format($$INSERT INTO topology_node (tenant_id, network_id, label)
-           VALUES (%L, '1e900000-0000-0000-0000-0000000000a1', 'Client drawn')$$, :t1));
+  format($$INSERT INTO topology_node (tenant_id, diagram_id, label)
+           VALUES (%L, '1e910000-0000-0000-0000-0000000000a1', 'Client drawn')$$, :t1));
+SELECT helm_test.check_raises('...nor start a diagram',
+  format($$INSERT INTO network_diagram (tenant_id, organization_id, name)
+           VALUES (%L, %L, 'Client diagram')$$, :t1, :t1_acme));
 
 SELECT helm_test.ctx(:t1, :u_ro);
 SELECT helm_test.check_raises('...nor can a read-only client user',
-  format($$INSERT INTO topology_node (tenant_id, network_id, label)
-           VALUES (%L, '1e900000-0000-0000-0000-0000000000a1', 'Viewer drawn')$$, :t1));
+  format($$INSERT INTO topology_node (tenant_id, diagram_id, label)
+           VALUES (%L, '1e910000-0000-0000-0000-0000000000a1', 'Viewer drawn')$$, :t1));
+
+\echo '-- an internal-only diagram is not the client''s to see --'
+SELECT helm_test.ctx(:t1, :u_admin1);
+UPDATE network_diagram SET is_internal_only = true WHERE id = '1e910000-0000-0000-0000-0000000000a1';
+SELECT helm_test.ctx(:t1, :u_acme);
+SELECT helm_test.check('a client user sees neither the diagram nor its boxes',
+  (SELECT count(*) FROM network_diagram) = 0 AND (SELECT count(*) FROM topology_node) = 0);
 
 \echo '-- and the other tenant shares none of it --'
 SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('the other tenant sees no diagrams',
+  (SELECT count(*) FROM network_diagram) = 0);
 SELECT helm_test.check('the other tenant sees no nodes',
   (SELECT count(*) FROM topology_node) = 0);
 SELECT helm_test.check('the other tenant sees no lines',
@@ -3444,12 +3472,10 @@ ROLLBACK;
 --     client with a drawing could not be purged.
 BEGIN;
 SELECT helm_test.ctx(:t1, :u_admin1);
--- Its own network entry: a drawing belongs to one (0860).
-INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name)
-VALUES ('a1000000-0000-0000-0000-0000000000a1', :t1, :t1_acme, 'network', 'zz drawing network');
-INSERT INTO network (id, tenant_id, kind)
-VALUES ('a1000000-0000-0000-0000-0000000000a1', :t1, 'subnet');
-INSERT INTO topology_node (id, tenant_id, network_id, asset_node_id, label, device_type, pos_x, pos_y)
+-- Its own diagram: a drawing belongs to one (0880).
+INSERT INTO network_diagram (id, tenant_id, organization_id, name)
+VALUES ('a1000000-0000-0000-0000-0000000000a1', :t1, :t1_acme, 'zz drawing');
+INSERT INTO topology_node (id, tenant_id, diagram_id, asset_node_id, label, device_type, pos_x, pos_y)
 VALUES ('b1000000-0000-0000-0000-0000000000a1', :t1, 'a1000000-0000-0000-0000-0000000000a1',
         :n_fw, 'zz drawn firewall', 'firewall', 40, 60);
 DELETE FROM asset_node WHERE id = :n_fw;

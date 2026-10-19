@@ -188,9 +188,9 @@ export function CategoryGrid({
         ...(canWrite && kind && supportsMode(kind, 'restore')
           ? [{ label: 'Restore', icon: ArchiveRestore, onClick: () => setRemoving({ record, mode: 'restore' }) }]
           : []),
-        // A contact's removal is asset:write, as its creation is; files and
-        // written documents are asset:delete.
-        ...(canWrite && (canDelete || kind === 'contact') && kind && supportsMode(kind, 'delete')
+        // A contact's and a diagram's removal is asset:write, as their
+        // creation is; files and written documents are asset:delete.
+        ...(canWrite && (canDelete || kind === 'contact' || kind === 'diagram') && kind && supportsMode(kind, 'delete')
           ? [{ label: 'Delete permanently', icon: Trash2, tone: 'danger' as const,
                onClick: () => setRemoving({ record, mode: 'delete' }) }]
           : []),

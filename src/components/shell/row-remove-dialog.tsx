@@ -31,7 +31,7 @@ import { Button } from '../ui/button';
 import { Modal } from '../ui/modal';
 import { apiFetch, type ApiRequest } from '@/lib/ui/api';
 
-export type RemoveKind = 'node' | 'document' | 'page' | 'folder' | 'contact' | 'site';
+export type RemoveKind = 'node' | 'document' | 'page' | 'folder' | 'contact' | 'site' | 'diagram';
 export type RemoveMode = 'remove' | 'restore' | 'delete';
 
 const COPY: Record<RemoveKind, { verb: string; body: string; reversible: boolean }> = {
@@ -60,6 +60,11 @@ const COPY: Record<RemoveKind, { verb: string; body: string; reversible: boolean
     body: 'This person leaves the list, search and the contact pickers. Everything about them is kept and they can be restored — tick "Include archived" to find them. Deleting them permanently is done from there.',
     reversible: true,
   },
+  diagram: {
+    verb: 'Archive',
+    body: 'The diagram leaves this list. Every box and line is kept and it can be restored — tick "Include archived" to find it. Deleting it permanently is done from there.',
+    reversible: true,
+  },
   site: {
     verb: 'Remove',
     body: 'The location stops appearing anywhere in Helm. Anything recorded there — assets, contacts, documents — keeps its record and simply shows no site. Sites have no archive view, so this cannot be undone from the interface.',
@@ -79,6 +84,7 @@ function requestFor(kind: RemoveKind, mode: RemoveMode, id: string): [string, Ap
       case 'folder': return [`/api/document-folders/${id}`, { method: 'DELETE' }];
       case 'contact': return [`/api/contacts/${id}`, { method: 'PATCH', json: { archived: true } }];
       case 'site': return [`/api/sites/${id}`, { method: 'DELETE' }];
+      case 'diagram': return [`/api/diagrams/${id}`, { method: 'PATCH', json: { archived: true } }];
     }
   }
   if (mode === 'restore') {
@@ -87,6 +93,7 @@ function requestFor(kind: RemoveKind, mode: RemoveMode, id: string): [string, Ap
       case 'document': return [`/api/documents/${id}`, { method: 'PATCH', json: { archived: false } }];
       case 'page': return [`/api/document-pages/${id}`, { method: 'PATCH', json: { archived: false } }];
       case 'contact': return [`/api/contacts/${id}`, { method: 'PATCH', json: { archived: false } }];
+      case 'diagram': return [`/api/diagrams/${id}`, { method: 'PATCH', json: { archived: false } }];
       default: return null;
     }
   }
@@ -94,6 +101,7 @@ function requestFor(kind: RemoveKind, mode: RemoveMode, id: string): [string, Ap
     case 'document': return [`/api/documents/${id}`, { method: 'DELETE' }];
     case 'page': return [`/api/document-pages/${id}`, { method: 'DELETE' }];
     case 'contact': return [`/api/contacts/${id}`, { method: 'DELETE' }];
+    case 'diagram': return [`/api/diagrams/${id}`, { method: 'DELETE' }];
     default: return null;
   }
 }
@@ -138,6 +146,8 @@ export function RowRemoveDialog({
               ? 'The document and every one of its versions are destroyed. Files attached to it go with it.'
               : kind === 'contact'
                 ? 'This person is removed from Helm for good, and cannot be restored.'
+                : kind === 'diagram'
+                ? 'The diagram and every box and line on it are destroyed.'
                 : 'The file is destroyed. Anything that linked to it will show it as gone.',
             reversible: false,
           }

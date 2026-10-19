@@ -312,6 +312,42 @@ export default async function CategoryPage({
       };
     }
 
+    // Network diagrams (0880): each opens on its own page, where it is drawn.
+    if (category.source === 'network_diagram') {
+      const rows = await tx<{
+        id: string; name: string; description: string | null; site_name: string | null;
+        network_name: string | null; boxes: number; is_internal_only: boolean;
+        archived: boolean; updated_at: Date;
+      }[]>`
+        SELECT d.id, d.name, d.description, s.name AS site_name, n.name AS network_name,
+               (SELECT count(*)::int FROM topology_node t WHERE t.diagram_id = d.id) AS boxes,
+               d.is_internal_only, d.archived_at IS NOT NULL AS archived, d.updated_at
+        FROM network_diagram d
+        LEFT JOIN site s ON s.id = d.site_id AND s.deleted_at IS NULL
+        LEFT JOIN asset_node n ON n.id = d.network_id
+        WHERE d.organization_id = ${organizationId}::uuid
+          ${includeArchived ? tx`` : tx`AND d.archived_at IS NULL`}
+        ORDER BY lower(d.name)
+      `;
+      return {
+        org,
+        actorRoleRank,
+        total: rows.length,
+        records: rows.map<CategoryRecord>((r) => ({
+          id: r.id,
+          name: r.name,
+          href: `/diagrams/${r.id}`,
+          subtext: r.description,
+          archived: r.archived,
+          secondary: r.site_name,
+          type: r.network_name,
+          extra: `${r.boxes} ${r.boxes === 1 ? 'box' : 'boxes'}${r.is_internal_only ? ' · internal only' : ''}`,
+          updatedAt: r.updated_at.toISOString(),
+          removeKind: 'diagram',
+        })),
+      };
+    }
+
     /*
      * Documents: the one category with FOLDERS, and therefore the one that
      * exercises the grid's folder row. Top-level folders come back as their own
@@ -460,6 +496,16 @@ export default async function CategoryPage({
         return { contacts, connectable };
       })
     : { contacts: [], connectable: [] };
+  // The diagram form's network picker (0880).
+  const networks = canWrite && category.source === 'network_diagram'
+    ? await withTenant(actorOf(identity), (tx) =>
+        tx<{ id: string; name: string }[]>`
+          SELECT id, name FROM asset_node
+          WHERE organization_id = ${organizationId}::uuid AND archived_at IS NULL
+            AND node_type = 'network'
+          ORDER BY lower(name)
+        `)
+    : [];
   const base = `/organizations/${organizationId}`;
 
   const importSpec = importSpecFor(category.slug);
@@ -506,6 +552,8 @@ export default async function CategoryPage({
       ? { secondary: 'Email', type: 'Title', extra: 'Phone' }
       : category.source === 'site'
         ? { secondary: 'City', type: 'Code', extra: 'Phone' }
+        : category.source === 'network_diagram'
+        ? { secondary: 'Location', type: 'Network', extra: 'Drawing' }
         : category.source === 'attachment'
           ? { secondary: 'Kind', type: 'Status', extra: 'Size' }
           : category.source === 'credential'
@@ -552,6 +600,7 @@ export default async function CategoryPage({
               sites={sites}
               contacts={pickers.contacts}
               connectable={pickers.connectable}
+              networks={networks}
               canCreate={canCreate}
             />
           ) : null

@@ -3,7 +3,7 @@ import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 
 /**
- * POST /api/networks/{networkId}/topology/links — draw a line between two boxes.
+ * POST /api/diagrams/{diagramId}/topology/links — draw a line between two boxes.
  *
  * NOT the dependency graph. `POST /api/assets/links` records reliance and is
  * gated on asset:link; this records a cable. A firewall is connected to a
@@ -23,9 +23,9 @@ const createSchema = z.object({
 
 export const POST = tenantRoute(
   async ({ tx, request, params }) => {
-    const networkId = params.networkId;
-    if (!networkId || !z.guid().safeParse(networkId).success) {
-      throw ApiError.invalid('networkId must be a UUID');
+    const diagramId = params.diagramId;
+    if (!diagramId || !z.guid().safeParse(diagramId).success) {
+      throw ApiError.invalid('diagramId must be a UUID');
     }
 
     const body = await readJson(request, (raw) => {
@@ -42,11 +42,16 @@ export const POST = tenantRoute(
       throw ApiError.invalid('a link needs two different nodes');
     }
 
+    // A diagram this reader cannot see, or that is not there, is a 404 rather
+    // than the write policy's refusal: one answer for both, as on GET.
+    const [diagram] = await tx`SELECT 1 FROM network_diagram WHERE id = ${diagramId}::uuid`;
+    if (!diagram) throw ApiError.notFound('no such diagram');
+
     try {
       const [link] = await tx<{ id: string }[]>`
-        INSERT INTO topology_link (tenant_id, network_id, from_node_id, to_node_id, label)
+        INSERT INTO topology_link (tenant_id, diagram_id, from_node_id, to_node_id, label)
         VALUES (
-          helm.require_tenant_id(), ${networkId}::uuid,
+          helm.require_tenant_id(), ${diagramId}::uuid,
           ${body.fromNodeId}::uuid, ${body.toNodeId}::uuid,
           ${body.label ?? null})
         RETURNING id
@@ -62,7 +67,7 @@ export const POST = tenantRoute(
         throw ApiError.conflict('these two nodes are already linked');
       }
       if (code === '23503') {
-        throw ApiError.invalid('no such network or box');
+        throw ApiError.invalid('no such diagram or box');
       }
       // The endpoint guard in 0570: both boxes must be on this diagram.
       if (code === '23514' || /must join two nodes on its own diagram/.test(String((error as Error).message))) {

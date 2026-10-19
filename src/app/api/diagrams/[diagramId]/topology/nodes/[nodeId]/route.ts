@@ -29,21 +29,21 @@ const patchSchema = z
     message: 'a position needs both posX and posY',
   });
 
-function ids(params: Record<string, string>): { networkId: string; nodeId: string } {
-  const networkId = params.networkId;
+function ids(params: Record<string, string>): { diagramId: string; nodeId: string } {
+  const diagramId = params.diagramId;
   const nodeId = params.nodeId;
-  if (!networkId || !z.guid().safeParse(networkId).success) {
-    throw ApiError.invalid('networkId must be a UUID');
+  if (!diagramId || !z.guid().safeParse(diagramId).success) {
+    throw ApiError.invalid('diagramId must be a UUID');
   }
   if (!nodeId || !z.guid().safeParse(nodeId).success) {
     throw ApiError.invalid('nodeId must be a UUID');
   }
-  return { networkId, nodeId };
+  return { diagramId, nodeId };
 }
 
 export const PATCH = tenantRoute(
   async ({ tx, request, params }) => {
-    const { networkId, nodeId } = ids(params);
+    const { diagramId, nodeId } = ids(params);
 
     const body = await readJson(request, (raw) => {
       const result = patchSchema.safeParse(raw);
@@ -71,7 +71,7 @@ export const PATCH = tenantRoute(
           device_type = COALESCE(${body.deviceType ?? null}::topology_device_type, device_type),
           asset_node_id = CASE WHEN ${body.assetNodeId !== undefined}
                                THEN ${body.assetNodeId ?? null}::uuid ELSE asset_node_id END
-        WHERE id = ${nodeId}::uuid AND network_id = ${networkId}::uuid
+        WHERE id = ${nodeId}::uuid AND diagram_id = ${diagramId}::uuid
         RETURNING id
       `;
     } catch (error) {
@@ -98,11 +98,11 @@ export const PATCH = tenantRoute(
  */
 export const DELETE = tenantRoute(
   async ({ tx, params }) => {
-    const { networkId, nodeId } = ids(params);
+    const { diagramId, nodeId } = ids(params);
 
     const [row] = await tx<{ id: string }[]>`
       DELETE FROM topology_node
-      WHERE id = ${nodeId}::uuid AND network_id = ${networkId}::uuid
+      WHERE id = ${nodeId}::uuid AND diagram_id = ${diagramId}::uuid
       RETURNING id
     `;
     if (!row) throw ApiError.notFound('no such topology node');

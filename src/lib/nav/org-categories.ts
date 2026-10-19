@@ -49,6 +49,7 @@ export const ORG_CATEGORIES: readonly OrgCategory[] = [
   { slug: 'domains',        label: 'Domain Tracker', kind: 'node',  source: 'domain',          icon: 'Globe' },
   { slug: 'locations',      label: 'Locations',      kind: 'table', source: 'site',            icon: 'MapPin' },
   { slug: 'networks',       label: 'Networks',       kind: 'node',  source: 'network',         icon: 'Network' },
+  { slug: 'diagrams',       label: 'Diagrams',       kind: 'table', source: 'network_diagram', icon: 'Workflow' },
   // Labelled Credentials; the slug stays 'passwords' so saved links, sidebar
   // layouts (helm.sidebar_layout_valid) and bookmarks keep working.
   { slug: 'passwords',      label: 'Credentials',    kind: 'node',  source: 'credential',      icon: 'KeyRound' },
@@ -84,7 +85,7 @@ export const ORG_CATEGORIES: readonly OrgCategory[] = [
  * It is here, beside the taxonomy, because the answer is a property of the
  * category: 'passwords' means a credential whatever page is asking.
  */
-export type CreateForm = 'contact' | 'secret' | 'site' | 'procedure' | 'configuration' | 'asset';
+export type CreateForm = 'contact' | 'secret' | 'site' | 'diagram' | 'procedure' | 'configuration' | 'asset';
 
 export function createFormFor(category: string, nodeType?: string | undefined): CreateForm | null {
   switch (category) {
@@ -94,6 +95,7 @@ export function createFormFor(category: string, nodeType?: string | undefined): 
     case 'configurations': return 'configuration';
     case 'passwords': return 'secret';
     case 'locations': return 'site';
+    case 'diagrams': return 'diagram';
     case 'sops': return 'procedure';
     default:
       // Every remaining node category shares one form, pinned to its type.
