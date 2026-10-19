@@ -1,13 +1,11 @@
 import { cookies } from 'next/headers';
-import { Bell, KeyRound, Mail, MonitorSmartphone, ShieldCheck, UserCog } from 'lucide-react';
+import { Bell, KeyRound, MonitorSmartphone, ShieldCheck } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { sessionCookieName, sessionRef } from '@/lib/auth/session-cookie';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { ChangePasswordCard } from '@/components/change-password-card';
-import { ProfileForm } from '@/components/profile-form';
 import { readMyPreferences } from '@/lib/ui/account-queries';
 import { readMyNotificationKinds } from '@/lib/email/preferences';
 import { NotificationPreferencesCard } from '@/components/notification-preferences';
@@ -31,7 +29,10 @@ interface RawSession {
 }
 
 /**
- * Your account: the things that are yours rather than the tenant's.
+ * Security & notifications: the things that are yours rather than the
+ * tenant's — email notifications, sessions, API tokens and your access.
+ * Profile and password moved to /profile, opened from the menu under your
+ * name; this page is reached from the Personal tab.
  *
  * Split out from Settings deliberately. Settings is about the deployment — key
  * custody, integrations, who the workers run as — and it is hidden from
@@ -53,9 +54,9 @@ export default async function AccountPage() {
   const currentRef = token ? sessionRef(token) : null;
 
   const {
-    credential, sessions, timezones, notifications, tokens, permissions,
+    credential, sessions, notifications, tokens, permissions,
   } = await withTenant(actorOf(identity), async (tx, session) => {
-    const [credentialRows, sessionRows, timezoneRows, notificationRow, tokenRows] = await Promise.all([
+    const [credentialRows, sessionRows, notificationRow, tokenRows] = await Promise.all([
       // The view carries no hash — helm_app holds column grants that exclude
       // it. Its only job is to answer "do you have a local password, and did
       // somebody else choose it".
@@ -64,23 +65,6 @@ export default async function AccountPage() {
       // SECURITY DEFINER, resolves the owner from the session context, and
       // returns a hash of each token rather than the token.
       tx<RawSession[]>`SELECT * FROM helm.my_sessions()`,
-      /*
-       * The zone names this server knows, so the picker cannot offer one the
-       * 0630 trigger would refuse. Read from the catalogue rather than from
-       * Intl.supportedValuesOf() in the browser: the database is what validates
-       * the value, and the two lists differ at the edges — a browser shipped
-       * with newer tzdata than the server would offer a zone that is then
-       * rejected on save, which is a confusing way to learn about tzdata.
-       *
-       * Filtered to the Region/City shape: pg_timezone_names also carries
-       * legacy aliases, POSIX strings and abbreviations (EST5EDT, posix/Zulu,
-       * GMT+0) that are either duplicates or not zones anybody means.
-       */
-      tx<{ name: string }[]>`
-        SELECT name FROM pg_timezone_names
-        WHERE name LIKE '%/%' AND name NOT LIKE 'posix/%' AND name NOT LIKE 'right/%'
-        ORDER BY name
-      `,
       // Which kinds I want, and whether the tenant can send at all. One read
       // answers both, because a toggle with no relay behind it has to say so.
       readMyNotificationKinds(tx),
@@ -97,7 +81,6 @@ export default async function AccountPage() {
       // token may be narrowed to. Not the role's list — a token-authenticated
       // session is already narrowed, and a token must not widen past it.
       permissions: session.permissions,
-      timezones: timezoneRows.map((r) => r.name),
       // In the same transaction as the rest, because it is the same actor's own
       // row: RLS is what scopes it, so there is no predicate here to get wrong.
       notifications: notificationRow,
@@ -122,51 +105,10 @@ export default async function AccountPage() {
   return (
     <>
       <PageHeader
-        title="Account"
-        description="Your profile, your password, and every session signed in as you."
+        title="Security & notifications"
+        description="What you are emailed about, every session and API token signed in as you, and the access you hold. Your profile and password are under your name in the top right."
       />
       <PageBody>
-        {/* First, because a must-change sign-in redirects straight here. */}
-        <ChangePasswordCard
-          mustChange={credential?.must_change ?? false}
-          passwordChangedAt={credential ? credential.password_changed_at.toISOString() : null}
-        />
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <UserCog className="size-4 text-ink-faint" aria-hidden /> Profile
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            {/*
-              Read here rather than taken from `identity`: identity.name comes
-              from the session and falls back to the email address, and this
-              form needs the halves and the preferences too — which live only
-              on the row.
-            */}
-            <ProfileForm preferences={preferences} timezones={timezones} />
-
-            <div className="border-t border-border pt-4">
-              <div className="flex items-start gap-2">
-                <Mail className="mt-0.5 size-4 shrink-0 text-ink-faint" aria-hidden />
-                <div>
-                  <div className="text-sm text-ink">{identity.email}</div>
-                  <p className="mt-1 max-w-2xl text-xs text-ink-muted">
-                    Your email address is not editable here, and the omission is
-                    deliberate. It is the identity key three separate things match on:
-                    your identity provider joins an SSO sign-in to this account by it,
-                    RADIUS is asked about it as your username, and every audit row
-                    resolves through it. Changing it has to be coordinated with the
-                    directory it came from, so an administrator does it from the People
-                    page.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

@@ -124,7 +124,7 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
       // An administrator-issued password is a temporary one. Sending them
       // straight to the change screen is the difference between a password
       // that gets replaced and one that stays in a handover document forever.
-      router.push(result.value?.mustChange ? '/account?password=change' : next);
+      router.push(result.value?.mustChange ? '/profile?password=change' : next);
       router.refresh();
     } finally {
       setPending(false);

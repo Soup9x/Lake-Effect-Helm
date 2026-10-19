@@ -126,13 +126,13 @@ export function AccountMenu({
           </div>
 
           <Link
-            href="/account"
+            href="/profile"
             role="menuitem"
             onClick={() => setOpen(false)}
             className="flex items-center gap-2.5 px-3 py-2 text-sm text-ink-muted hover:bg-surface-sunken hover:text-ink"
           >
             <UserCog className="size-4 shrink-0" aria-hidden />
-            Account settings
+            Profile & password
           </Link>
 
           <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
