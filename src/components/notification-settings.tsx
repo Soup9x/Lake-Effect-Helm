@@ -68,6 +68,8 @@ const EVENT_COPY: Record<string, { label: string; detail: string }> = {
   'expiration.warning': { label: 'Expiring soon', detail: 'Certificates, warranties, domains and contracts, at your configured lead times.' },
   'integration.failed': { label: 'Integration failing', detail: 'A sync that keeps failing means documentation going quietly stale.' },
   'key.rotated': { label: 'Encryption key moved', detail: 'A tenant data key was rotated or retired.' },
+  'task.assigned': { label: 'Checklist work assigned', detail: 'Somebody was given steps on a checklist run. One message per run per person, not one per step.' },
+  'task.overdue': { label: 'Checklist step overdue', detail: 'A step passed its due date and is still undone, on a run that is still open.' },
 };
 
 const FORMAT_COPY: Record<string, string> = {

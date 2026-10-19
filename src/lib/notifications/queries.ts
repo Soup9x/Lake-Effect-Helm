@@ -54,7 +54,7 @@ interface DeliveryRow {
 export const NOTIFICATION_EVENTS = [
   'export.requested', 'export.rendered', 'export.downloaded', 'export.revoked',
   'secret.revealed', 'access.denied', 'expiration.warning',
-  'integration.failed', 'key.rotated',
+  'integration.failed', 'key.rotated', 'task.assigned', 'task.overdue',
 ] as const;
 
 export function toDestination(row: DestinationRow): NotificationDestination {
