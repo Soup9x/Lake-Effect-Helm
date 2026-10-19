@@ -65,6 +65,30 @@ const DIRECTORY_KINDS = [
   'okta',
 ] as const;
 
+/**
+ * What a name looks like for each kind. One example for everything read
+ * "DC01" on a new licence and a new contract, which reads as a suggestion to
+ * name them after a domain controller.
+ */
+const NAME_PLACEHOLDER: Record<string, string> = {
+  device: 'DC01',
+  network: 'Office LAN',
+  ssl_certificate: 'Main website',
+  directory_service: 'Northwind AD',
+  application: 'Line-of-business CRM',
+  vendor: 'Dell',
+  contract: 'Managed services agreement',
+  license: 'Microsoft 365 Business Premium',
+  isp_circuit: 'Spectrum fibre — HQ',
+};
+
+/**
+ * Kinds whose name IS their one required field. A domain is called by its
+ * domain name; asking for both meant typing northwind.example twice, or
+ * filing it under a label nobody would search for.
+ */
+const NAME_IS_EXTRA = new Set(['domain']);
+
 const humanise = (v: string) => v.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
 interface Site {
@@ -133,7 +157,7 @@ export function NewAssetForm({
       case 'directory_service':
         return { label: 'Directory kind', options: DIRECTORY_KINDS };
       case 'domain':
-        return { label: 'Domain name', hint: 'e.g. northwind.example' };
+        return { label: 'Domain name', hint: 'e.g. northwind.example — this is also what it is called.' };
       case 'ssl_certificate':
         return { label: 'Common name', hint: 'e.g. www.northwind.example' };
       default:
@@ -163,7 +187,7 @@ export function NewAssetForm({
         json: {
           organizationId,
           nodeType,
-          name: name.trim(),
+          name: NAME_IS_EXTRA.has(nodeType) ? extraValue.trim() : name.trim(),
           ...(siteId ? { siteId } : {}),
           ...(key ? { [key]: extraValue } : {}),
           ...(notes.trim() ? { notes: notes.trim() } : {}),
@@ -234,18 +258,20 @@ export function NewAssetForm({
               </div>
             )}
 
-            <div>
-              <Label htmlFor="asset-name">Name</Label>
-              <Input
-                id="asset-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="DC01"
-                required
-                autoFocus
-                maxLength={200}
-              />
-            </div>
+            {!NAME_IS_EXTRA.has(nodeType) && (
+              <div>
+                <Label htmlFor="asset-name">Name</Label>
+                <Input
+                  id="asset-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder={NAME_PLACEHOLDER[nodeType] ?? ''}
+                  required
+                  autoFocus
+                  maxLength={200}
+                />
+              </div>
+            )}
 
             {field && (
               <div>
@@ -269,6 +295,8 @@ export function NewAssetForm({
                     onChange={(e) => setExtra(e.target.value)}
                     required
                     spellCheck={false}
+                    autoFocus={NAME_IS_EXTRA.has(nodeType)}
+                    maxLength={NAME_IS_EXTRA.has(nodeType) ? 200 : undefined}
                   />
                 )}
                 {field.hint && <FieldHint>{field.hint}</FieldHint>}
@@ -311,7 +339,7 @@ export function NewAssetForm({
           <Button
             type="submit"
             variant="primary"
-            disabled={busy || !name.trim() || (field !== null && !extraValue)}
+            disabled={busy || (!NAME_IS_EXTRA.has(nodeType) && !name.trim()) || (field !== null && !extraValue.trim())}
           >
             {busy && <Loader2 className="animate-spin" />}
             {busy ? 'Creating…' : 'Create asset'}

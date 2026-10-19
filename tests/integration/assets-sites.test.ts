@@ -173,6 +173,52 @@ describe('PATCH /api/sites/[siteId]', () => {
     }
   });
 
+  it('records public IPs, access and security, edits and clears them, and refuses a typo (0840)', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const created = await createSite(post('/api/sites', {
+      organizationId: IDS.orgAcme, name: 'WAN site',
+      publicIps: ['203.0.113.10', '198.51.100.8/29'],
+      accessNotes: 'Badge at the side door', physicalSecurity: 'Alarm code with the office manager',
+    }));
+    expect(created.status, JSON.stringify(await created.clone().json())).toBe(200);
+    const siteId = ((await body(created)).site as { id: string }).id;
+
+    const read = async () => {
+      const sql = superuserSql();
+      try {
+        const [row] = await sql<{ ips: string[]; access_notes: string | null; physical_security: string | null }[]>`
+          SELECT ARRAY(SELECT abbrev(ip) FROM unnest(public_ips) AS ip) AS ips, access_notes, physical_security
+          FROM site WHERE id = ${siteId}::uuid`;
+        return row!;
+      } finally {
+        await sql.end({ timeout: 5 });
+      }
+    };
+    expect(await read()).toEqual({
+      ips: ['203.0.113.10', '198.51.100.8/29'],
+      access_notes: 'Badge at the side door', physical_security: 'Alarm code with the office manager',
+    });
+
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const edited = await patchSite(patch(`/api/sites/${siteId}`, { publicIps: ['2001:db8::1'], accessNotes: null }), withParams({ siteId }));
+    expect(edited.status).toBe(200);
+    expect(await read()).toMatchObject({ ips: ['2001:db8::1'], access_notes: null, physical_security: 'Alarm code with the office manager' });
+
+    // A rename leaves the list alone; an empty list clears it.
+    asUser(IDS.admin1, 'admin@northwind.test');
+    await patchSite(patch(`/api/sites/${siteId}`, { name: 'WAN site renamed' }), withParams({ siteId }));
+    expect((await read()).ips).toEqual(['2001:db8::1']);
+    asUser(IDS.admin1, 'admin@northwind.test');
+    await patchSite(patch(`/api/sites/${siteId}`, { publicIps: [] }), withParams({ siteId }));
+    expect((await read()).ips).toEqual([]);
+
+    for (const bad of [['203.0.113.300'], ['203.0.113.0/33'], ['not an address']]) {
+      asUser(IDS.admin1, 'admin@northwind.test');
+      const refused = await patchSite(patch(`/api/sites/${siteId}`, { publicIps: bad }), withParams({ siteId }));
+      expect(refused.status, bad[0]).toBe(400);
+    }
+  });
+
   it('refuses an empty patch', async () => {
     asUser(IDS.admin1, 'admin@northwind.test');
     const created = await createSite(

@@ -24,6 +24,8 @@ import { DataTable, type Column, type GridRow } from './data-table';
 import { matchesBrowse } from '@/lib/ui/browse';
 import { RowRemoveDialog, type RemoveKind } from './row-remove-dialog';
 import { ContactForm } from './contact-form';
+import { SiteForm } from '../site-form';
+import type { SiteValues } from '@/lib/sites/values';
 import { RowPermissionsDialog, type RowPermissions } from './row-permissions-dialog';
 import { Badge } from '../ui/badge';
 import { formatDate } from '@/lib/ui/format';
@@ -53,6 +55,8 @@ export interface CategoryRecord {
   permissions?: RowPermissions | undefined;
   /** A contact row: Edit opens the contact dialog rather than a page. */
   editContact?: { organizationId: string } | undefined;
+  /** A location row: Edit opens the location dialog with these values. */
+  editSite?: { organizationId: string; values: SiteValues } | undefined;
   /** Values for the category's extra columns (see CategoryGrid's extraColumns). */
   cells?: Record<string, string | null> | undefined;
 }
@@ -152,6 +156,7 @@ export function CategoryGrid({
   const [removing, setRemoving] = useState<CategoryRecord | null>(null);
   const [permissioning, setPermissioning] = useState<CategoryRecord | null>(null);
   const [editingContact, setEditingContact] = useState<CategoryRecord | null>(null);
+  const [editingSite, setEditingSite] = useState<CategoryRecord | null>(null);
 
   const rows = useMemo<Row[]>(
     () =>
@@ -177,6 +182,9 @@ export function CategoryGrid({
               // A contact has no page of its own; its edit is a dialog (0790).
               ...(canWrite && record.editContact
                 ? [{ label: 'Edit', icon: Pencil, onClick: () => setEditingContact(record) }]
+                : []),
+              ...(canWrite && record.editSite
+                ? [{ label: 'Edit', icon: Pencil, onClick: () => setEditingSite(record) }]
                 : []),
               // Only where there is a flag to edit: a contact has no visibility
               // of its own, so offering the control would be offering nothing.
@@ -343,6 +351,16 @@ export function CategoryGrid({
           contactId={editingContact.id}
           open
           onOpenChange={(next) => { if (!next) setEditingContact(null); }}
+        />
+      )}
+
+      {editingSite?.editSite && (
+        <SiteForm
+          key={editingSite.id}
+          organizationId={editingSite.editSite.organizationId}
+          site={{ id: editingSite.id, values: editingSite.editSite.values }}
+          open
+          onOpenChange={(next) => { if (!next) setEditingSite(null); }}
         />
       )}
 

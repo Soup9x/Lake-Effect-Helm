@@ -24,8 +24,11 @@ export interface OrgRow {
 }
 
 export interface SiteRow {
-  id: string; name: string; code: string | null; is_primary: boolean; address_line1: string | null;
-  city: string | null; region: string | null; main_phone: string | null;
+  id: string; name: string; code: string | null; is_primary: boolean;
+  address_line1: string | null; address_line2: string | null;
+  city: string | null; region: string | null; postal_code: string | null; country: string;
+  timezone: string | null; main_phone: string | null; after_hours_phone: string | null;
+  public_ips: string[]; access_notes: string | null; physical_security: string | null;
   notes: string | null;
 }
 
@@ -93,7 +96,10 @@ export async function readOrganization(tx: HelmTx, organizationId: string): Prom
 
 export function listSites(tx: HelmTx, organizationId: string): Promise<SiteRow[]> {
   return tx<SiteRow[]>`
-        SELECT id, name, code, is_primary, address_line1, city, region, main_phone, notes
+        SELECT id, name, code, is_primary, address_line1, address_line2, city, region, postal_code,
+               country, timezone, main_phone, after_hours_phone,
+               ARRAY(SELECT abbrev(ip) FROM unnest(public_ips) AS ip) AS public_ips,
+               access_notes, physical_security, notes
         FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
         ORDER BY is_primary DESC, name
       `;

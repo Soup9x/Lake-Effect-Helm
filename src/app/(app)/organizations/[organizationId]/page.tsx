@@ -6,6 +6,7 @@ import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { SiteForm } from '@/components/site-form';
+import { siteValuesFrom } from '@/lib/sites/values';
 import { TopologyDesigner } from '@/components/topology-designer';
 import { CredentialEditForm } from '@/components/credential-edit-form';
 import { InlineRename } from '@/components/inline-rename';
@@ -416,19 +417,7 @@ export default async function OrganizationPage({
                   {canWrite && (
                     <SiteForm
                       organizationId={organization.id}
-                      site={{
-                        id: site.id,
-                        values: {
-                          name: site.name,
-                          code: site.code ?? '',
-                          city: site.city ?? '',
-                          region: site.region ?? '',
-                          addressLine1: site.address_line1 ?? '',
-                          mainPhone: site.main_phone ?? '',
-                          isPrimary: site.is_primary,
-                          notes: site.notes ?? '',
-                        },
-                      }}
+                      site={{ id: site.id, values: siteValuesFrom(site) }}
                     />
                   )}
                   {/* Open for anybody who may read the client; only editable

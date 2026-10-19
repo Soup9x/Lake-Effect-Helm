@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
+import { publicIpsSchema } from '@/lib/sites/public-ips';
 
 const createSchema = z.object({
   organizationId: z.guid('organizationId must be a UUID'),
@@ -19,6 +20,10 @@ const createSchema = z.object({
   afterHoursPhone: z.string().trim().max(40).optional(),
   /** Informal context, bounded at 4000 characters by a CHECK in 0370. */
   notes: z.string().trim().max(4000).optional(),
+  accessNotes: z.string().trim().max(4000).optional(),
+  physicalSecurity: z.string().trim().max(4000).optional(),
+  /** Static WAN addresses or blocks (0840). */
+  publicIps: publicIpsSchema.default([]),
 });
 
 interface SiteRow {
@@ -99,7 +104,8 @@ export const POST = tenantRoute(
         INSERT INTO site (
           tenant_id, organization_id, name, code, is_primary,
           address_line1, address_line2, city, region, postal_code, country,
-          timezone, main_phone, after_hours_phone, notes, created_by, updated_by
+          timezone, main_phone, after_hours_phone, notes, access_notes, physical_security,
+          public_ips, created_by, updated_by
         )
         VALUES (
           ${identity.tenantId}::uuid, ${body.organizationId}::uuid, ${body.name},
@@ -108,7 +114,8 @@ export const POST = tenantRoute(
           ${body.city ?? null}, ${body.region ?? null}, ${body.postalCode ?? null},
           ${body.country.toUpperCase()}, ${body.timezone ?? null},
           ${body.mainPhone ?? null}, ${body.afterHoursPhone ?? null},
-          ${body.notes ?? null}, ${identity.actorId}::uuid, ${identity.actorId}::uuid
+          ${body.notes ?? null}, ${body.accessNotes ?? null}, ${body.physicalSecurity ?? null},
+          ${body.publicIps}::inet[], ${identity.actorId}::uuid, ${identity.actorId}::uuid
         )
         RETURNING id, name
       `;

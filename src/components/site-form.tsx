@@ -18,30 +18,14 @@ import { Loader2, MapPin, Pencil, Plus } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
-import { changedFields, hasChanges, type FieldValue } from '@/lib/ui/form-diff';
+import { changedFields, hasChanges } from '@/lib/ui/form-diff';
+import { BLANK_SITE, type SiteValues } from '@/lib/sites/values';
+
+export type { SiteValues } from '@/lib/sites/values';
 import { apiFetch } from '@/lib/ui/api';
 
-export interface SiteValues extends Record<string, FieldValue> {
-  name: string;
-  code: string;
-  city: string;
-  region: string;
-  addressLine1: string;
-  mainPhone: string;
-  isPrimary: boolean;
-  notes: string;
-}
-
-const BLANK: SiteValues = {
-  name: '',
-  code: '',
-  city: '',
-  region: '',
-  addressLine1: '',
-  mainPhone: '',
-  isPrimary: false,
-  notes: '',
-};
+/** Lines typed into the public-IP box, without the blanks between them. */
+const cleanIps = (lines: string[]) => lines.map((l) => l.trim()).filter(Boolean);
 
 export interface SiteFormProps {
   organizationId: string;
@@ -66,7 +50,7 @@ export function SiteForm({
 }: SiteFormProps) {
   const router = useRouter();
   const editing = site !== undefined;
-  const initial = site?.values ?? BLANK;
+  const initial = site?.values ?? BLANK_SITE;
 
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
@@ -100,19 +84,20 @@ export function SiteForm({
       // On edit, only what changed. The PATCH leaves out what it is not given,
       // and sending the whole form would make every save read in the audit
       // trail as though the person had rewritten every field.
-      const payload = editing
-        ? changedFields(initial, values)
-        : {
-            organizationId,
-            name: values.name.trim(),
-            isPrimary: values.isPrimary,
-            ...(values.code.trim() ? { code: values.code.trim() } : {}),
-            ...(values.city.trim() ? { city: values.city.trim() } : {}),
-            ...(values.region.trim() ? { region: values.region.trim() } : {}),
-            ...(values.addressLine1.trim() ? { addressLine1: values.addressLine1.trim() } : {}),
-            ...(values.mainPhone.trim() ? { mainPhone: values.mainPhone.trim() } : {}),
-            ...(values.notes.trim() ? { notes: values.notes.trim() } : {}),
-          };
+      const cleaned: SiteValues = { ...values, publicIps: cleanIps(values.publicIps) };
+      let payload: Record<string, unknown>;
+      if (editing) {
+        payload = changedFields(initial, cleaned);
+        // Country is required on the row; an emptied box means "leave it".
+        if (payload.country === null) delete payload.country;
+        // The list clears to empty, never to null.
+        if (payload.publicIps === null) payload.publicIps = [];
+      } else {
+        payload = { organizationId, isPrimary: cleaned.isPrimary, publicIps: cleaned.publicIps };
+        for (const [key, value] of Object.entries(cleaned)) {
+          if (typeof value === 'string' && value.trim()) payload[key] = value.trim();
+        }
+      }
 
       const result = await apiFetch(editing ? `/api/sites/${site.id}` : '/api/sites', {
         method: editing ? 'PATCH' : 'POST',
@@ -130,7 +115,9 @@ export function SiteForm({
     }
   }
 
-  const dirty = editing ? hasChanges(initial, values) : values.name.trim().length > 0;
+  const dirty = editing
+    ? hasChanges(initial, { ...values, publicIps: cleanIps(values.publicIps) })
+    : values.name.trim().length > 0;
 
   return (
     <>
@@ -159,70 +146,109 @@ export function SiteForm({
         onOpenChange={onOpenChange}
         title={editing ? `Edit ${initial.name}` : 'Add a site'}
         icon={MapPin}
+        size="lg"
       >
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className="space-y-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <Label htmlFor="site-name">Name</Label>
-              <Input
-                id="site-name"
-                value={values.name}
-                onChange={(e) => set('name', e.target.value)}
-                placeholder="Buffalo HQ"
-                required
-                autoFocus
-                maxLength={200}
-              />
+              <Input id="site-name" value={values.name} onChange={(e) => set('name', e.target.value)}
+                placeholder="Buffalo HQ" required autoFocus maxLength={200} />
             </div>
             <div>
               <Label htmlFor="site-code">Code</Label>
-              <Input
-                id="site-code"
-                value={values.code}
-                onChange={(e) => set('code', e.target.value)}
-                placeholder="BUF-HQ"
-                maxLength={40}
-              />
+              <Input id="site-code" value={values.code} onChange={(e) => set('code', e.target.value)}
+                placeholder="BUF-HQ" maxLength={40} />
               <FieldHint>The short label people say on a call.</FieldHint>
             </div>
-            <div className="sm:col-span-2">
-              <Label htmlFor="site-address">Address</Label>
-              <Input
-                id="site-address"
-                value={values.addressLine1}
-                onChange={(e) => set('addressLine1', e.target.value)}
-                maxLength={200}
-              />
-            </div>
-            <div>
-              <Label htmlFor="site-city">City</Label>
-              <Input
-                id="site-city"
-                value={values.city}
-                onChange={(e) => set('city', e.target.value)}
-                maxLength={120}
-              />
-            </div>
-            <div>
-              <Label htmlFor="site-region">Region</Label>
-              <Input
-                id="site-region"
-                value={values.region}
-                onChange={(e) => set('region', e.target.value)}
-                placeholder="NY"
-                maxLength={120}
-              />
-            </div>
-            <div>
-              <Label htmlFor="site-phone">Main phone</Label>
-              <Input
-                id="site-phone"
-                value={values.mainPhone}
-                onChange={(e) => set('mainPhone', e.target.value)}
-                maxLength={40}
-              />
-            </div>
           </div>
+
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-medium text-ink">Address</legend>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <Label htmlFor="site-address">Street</Label>
+                <Input id="site-address" value={values.addressLine1}
+                  onChange={(e) => set('addressLine1', e.target.value)} maxLength={200} />
+              </div>
+              <div className="sm:col-span-2">
+                <Label htmlFor="site-address2">Suite, floor, building</Label>
+                <Input id="site-address2" value={values.addressLine2}
+                  onChange={(e) => set('addressLine2', e.target.value)} maxLength={200} />
+              </div>
+              <div>
+                <Label htmlFor="site-city">City</Label>
+                <Input id="site-city" value={values.city} onChange={(e) => set('city', e.target.value)} maxLength={120} />
+              </div>
+              <div>
+                <Label htmlFor="site-region">State / region</Label>
+                <Input id="site-region" value={values.region} onChange={(e) => set('region', e.target.value)}
+                  placeholder="NY" maxLength={120} />
+              </div>
+              <div>
+                <Label htmlFor="site-postal">Postal code</Label>
+                <Input id="site-postal" value={values.postalCode}
+                  onChange={(e) => set('postalCode', e.target.value)} maxLength={32} />
+              </div>
+              <div>
+                <Label htmlFor="site-country">Country</Label>
+                <Input id="site-country" value={values.country}
+                  onChange={(e) => set('country', e.target.value.toUpperCase())}
+                  placeholder="US" maxLength={2} minLength={2} />
+                <FieldHint>Two-letter code.</FieldHint>
+              </div>
+              <div className="sm:col-span-2">
+                <Label htmlFor="site-timezone">Time zone</Label>
+                <Input id="site-timezone" value={values.timezone}
+                  onChange={(e) => set('timezone', e.target.value)} placeholder="America/New_York" maxLength={64} />
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-medium text-ink">Phones and network</legend>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="site-phone">Main phone</Label>
+                <Input id="site-phone" value={values.mainPhone}
+                  onChange={(e) => set('mainPhone', e.target.value)} maxLength={40} />
+              </div>
+              <div>
+                <Label htmlFor="site-after-hours">After-hours phone</Label>
+                <Input id="site-after-hours" value={values.afterHoursPhone}
+                  onChange={(e) => set('afterHoursPhone', e.target.value)} maxLength={40} />
+              </div>
+              <div className="sm:col-span-2">
+                <Label htmlFor="site-public-ips">Public IP addresses</Label>
+                <Textarea id="site-public-ips" rows={2} spellCheck={false} className="font-mono"
+                  value={values.publicIps.join('\n')}
+                  onChange={(e) => set('publicIps', e.target.value.split('\n'))}
+                  placeholder={'203.0.113.10\n198.51.100.8/29'} />
+                <FieldHint>
+                  One per line: the static WAN addresses or blocks this location is reached on — what firewall
+                  rules, VPN peers and remote support point at. Internal networks are documented as Networks.
+                </FieldHint>
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-medium text-ink">Getting in</legend>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="site-access">Access</Label>
+                <Textarea id="site-access" rows={3} value={values.accessNotes} maxLength={4000}
+                  onChange={(e) => set('accessNotes', e.target.value)}
+                  placeholder="Hours, key holders, who to call at the front desk." />
+              </div>
+              <div>
+                <Label htmlFor="site-security">Physical security</Label>
+                <Textarea id="site-security" rows={3} value={values.physicalSecurity} maxLength={4000}
+                  onChange={(e) => set('physicalSecurity', e.target.value)}
+                  placeholder="Alarm procedure, badge system, where the rack is." />
+              </div>
+            </div>
+          </fieldset>
 
           <div>
             <label className="flex items-center gap-2 text-sm text-ink">
