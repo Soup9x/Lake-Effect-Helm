@@ -22,6 +22,8 @@ import { readExternalCheckSetting } from '@/lib/external/settings';
 import { readTenantSidebarDefault } from '@/lib/nav/sidebar-queries';
 import { ORG_CATEGORIES } from '@/lib/nav/org-categories';
 import { RadiusSettingsCard } from '@/components/radius-settings';
+import { SessionPolicyCard } from '@/components/session-policy-settings';
+import { readSessionPolicy } from '@/lib/auth/session-policy-settings';
 import { OidcSettingsCard } from '@/components/oidc-settings';
 import { NotificationSettingsCard } from '@/components/notification-settings';
 import { UnifiSettingsCard } from '@/components/unifi-settings';
@@ -71,6 +73,7 @@ export default async function SettingsPage() {
     unifi, organizations, canManageNetwork, flexibleTypeCount,
     sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow, smtp,
     expiryAlerts, canManageAlerts, serviceAccounts, grantableRoles, canReadUsers, canManageUsers, backups,
+    sessionPolicy,
   } = await withTenant(actorOf(identity), async (tx, session) => {
     const canReadUsers = session.permissions.includes('user:read');
     const [keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
@@ -125,6 +128,8 @@ export default async function SettingsPage() {
       backups: session.permissions.includes('tenant:write')
         ? { settings: await readBackupSettings(tx), runs: await listBackupRuns(tx, 20) }
         : null,
+      // 0890: offered only to somebody who may change it, like the sign-in cards.
+      sessionPolicy: session.permissions.includes('tenant:write') ? await readSessionPolicy(tx) : null,
       keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
       canManageNetwork: networkRows[0]?.permitted ?? false,
       flexibleTypeCount: flexibleTypeRows[0]?.n ?? 0,
@@ -211,6 +216,8 @@ export default async function SettingsPage() {
           // reach Helm on is the request, and a stored copy would drift.
           callbackBase={origin}
         />
+
+        {sessionPolicy && <SessionPolicyCard initial={sessionPolicy} />}
 
         <OidcSettingsCard initial={oidc} />
 

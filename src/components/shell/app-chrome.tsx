@@ -27,10 +27,12 @@ import { RecentlyViewed } from '../recently-viewed';
 import { TenantSwitcher } from '../tenant-switcher';
 import type { ServerIdentity } from '@/lib/auth/server-identity';
 import { isClientRole } from '@/lib/ui/roles';
+import { IdleWatcher } from '../idle-watcher';
 
 export function AppChrome({
   identity,
   unreadNotifications,
+  idleMinutes,
   children,
 }: {
   identity: ServerIdentity;
@@ -40,6 +42,8 @@ export function AppChrome({
    * bell, so it has to be there on first paint.
    */
   unreadNotifications: number;
+  /** The session policy's idle timeout (0890); the shell warns before it. */
+  idleMinutes: number;
   children: ReactNode;
 }) {
   const isClient = isClientRole(identity.roleKey);
@@ -79,6 +83,7 @@ export function AppChrome({
         />
         <div className="flex min-w-0 flex-1 flex-col">{children}</div>
       </div>
+      <IdleWatcher idleMinutes={idleMinutes} />
     </ShellProvider>
   );
 }

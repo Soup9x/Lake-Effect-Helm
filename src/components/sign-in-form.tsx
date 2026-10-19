@@ -69,6 +69,9 @@ function ssoMessage(code: string): string {
         'That account is not permitted to sign in here. If it is new, somebody ' +
         'with administrator access has to add it first.'
       );
+    case 'SessionIdle':
+      // Not an error, and the one code Helm itself sends here (0890).
+      return 'You were signed out after a period of inactivity. Sign in again to carry on.';
     case 'Configuration':
       return (
         'Single sign-on is not set up correctly on this deployment. An ' +

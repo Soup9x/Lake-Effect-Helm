@@ -106,6 +106,24 @@ export const authSession = pgTable('auth_session', {
   authMethod: authMethod('auth_method').notNull().default('sso'),
   ip: inet('ip'),
   userAgent: text('user_agent'),
+  /** When the session was last resolved, to within a minute; idle time runs from here (0890). */
+  lastSeenAt: tstz('last_seen_at').notNull().defaultNow(),
+});
+
+/**
+ * Sign-in and session limits one tenant's administrators set (0890). Reached
+ * only through helm.session_policy*() — neither application role may read it.
+ * A person in several tenants is held to the strictest.
+ */
+export const sessionPolicy = pgTable('session_policy', {
+  tenantId: uuid('tenant_id').primaryKey().references(() => tenant.id, { onDelete: 'cascade' }),
+  idleMinutes: integer('idle_minutes').notNull().default(480),
+  absoluteHours: integer('absolute_hours'),
+  stepUpMinutes: integer('step_up_minutes').notNull().default(15),
+  lockoutThreshold: integer('lockout_threshold').notNull().default(5),
+  lockoutMaxMinutes: integer('lockout_max_minutes').notNull().default(15),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
 });
 
 export const authVerificationToken = pgTable('auth_verification_token', {

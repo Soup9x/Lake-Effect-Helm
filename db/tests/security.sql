@@ -4080,5 +4080,48 @@ SELECT helm_test.check('...and opting in is what puts them there',
            WHERE a.user_id = :u_admin1));
 ROLLBACK;
 
+\echo ''
+\echo '== 52. The session policy is an administrator''s, and reached only through its functions (0890) =='
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+
+SELECT helm_test.check_raises('helm_app cannot read the table directly',
+  $$SELECT * FROM session_policy$$);
+SELECT helm_test.check_raises('...nor ask for anybody''s effective policy',
+  format($$SELECT * FROM helm.session_policy_for_user(%L)$$, :u_tech1));
+
+SELECT helm_test.check('an unsaved policy reads as the defaults',
+  (SELECT idle_minutes = 480 AND absolute_hours IS NULL AND step_up_minutes = 15
+          AND lockout_threshold = 5 AND lockout_max_minutes = 15 AND updated_at IS NULL
+     FROM helm.session_policy()));
+
+SELECT helm.set_session_policy(30, 12, 10, 4, 60);
+SELECT helm_test.check('the administrator saves it, and it reads back',
+  (SELECT idle_minutes = 30 AND absolute_hours = 12 AND step_up_minutes = 10
+          AND lockout_threshold = 4 AND lockout_max_minutes = 60
+     FROM helm.session_policy()));
+SELECT helm_test.check('...the change is audited',
+  EXISTS (SELECT 1 FROM audit_log WHERE action = 'session_policy.updated'));
+SELECT helm_test.check('...and is the administrator''s own effective idle timeout',
+  (SELECT idle_minutes = 30 FROM helm.my_session_policy()));
+
+SELECT helm_test.check_raises('an idle timeout under five minutes is refused',
+  $$SELECT helm.set_session_policy(1, NULL, 15, 5, 15)$$);
+SELECT helm_test.check_raises('...as is a lockout threshold of one',
+  $$SELECT helm.set_session_policy(30, NULL, 15, 1, 15)$$);
+
+SELECT helm_test.ctx(:t1, :u_tech1);
+SELECT helm_test.check_raises('a technician cannot change it',
+  $$SELECT helm.set_session_policy(1440, NULL, 60, 20, 1)$$);
+SELECT helm_test.check_raises('...nor sign everybody out',
+  $$SELECT helm.end_tenant_sessions()$$);
+SELECT helm_test.check('...but is held to it',
+  (SELECT idle_minutes = 30 FROM helm.my_session_policy()));
+
+SELECT helm_test.ctx(:t2, :u_admin2);
+SELECT helm_test.check('another tenant''s policy is its own',
+  (SELECT idle_minutes = 480 FROM helm.session_policy()));
+ROLLBACK;
+
 \echo '== All security assertions passed =='
 

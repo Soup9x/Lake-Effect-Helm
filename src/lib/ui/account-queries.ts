@@ -64,6 +64,8 @@ export async function readMyPreferences(identity: ServerIdentity): Promise<Accou
 export interface ShellState {
   preferences: AccountPreferences;
   unreadNotifications: number;
+  /** The signed-in person's effective idle timeout (0890), for the shell's warning. */
+  idleMinutes: number;
 }
 
 export async function readShellState(identity: ServerIdentity): Promise<ShellState> {
@@ -84,6 +86,9 @@ export async function readShellState(identity: ServerIdentity): Promise<ShellSta
         theme: readTheme(row?.theme),
       },
       unreadNotifications: await unreadCount(tx),
+      idleMinutes: (await tx<{ idle_minutes: number }[]>`
+        SELECT idle_minutes FROM helm.my_session_policy()
+      `)[0]?.idle_minutes ?? 480,
     };
   });
 }

@@ -53,14 +53,13 @@ import { installSessionResolver } from '@/lib/auth/bootstrap';
 import { getSessionUser } from '@/lib/auth/session';
 
 /**
- * How long a verification lasts.
+ * How long a verification lasts: the tenant's session policy (0890), fifteen
+ * minutes unless an administrator changed it.
  *
- * helm.record_step_up() clamps this to 1..60 minutes whatever is passed, so
- * this is a preference and not a control. Fifteen is the function's own
- * default: long enough to reveal a credential, read it and rotate it; short
- * enough that a walked-away-from session does not stay elevated.
+ * helm.record_step_up() clamps it to 1..60 minutes whatever is passed. Fifteen
+ * is long enough to reveal a credential, read it and rotate it; short enough
+ * that a walked-away-from session does not stay elevated.
  */
-const STEP_UP_MINUTES = 15;
 
 interface StepUpBody {
   password?: unknown;
@@ -163,7 +162,7 @@ export const POST = publicRoute(async (request) => {
       const [row] = await tx<{ record_step_up: Date }[]>`
         SELECT helm.record_step_up(
           ${reauth.method === 'radius' ? 'password' : reauth.method}::text,
-          ${STEP_UP_MINUTES}::integer,
+          (SELECT step_up_minutes FROM helm.session_policy()),
           ${identity.ip ?? null}::inet)
       `;
       if (!row) throw new Error('helm.record_step_up returned no row');
@@ -174,7 +173,11 @@ export const POST = publicRoute(async (request) => {
   // The expiry, so the caller can say how long it lasts rather than guessing.
   // No token: the verification is a row the database reads when the NEXT
   // request opens its context, not a bearer credential this response hands out.
-  return { ok: true, expiresAt: expiresAt.toISOString(), minutes: STEP_UP_MINUTES };
+  return {
+    ok: true,
+    expiresAt: expiresAt.toISOString(),
+    minutes: Math.round((expiresAt.getTime() - Date.now()) / 60_000),
+  };
 });
 
 export const dynamic = 'force-dynamic';

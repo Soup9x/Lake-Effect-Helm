@@ -322,7 +322,8 @@ What is enforced, so you do not have to:
   or email address, no reuse of the last five, and a rejection of the handful of
   passwords that get typed into a new deployment on its first day.
 * **Lockout after five wrong attempts**, backing off exponentially to a
-  fifteen-minute ceiling. It never becomes permanent: a lock an attacker can
+  fifteen-minute ceiling. Both numbers are defaults an administrator can change
+  under Global → Settings → Sessions and sign-in (0890). It never becomes permanent: a lock an attacker can
   trigger on demand is a denial of service against the break-glass account, and
   attempts made *while* locked do not extend it.
 * **Rate limiting per account and per source address** (ten and thirty failures
