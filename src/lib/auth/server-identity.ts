@@ -91,14 +91,13 @@ export async function getServerIdentity(): Promise<ServerIdentity> {
   const user = await getSessionUser();
   if (!user) throw new NotAuthenticatedError();
 
-  // app_role is global reference data with no RLS — the policies in 0200 name
-  // its keys directly, so it has to be readable before any context exists. The
-  // join is what turns "tier3" into "Tier 3 Engineer" in the switcher.
+  // The role's name comes from memberships_for_user itself. Joining app_role
+  // here, before any tenant is chosen, would hide a tenant's custom roles
+  // (0830 gives app_role RLS) and their holders would match no membership.
   const rows = await withoutTenantContext(
     (tx) => tx<MembershipRow[]>`
-      SELECT m.tenant_id, m.tenant_name, m.role_key, r.name AS role_name, m.org_scope_all
+      SELECT m.tenant_id, m.tenant_name, m.role_key, m.role_name, m.org_scope_all
       FROM helm.memberships_for_user(${user.id}::uuid) m
-      JOIN app_role r ON r.key = m.role_key
       ORDER BY m.tenant_name
     `,
   );

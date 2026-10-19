@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
+import { grantableRoles } from '@/lib/roles/catalogue';
 
 interface MemberRow {
   user_id: string;
@@ -28,9 +29,10 @@ interface MemberRow {
  * `user:read` is what widens it beyond your own row.
  *
  * `grantableRoles` comes back with the list: every role at or below the
- * caller's own rank. The interface needs it to populate a picker, and deriving
- * it here rather than in the browser means one answer rather than two that can
- * disagree — the database refuses anything above it regardless (0350).
+ * caller's own rank whose permissions the caller holds (helm.grantable_roles,
+ * 0830). The interface needs it to populate a picker, and deriving it in the
+ * database means one answer rather than two that can disagree — the triggers
+ * refuse anything outside it regardless (0350, 0830).
  */
 export const GET = tenantRoute(
   async ({ tx, identity }) => {
@@ -52,11 +54,9 @@ export const GET = tenantRoute(
         JOIN app_role r ON r.key = m.role_key
         ORDER BY r.rank DESC, u.email
       `,
-      tx<{ key: string; name: string; rank: number; is_tenant_wide: boolean }[]>`
-        SELECT key, name, rank, is_tenant_wide FROM app_role
-        WHERE rank <= ${myRank} ORDER BY rank DESC
-      `,
+      grantableRoles(tx),
     ]);
+    const grantable = new Set(roles.map((r) => r.key));
 
     return {
       members: members.map((m) => ({
@@ -75,16 +75,11 @@ export const GET = tenantRoute(
         lastLoginAt: m.last_login_at,
         createdAt: m.created_at,
         // What the interface may offer for THIS row. Nobody edits a membership
-        // that outranks them, which is the same rule the trigger applies to
-        // every column.
-        editable: m.rank <= myRank && m.user_id !== identity.actorId,
+        // whose role outranks them or carries a permission they lack — the
+        // same rules the triggers apply to every column (0350, 0830).
+        editable: m.rank <= myRank && grantable.has(m.role_key) && m.user_id !== identity.actorId,
       })),
-      grantableRoles: roles.map((r) => ({
-        key: r.key,
-        name: r.name,
-        rank: r.rank,
-        isTenantWide: r.is_tenant_wide,
-      })),
+      grantableRoles: roles,
       myRank,
     };
   },

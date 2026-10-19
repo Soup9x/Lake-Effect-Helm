@@ -4,6 +4,8 @@ import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent } from '@/components/ui/card';
 import { PeopleManager } from '@/components/people-manager';
+import { RolesManager } from '@/components/roles-manager';
+import { ACCESS_LEVELS, grantableRoles, listPermissions, listRoles } from '@/lib/roles/catalogue';
 
 interface MemberRow {
   user_id: string;
@@ -25,25 +27,22 @@ interface MemberRow {
  * here: one authorisation path, not two. The route exists for the writes the
  * client component makes.
  *
- * `grantableRoles` is derived from the caller's own rank, which is what the
- * database enforces (0350). Sending the full list and filtering in the browser
+ * `grantableRoles` comes from helm.grantable_roles(): the caller's own rank and
+ * every permission they hold, which is what the database enforces (0350, 0830). Sending the full list and filtering in the browser
  * would put a second, weaker copy of that rule where anybody can edit it.
  */
 export default async function PeoplePage() {
   const identity = await getServerIdentity();
 
-  const data = await withTenant(actorOf(identity), async (tx) => {
-    const [me] = await tx<{ rank: number; can_write: boolean }[]>`
-      SELECT r.rank,
-             EXISTS (SELECT 1 FROM role_permission rp
-                     WHERE rp.role_key = m.role_key
-                       AND rp.permission_key = 'user:write') AS can_write
+  const data = await withTenant(actorOf(identity), async (tx, session) => {
+    const [me] = await tx<{ rank: number }[]>`
+      SELECT r.rank
       FROM membership m JOIN app_role r ON r.key = m.role_key
       WHERE m.user_id = ${identity.actorId}::uuid
     `;
     const myRank = me?.rank ?? 0;
 
-    const [members, roles, organizations] = await Promise.all([
+    const [members, roles, organizations, catalogue, permissions] = await Promise.all([
       tx<MemberRow[]>`
         SELECT m.user_id, u.email, u.name, m.role_key, r.name AS role_name, r.rank,
                m.status::text AS status, m.org_scope_all, m.org_scope, u.last_login_at
@@ -52,19 +51,25 @@ export default async function PeoplePage() {
         JOIN app_role r ON r.key = m.role_key
         ORDER BY r.rank DESC, u.email
       `,
-      tx<{ key: string; name: string; rank: number; is_tenant_wide: boolean }[]>`
-        SELECT key, name, rank, is_tenant_wide FROM app_role
-        WHERE rank <= ${myRank} ORDER BY rank DESC
-      `,
+      grantableRoles(tx),
       tx<{ id: string; name: string }[]>`
         SELECT id, name FROM organization
         WHERE deleted_at IS NULL AND NOT is_msp_internal
         ORDER BY name
       `,
+      listRoles(tx),
+      listPermissions(tx),
     ]);
 
-    return { members, roles, organizations, myRank, canWrite: me?.can_write ?? false };
+    return {
+      members, roles, organizations, myRank, catalogue, permissions,
+      myPermissions: session.permissions,
+      canWrite: session.permissions.includes('user:write'),
+      canManageRoles: session.permissions.includes('tenant:write'),
+    };
   });
+
+  const grantable = new Set(data.roles.map((r) => r.key));
 
   return (
     <>
@@ -97,19 +102,23 @@ export default async function PeoplePage() {
               orgScopeAll: m.org_scope_all,
               orgScope: m.org_scope ?? [],
               lastLoginAt: m.last_login_at?.toISOString() ?? null,
-              // Nobody edits a membership that outranks them, or their own.
-              editable: m.rank <= data.myRank && m.user_id !== identity.actorId,
+              // Nobody edits their own membership, or one whose role outranks
+              // them or carries a permission they lack (0350, 0830).
+              editable: m.rank <= data.myRank && grantable.has(m.role_key) && m.user_id !== identity.actorId,
               isSelf: m.user_id === identity.actorId,
             }))}
-            grantableRoles={data.roles.map((r) => ({
-              key: r.key,
-              name: r.name,
-              rank: r.rank,
-              isTenantWide: r.is_tenant_wide,
-            }))}
+            grantableRoles={data.roles}
             organizations={data.organizations}
           />
         )}
+        <RolesManager
+          roles={data.catalogue}
+          permissions={data.permissions}
+          levels={ACCESS_LEVELS}
+          canManage={data.canManageRoles}
+          myRank={data.myRank}
+          myPermissions={data.myPermissions}
+        />
       </PageBody>
     </>
   );

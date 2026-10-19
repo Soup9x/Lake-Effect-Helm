@@ -382,6 +382,8 @@ no security meaning.
 | `/api/document-pages` | POST | `asset:write` | A written document (0810) in the client's tree; one title per folder |
 | `/api/document-pages/:id` | GET/PATCH/DELETE | `asset:read` / `asset:write` / `asset:delete` | Body versions on save; archive-first delete takes its attachments with it |
 | `/api/tenant/backups` | GET/PUT | `tenant:write` | The instance's backup schedule, destination and recent runs (0820) |
+| `/api/roles` | GET/POST | `user:read` / `tenant:write` | The built-in and custom roles with their permissions, and defining a custom role (0830) |
+| `/api/roles/[roleKey]` | PUT/DELETE | `tenant:write` | Change or remove a custom role; built-in roles are not editable, a held role cannot be deleted |
 | `/api/tenant/backups/run` | POST | `tenant:write` | Queue a backup or a restore rehearsal for the backup service |
 | `/api/assets/links` | POST/DELETE | `asset:link` | Idempotent in both directions |
 | `/api/secrets/:id/reveal` | POST | `secret:reveal` | Audited; returns the event id |

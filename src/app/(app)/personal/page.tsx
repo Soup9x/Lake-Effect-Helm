@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import {
-  Bell, CalendarClock, CheckCircle2, ClipboardList, KeyRound, MonitorSmartphone, UserCog,
+  Bell, CalendarClock, ClipboardList, KeyRound, UserCog,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -175,30 +175,18 @@ export default async function PersonalPage() {
               <UserCog className="size-4 text-ink-faint" aria-hidden /> My account
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-3">
+          <CardContent>
             {/*
-              Signposts, not a second copy of the account page. Each one names
-              what is behind it rather than being a bare link, because "Account"
-              on its own does not tell somebody whether their password lives
-              there.
+              One signpost, because the Account page is one page. Three tiles
+              that all opened it looked like three destinations and behaved
+              like one. The subtext names what is there, because "Account" on
+              its own does not tell somebody whether their password lives there.
             */}
             <AccountLink
               href="/account"
               icon={KeyRound}
-              title="Password and profile"
-              detail="Your name, time zone, theme, and the password you sign in with."
-            />
-            <AccountLink
-              href="/account"
-              icon={MonitorSmartphone}
-              title="Active sessions"
-              detail="Every browser signed in as you, and how to end one."
-            />
-            <AccountLink
-              href="/account"
-              icon={CheckCircle2}
-              title="Notification choices"
-              detail="What you want to be emailed and shown about. Yours alone — no administrator can set them."
+              title="Account settings"
+              detail="Password, profile (name, time zone, theme), email notifications, active sessions, personal API tokens, and the role and access you hold."
             />
           </CardContent>
         </Card>

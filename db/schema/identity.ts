@@ -18,6 +18,10 @@ export const appRole = pgTable('app_role', {
   rank: integer('rank').notNull(),
   isTenantWide: boolean('is_tenant_wide').notNull().default(false),
   isSystem: boolean('is_system').notNull().default(true),
+  /** NULL for the built-in roles; the owning tenant for a custom role (0830). */
+  tenantId: uuid('tenant_id').references(() => tenant.id, { onDelete: 'cascade' }),
+  createdBy: uuid('created_by'),
+  updatedAt: tstz('updated_at').notNull().default(sql`now()`),
 });
 
 export const permission = pgTable('permission', {
