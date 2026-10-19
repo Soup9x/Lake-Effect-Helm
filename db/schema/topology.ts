@@ -1,5 +1,5 @@
 /**
- * Network diagrams (0570, manual-only since 0580, one per network entry since 0860).
+ * Network diagrams (0570, manual-only since 0580, a record of their own since 0880).
  *
  * NOT `assetLink`. That table models reliance — what breaks when this breaks —
  * and canonicalises its edges because direction there is a claim about impact.
@@ -16,11 +16,36 @@
  * machinery it deletes is exactly what that needs, and it was deleted on
  * purpose.
  */
-import { doublePrecision, index, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { boolean, doublePrecision, index, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { tstz } from './_types';
 import { topologyDeviceType } from './enums';
 import { assetNode } from './assets';
 import { tenant } from './tenancy';
+import { appUser } from './identity';
+
+/**
+ * A diagram (0880): a client's, optionally of one location and about one
+ * network entry. Its composite foreign keys — (organization_id, tenant_id),
+ * (site_id, tenant_id) and (network_id, tenant_id) — are declared in SQL, which
+ * is the authority; Drizzle has no syntax for a composite reference.
+ */
+export const networkDiagram = pgTable('network_diagram', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  siteId: uuid('site_id'),
+  networkId: uuid('network_id'),
+  name: text('name').notNull(),
+  description: text('description'),
+  isInternalOnly: boolean('is_internal_only').notNull().default(false),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
+  archivedAt: tstz('archived_at'),
+}, (t) => [
+  index('network_diagram_org_idx').on(t.tenantId, t.organizationId),
+]);
 
 /**
  * A box on the diagram.
@@ -34,10 +59,10 @@ import { tenant } from './tenancy';
 export const topologyNode = pgTable('topology_node', {
   id: uuid('id').primaryKey().defaultRandom(),
   tenantId: uuid('tenant_id').notNull().references(() => tenant.id, { onDelete: 'cascade' }),
-  /** The network entry whose diagram this is (0860). Composite FK
-   *  (network_id, tenant_id) -> asset_node, declared in SQL: Drizzle has no
-   *  syntax for a composite reference, and db/sql is the authority regardless. */
-  networkId: uuid('network_id').notNull(),
+  /** The diagram this box is on (0880). Composite FK (diagram_id, tenant_id)
+   *  -> network_diagram, declared in SQL: Drizzle has no syntax for a
+   *  composite reference, and db/sql is the authority regardless. */
+  diagramId: uuid('diagram_id').notNull(),
 
   /**
    * The real asset, when there is one. Null is ordinary, not a gap: an ISP
@@ -62,7 +87,7 @@ export const topologyNode = pgTable('topology_node', {
   createdAt: tstz('created_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
 }, (t) => [
-  index('topology_node_network_idx').on(t.tenantId, t.networkId),
+  index('topology_node_diagram_idx').on(t.tenantId, t.diagramId),
   index('topology_node_asset_idx').on(t.assetNodeId),
 ]);
 
@@ -77,7 +102,7 @@ export const topologyNode = pgTable('topology_node', {
 export const topologyLink = pgTable('topology_link', {
   id: uuid('id').primaryKey().defaultRandom(),
   tenantId: uuid('tenant_id').notNull().references(() => tenant.id, { onDelete: 'cascade' }),
-  networkId: uuid('network_id').notNull(),
+  diagramId: uuid('diagram_id').notNull(),
 
   fromNodeId: uuid('from_node_id').notNull(),
   toNodeId: uuid('to_node_id').notNull(),
@@ -88,7 +113,7 @@ export const topologyLink = pgTable('topology_link', {
   createdAt: tstz('created_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
 }, (t) => [
-  index('topology_link_network_idx').on(t.tenantId, t.networkId),
+  index('topology_link_diagram_idx').on(t.tenantId, t.diagramId),
   index('topology_link_from_idx').on(t.fromNodeId),
   index('topology_link_to_idx').on(t.toNodeId),
 ]);

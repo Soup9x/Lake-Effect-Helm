@@ -33,6 +33,7 @@ import { NewAssetForm } from '../new-asset-form';
 import { ConfigurationForm } from '../configuration-form';
 import { NewSecretForm } from '../new-secret-form';
 import { SiteForm } from '../site-form';
+import { DiagramForm } from '../diagram-form';
 import { Button } from '../ui/button';
 import { createFormFor } from '@/lib/nav/org-categories';
 
@@ -50,6 +51,8 @@ export interface CategoryActionsProps {
   /** For the configuration form (0800): the client's people, and what an interface can connect to. */
   contacts?: readonly { id: string; name: string }[] | undefined;
   connectable?: readonly { id: string; name: string }[] | undefined;
+  /** For the diagram form (0880): the client's network entries. */
+  networks?: readonly { id: string; name: string }[] | undefined;
   /** Whether + New can do anything here. */
   canCreate: boolean;
 }
@@ -63,6 +66,7 @@ export function CategoryActions({
   sites,
   contacts = [],
   connectable = [],
+  networks = [],
   canCreate,
 }: CategoryActionsProps) {
   const form = createFormFor(category, nodeType);
@@ -117,6 +121,15 @@ export function CategoryActions({
       {creating && form === 'site' && (
         <SiteForm
           organizationId={organizationId}
+          open={creating}
+          onOpenChange={setCreating}
+        />
+      )}
+      {creating && form === 'diagram' && (
+        <DiagramForm
+          organizationId={organizationId}
+          sites={sites}
+          networks={networks}
           open={creating}
           onOpenChange={setCreating}
         />

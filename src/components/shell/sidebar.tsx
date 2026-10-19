@@ -25,7 +25,7 @@ import { usePathname } from 'next/navigation';
 import {
   AppWindow, BadgeCheck, Binary, BookOpen, Boxes, Cable, ChevronLeft, ChevronRight,
   FileSignature, FileText, FolderTree, Globe, KeyRound, LayoutGrid, MapPin, MoreHorizontal,
-  Network, Server, Settings2, ShieldCheck, Truck, Users,
+  Network, Server, Settings2, ShieldCheck, Truck, Users, Workflow,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useShell } from './shell-context';
@@ -44,6 +44,7 @@ import { cn } from '@/lib/ui/cn';
 const ICONS: Record<string, typeof Server> = {
   AppWindow, BadgeCheck, Binary, BookOpen, Boxes, Cable, FileSignature, FileText,
   FolderTree, Globe, KeyRound, LayoutGrid, MapPin, Network, Server, ShieldCheck, Truck, Users,
+  Workflow,
 };
 
 function Icon({ name, className }: { name: string | null; className?: string }) {

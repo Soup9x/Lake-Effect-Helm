@@ -65,11 +65,16 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
       WHERE site_id = ${siteId}::uuid AND archived_at IS NULL
       ORDER BY lower(name)
     `;
-    return { row, contacts, assets };
+    const diagrams = await tx<{ id: string; name: string }[]>`
+      SELECT id, name FROM network_diagram
+      WHERE site_id = ${siteId}::uuid AND archived_at IS NULL
+      ORDER BY lower(name)
+    `;
+    return { row, contacts, assets, diagrams };
   });
   if (!data) notFound();
 
-  const { row, contacts, assets } = data;
+  const { row, contacts, assets, diagrams } = data;
   const canWrite = !isClientRole(identity.roleKey);
   const values = siteValuesFrom(row);
 
@@ -198,7 +203,21 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
               <CardTitle>Recorded here</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4 text-sm">
-              {grouped.length === 0 && (
+              {diagrams.length > 0 && (
+                <section className="space-y-1.5">
+                  <h3 className="text-xs font-medium uppercase tracking-wide text-ink-faint">
+                    Diagrams · {diagrams.length}
+                  </h3>
+                  <ul className="space-y-1">
+                    {diagrams.map((d) => (
+                      <li key={d.id}>
+                        <Link href={`/diagrams/${d.id}`} className="text-ink hover:underline">{d.name}</Link>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {grouped.length === 0 && diagrams.length === 0 && (
                 <p className="text-ink-faint">Nothing is recorded at this location yet.</p>
               )}
               {grouped.map(([type, list]) => (

@@ -43,14 +43,16 @@ export async function loadOrgNav(tx: HelmTx, organizationId: string): Promise<Or
         AND node_type = ANY (${nodeTypes}::node_type[])
       GROUP BY node_type
     `,
-    // The three that are not nodes.
-    tx<{ contacts: string; locations: string; documents: string }[]>`
+    // The four that are not nodes.
+    tx<{ contacts: string; locations: string; diagrams: string; documents: string }[]>`
       SELECT
         (SELECT count(*)::text FROM contact
           WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
             AND archived_at IS NULL) AS contacts,
         (SELECT count(*)::text FROM site
           WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL) AS locations,
+        (SELECT count(*)::text FROM network_diagram
+          WHERE organization_id = ${organizationId}::uuid AND archived_at IS NULL) AS diagrams,
         -- Uploaded files AND written documents, live ones only: the same
         -- population the Documents list's own total counts, so the badge and
         -- the list agree.
@@ -91,7 +93,7 @@ export async function loadOrgNav(tx: HelmTx, organizationId: string): Promise<Or
       category.kind === 'node'
         ? (byType.get(category.source) ?? 0)
         : Number(
-            tableRow[0]?.[category.slug as 'contacts' | 'locations' | 'documents'] ?? '0',
+            tableRow[0]?.[category.slug as 'contacts' | 'locations' | 'diagrams' | 'documents'] ?? '0',
           );
   }
 

@@ -22,7 +22,6 @@ import { FlexibleRecordForm } from '@/components/flexible-record-form';
 import { pointerFor, schemaToFields, type FieldDef } from '@/lib/flexible/fields';
 import { listAssignableUsers, listRunsForSop, readTemplate } from '@/lib/sops/queries';
 import { ChecklistRunsCard } from '@/components/checklist-runs-card';
-import { TopologyDesigner } from '@/components/topology-designer';
 import { ChecklistTemplateCard } from '@/components/checklist-template-card';
 import { ChecklistSchedulesCard } from '@/components/checklist-schedules-card';
 import { listSchedules } from '@/lib/sops/schedules';
@@ -228,15 +227,23 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     const schedules = template ? await listSchedules(tx, node.id) : [];
     // Every run of this procedure, for the Runs card's Open / Completed tabs.
     const runs = template ? await listRunsForSop(tx, node.id) : [];
-    // The network diagrams a configuration is drawn on, for the way back (0860).
+    // The diagrams a configuration is drawn on, or a network is the subject
+    // of, for the way there (0880). Read under RLS, so an internal-only
+    // diagram is not listed to a client user.
     const diagrams = node.node_type === 'device'
       ? await tx<{ id: string; name: string }[]>`
-          SELECT DISTINCT n.id, n.name FROM topology_node t
-          JOIN asset_node n ON n.id = t.network_id
-          WHERE t.asset_node_id = ${node.id}::uuid
-          ORDER BY n.name
+          SELECT DISTINCT d.id, d.name FROM topology_node t
+          JOIN network_diagram d ON d.id = t.diagram_id
+          WHERE t.asset_node_id = ${node.id}::uuid AND d.archived_at IS NULL
+          ORDER BY d.name
         `
-      : [];
+      : node.node_type === 'network'
+        ? await tx<{ id: string; name: string }[]>`
+            SELECT id, name FROM network_diagram
+            WHERE network_id = ${node.id}::uuid AND archived_at IS NULL
+            ORDER BY name
+          `
+        : [];
     /*
      * Only for the two node types a probe can reach. Read even when checking is
      * OFF, because "off" is the sentence the card needs: never checked because
@@ -729,23 +736,29 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         ) : wideDetails ? (
           <>
             {detailsCard}
-            {/* A network entry's own diagram (0860), full width under its details. */}
-            {node.node_type === 'network' && (
-              <TopologyDesigner networkId={node.id} networkName={node.name} canEdit={canWrite} />
-            )}
             {checkNote}
             {dependenciesCard}
-            {diagrams.length > 0 && (
+            {(diagrams.length > 0 || node.node_type === 'network') && (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <Network className="size-4 text-ink-faint" aria-hidden /> On network diagrams
+                    <Network className="size-4 text-ink-faint" aria-hidden />
+                    {node.node_type === 'network' ? 'Diagrams of this network' : 'On network diagrams'}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
+                  {diagrams.length === 0 && (
+                    <p className="text-sm text-ink-faint">
+                      No diagram is about this network yet. Draw one under{' '}
+                      <Link href={`/organizations/${node.organization_id}/diagrams`} className="text-ink hover:underline">
+                        Diagrams
+                      </Link>
+                      {' '}and choose this network.
+                    </p>
+                  )}
                   <div className="flex flex-wrap gap-2">
                     {diagrams.map((d) => (
-                      <Link key={d.id} href={`/assets/${d.id}`} className="rounded-md border border-border px-2.5 py-1 text-sm text-ink hover:bg-surface-sunken">
+                      <Link key={d.id} href={`/diagrams/${d.id}`} className="rounded-md border border-border px-2.5 py-1 text-sm text-ink hover:bg-surface-sunken">
                         {d.name}
                       </Link>
                     ))}

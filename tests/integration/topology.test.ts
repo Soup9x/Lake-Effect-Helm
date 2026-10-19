@@ -1,6 +1,7 @@
 /**
- * Network diagrams, one per network entry (0860): what they isolate, what they
- * let a person change, and how a box stands for a configuration.
+ * Network diagrams, a record of their own under a client's Diagrams tab (0880):
+ * what they isolate, what they let a person change, and how a box stands for a
+ * configuration.
  *
  * A person is the only writer (0580 removed the UniFi seeding), so what is
  * worth asserting here is tenant and organisation isolation, the shape of a
@@ -16,13 +17,15 @@ import {
   buildHarness, connectPools, disconnectPools, IDS, resetDatabase, superuserSql, type Harness,
 } from './harness';
 
-import { GET as getTopology } from '../../src/app/api/networks/[networkId]/topology/route';
-import { POST as postNode } from '../../src/app/api/networks/[networkId]/topology/nodes/route';
+import { POST as postDiagram } from '../../src/app/api/diagrams/route';
+import { PATCH as patchDiagram, DELETE as deleteDiagram } from '../../src/app/api/diagrams/[diagramId]/route';
+import { GET as getTopology } from '../../src/app/api/diagrams/[diagramId]/topology/route';
+import { POST as postNode } from '../../src/app/api/diagrams/[diagramId]/topology/nodes/route';
 import {
   PATCH as patchNode, DELETE as deleteNode,
-} from '../../src/app/api/networks/[networkId]/topology/nodes/[nodeId]/route';
-import { POST as postLink } from '../../src/app/api/networks/[networkId]/topology/links/route';
-import { DELETE as deleteLink } from '../../src/app/api/networks/[networkId]/topology/links/[linkId]/route';
+} from '../../src/app/api/diagrams/[diagramId]/topology/nodes/[nodeId]/route';
+import { POST as postLink } from '../../src/app/api/diagrams/[diagramId]/topology/links/route';
+import { DELETE as deleteLink } from '../../src/app/api/diagrams/[diagramId]/topology/links/[linkId]/route';
 
 let h: Harness;
 let currentUser: SessionUser | null = null;
@@ -33,39 +36,34 @@ const asUser = (id: string, email: string) => { currentUser = { id, email }; };
 // services without a key would fail before any test ran.
 process.env.HELM_BLIND_INDEX_KEY_B64 = Buffer.alloc(32, 7).toString('base64');
 
-/** Acme's network from the fixtures, and a second one of Acme's. */
-const NET: string = IDS.network;
-const NET_B = '1e900000-0000-0000-0000-000000000002';
-/** Tenant 2's network, for the isolation tests. */
-const NET_T2 = '2e900000-0000-0000-0000-000000000001';
+/** Two of Acme's diagrams, about the fixtures' network and about nothing. */
+const NET = '1e910000-0000-0000-0000-000000000001';
+const NET_B = '1e910000-0000-0000-0000-000000000002';
+/** Tenant 2's diagram, for the isolation tests. */
+const NET_T2 = '2e910000-0000-0000-0000-000000000001';
 
 const request = (method: string, payload?: unknown) =>
-  new NextRequest(new Request('https://helm.test/api/networks/x/topology', {
+  new NextRequest(new Request('https://helm.test/api/diagrams/x/topology', {
     method,
     headers: { 'content-type': 'application/json' },
     ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
   }));
 
 const body = async (r: Response) => (await r.json()) as Record<string, unknown>;
-const siteParams = (networkId: string = NET) => ({ params: Promise.resolve({ networkId }) });
-const nodeParams = (nodeId: string, networkId: string = NET) =>
-  ({ params: Promise.resolve({ networkId, nodeId }) });
-const linkParams = (linkId: string, networkId: string = NET) =>
-  ({ params: Promise.resolve({ networkId, linkId }) });
+const siteParams = (diagramId: string = NET) => ({ params: Promise.resolve({ diagramId }) });
+const nodeParams = (nodeId: string, diagramId: string = NET) =>
+  ({ params: Promise.resolve({ diagramId, nodeId }) });
+const linkParams = (linkId: string, diagramId: string = NET) =>
+  ({ params: Promise.resolve({ diagramId, linkId }) });
 
 async function seedNetworks(): Promise<void> {
   const sql = superuserSql();
   try {
     await sql`
-      INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name) VALUES
-        (${NET_B}::uuid,  ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid,    'network', 'Acme guest wifi'),
-        (${NET_T2}::uuid, ${IDS.tenant2}::uuid, ${IDS.orgContoso}::uuid, 'network', 'Contoso LAN')
-      ON CONFLICT (id) DO NOTHING
-    `;
-    await sql`
-      INSERT INTO network (id, tenant_id, kind) VALUES
-        (${NET_B}::uuid,  ${IDS.tenant1}::uuid, 'wifi'),
-        (${NET_T2}::uuid, ${IDS.tenant2}::uuid, 'subnet')
+      INSERT INTO network_diagram (id, tenant_id, organization_id, network_id, name) VALUES
+        (${NET}::uuid,    ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid,    ${IDS.network}::uuid, 'Acme LAN'),
+        (${NET_B}::uuid,  ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid,    NULL, 'Acme guest wifi'),
+        (${NET_T2}::uuid, ${IDS.tenant2}::uuid, ${IDS.orgContoso}::uuid, NULL, 'Contoso LAN')
       ON CONFLICT (id) DO NOTHING
     `;
   } finally {
@@ -74,8 +72,8 @@ async function seedNetworks(): Promise<void> {
 }
 
 /** Create a manual node through the real route. */
-async function makeNode(label: string, extra: Record<string, unknown> = {}, networkId: string = NET) {
-  const response = await postNode(request('POST', { label, ...extra }), siteParams(networkId));
+async function makeNode(label: string, extra: Record<string, unknown> = {}, diagramId: string = NET) {
+  const response = await postNode(request('POST', { label, ...extra }), siteParams(diagramId));
   expect(response.status).toBe(200);
   return (await body(response)).nodeId as string;
 }
@@ -85,6 +83,8 @@ async function wipe(): Promise<void> {
   try {
     await sql`DELETE FROM topology_link`;
     await sql`DELETE FROM topology_node`;
+    // Diagrams a test created; the three seeded ones stay.
+    await sql`DELETE FROM network_diagram WHERE id NOT IN (${NET}::uuid, ${NET_B}::uuid, ${NET_T2}::uuid)`;
   } finally {
     await sql.end({ timeout: 5 });
   }
@@ -119,7 +119,7 @@ describe('tenant isolation', () => {
     const b = await makeNode('Acme firewall');
     await postLink(request('POST', { fromNodeId: a, toNodeId: b }), siteParams());
 
-    // The other tenant's administrator, on their own network.
+    // The other tenant's administrator, on their own diagram.
     asUser(IDS.admin2, 'admin@contoso.test');
     const response = await getTopology(request('GET'), siteParams(NET_T2));
     expect(response.status).toBe(200);
@@ -127,8 +127,8 @@ describe('tenant isolation', () => {
     expect(seen.nodes).toEqual([]);
     expect(seen.links).toEqual([]);
 
-    // And asking for tenant 1's network directly is a 404, not a peek: RLS
-    // refuses the entry, so "not there" and "not yours" are one answer.
+    // And asking for tenant 1's diagram directly is a 404, not a peek: RLS
+    // refuses the row, so "not there" and "not yours" are one answer.
     expect((await getTopology(request('GET'), siteParams(NET))).status).toBe(404);
   });
 
@@ -330,8 +330,8 @@ describe('who may edit', () => {
 
 // ---------------------------------------------------------------------------
 describe('a box that stands for a configuration', () => {
-  const nodesOf = async (networkId: string = NET) =>
-    (await body(await getTopology(request('GET'), siteParams(networkId)))).nodes as Record<string, unknown>[];
+  const nodesOf = async (diagramId: string = NET) =>
+    (await body(await getTopology(request('GET'), siteParams(diagramId)))).nodes as Record<string, unknown>[];
   const su = async (fn: (sql: ReturnType<typeof superuserSql>) => Promise<unknown>) => {
     const sql = superuserSql();
     try { await fn(sql); } finally { await sql.end({ timeout: 5 }); }
@@ -371,10 +371,10 @@ describe('a box that stands for a configuration', () => {
     expect(response.status).toBe(400);
   });
 
-  it('belongs to a network entry and nothing else', async () => {
+  it('belongs to a diagram, and an entry’s id is not one', async () => {
     asUser(IDS.admin1, 'admin@northwind.test');
     expect((await getTopology(request('GET'), siteParams(IDS.firewall))).status).toBe(404);
-    expect((await postNode(request('POST', { label: 'Misplaced' }), siteParams(IDS.firewall))).status).toBe(400);
+    expect((await postNode(request('POST', { label: 'Misplaced' }), siteParams(IDS.firewall))).status).toBe(404);
   });
 
   it('says "restricted" to a reader who may not see the configuration', async () => {
@@ -389,6 +389,60 @@ describe('a box that stands for a configuration', () => {
     } finally {
       await su((sql) => sql`
         UPDATE asset_node SET is_internal_only = false WHERE id = ${IDS.domainController}::uuid`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('a diagram as a record of its own (0880)', () => {
+  const post = (payload: Record<string, unknown>) =>
+    postDiagram(new NextRequest(new Request('https://helm.test/api/diagrams', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    })));
+  const diagramParams = (diagramId: string) => ({ params: Promise.resolve({ diagramId }) });
+
+  it('is started for a client, drawn on, renamed, archived, restored and deleted', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const created = await post({ organizationId: IDS.orgAcme, name: 'Head office', networkId: IDS.network });
+    expect(created.status).toBe(200);
+    const id = ((await body(created)).diagram as { id: string }).id;
+
+    await makeNode('Core switch', {}, id);
+    expect((await patchDiagram(request('PATCH', { name: 'Head office LAN' }), diagramParams(id))).status).toBe(200);
+    const graph = await body(await getTopology(request('GET'), siteParams(id)));
+    expect(graph.diagram).toMatchObject({ name: 'Head office LAN' });
+    expect(graph.nodes as unknown[]).toHaveLength(1);
+
+    // Archive first, then delete.
+    expect((await deleteDiagram(request('DELETE'), diagramParams(id))).status).toBe(409);
+    expect((await patchDiagram(request('PATCH', { archived: true }), diagramParams(id))).status).toBe(200);
+    expect((await patchDiagram(request('PATCH', { archived: false }), diagramParams(id))).status).toBe(200);
+    expect((await patchDiagram(request('PATCH', { archived: true }), diagramParams(id))).status).toBe(200);
+    expect((await deleteDiagram(request('DELETE'), diagramParams(id))).status).toBe(200);
+    expect((await getTopology(request('GET'), siteParams(id))).status).toBe(404);
+  });
+
+  it('refuses another client’s network or location', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    expect((await post({ organizationId: IDS.orgGlobex, name: 'Borrowed', networkId: IDS.network })).status).toBe(400);
+    expect((await post({ organizationId: IDS.orgAcme, name: 'Of a firewall', networkId: IDS.firewall })).status).toBe(400);
+  });
+
+  it('is not started by a client administrator, whom the database refuses', async () => {
+    asUser(IDS.acmeAdmin, 'admin@acme.test');
+    expect((await post({ organizationId: IDS.orgAcme, name: 'Client diagram' })).status).toBe(403);
+  });
+
+  it('hides an internal-only diagram, boxes and all, from the client’s own users', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    await makeNode('Core switch');
+    await patchDiagram(request('PATCH', { isInternalOnly: true }), diagramParams(NET));
+    try {
+      asUser(IDS.acmeViewer, 'viewer@acme.test');
+      expect((await getTopology(request('GET'), siteParams(NET))).status).toBe(404);
+    } finally {
+      asUser(IDS.admin1, 'admin@northwind.test');
+      await patchDiagram(request('PATCH', { isInternalOnly: false }), diagramParams(NET));
     }
   });
 });

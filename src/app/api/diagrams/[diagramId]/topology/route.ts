@@ -4,7 +4,7 @@ import { ApiError } from '@/lib/api/errors';
 import { shapeForDevice } from '@/lib/topology/shapes';
 
 /**
- * GET /api/networks/{networkId}/topology — a network entry's whole diagram.
+ * GET /api/diagrams/{diagramId}/topology — a diagram's boxes and lines.
  *
  * One call rather than one per collection: a canvas cannot render links before
  * it has nodes, so two round trips would only add a frame where the lines are
@@ -17,7 +17,7 @@ import { shapeForDevice } from '@/lib/topology/shapes';
  * may not see (an internal-only one, for a client user) says so instead of
  * showing the label it was drawn with, which is that entry's name.
  *
- * asset:read, as for the network entry itself; RLS scopes every row through it.
+ * asset:read; RLS scopes every row through the diagram (0880).
  */
 
 interface NodeRow {
@@ -34,19 +34,19 @@ interface NodeRow {
 
 export const GET = tenantRoute(
   async ({ tx, params }) => {
-    const networkId = params.networkId;
-    if (!networkId || !z.guid().safeParse(networkId).success) {
-      throw ApiError.invalid('networkId must be a UUID');
+    const diagramId = params.diagramId;
+    if (!diagramId || !z.guid().safeParse(diagramId).success) {
+      throw ApiError.invalid('diagramId must be a UUID');
     }
 
-    const [network] = await tx<{
+    const [diagram] = await tx<{
       id: string; name: string; organization_id: string; site_id: string | null; site_name: string | null;
     }[]>`
-      SELECT n.id, n.name, n.organization_id, n.site_id, s.name AS site_name
-      FROM asset_node n LEFT JOIN site s ON s.id = n.site_id AND s.deleted_at IS NULL
-      WHERE n.id = ${networkId}::uuid AND n.node_type = 'network'
+      SELECT d.id, d.name, d.organization_id, d.site_id, s.name AS site_name
+      FROM network_diagram d LEFT JOIN site s ON s.id = d.site_id AND s.deleted_at IS NULL
+      WHERE d.id = ${diagramId}::uuid
     `;
-    if (!network) throw ApiError.notFound('no such network');
+    if (!diagram) throw ApiError.notFound('no such diagram');
 
     const [nodes, links, configurations] = await Promise.all([
       tx<NodeRow[]>`
@@ -60,26 +60,26 @@ export const GET = tenantRoute(
         FROM topology_node t
         LEFT JOIN asset_node a ON a.id = t.asset_node_id
         LEFT JOIN device d ON d.id = a.id
-        WHERE t.network_id = ${networkId}::uuid
+        WHERE t.diagram_id = ${diagramId}::uuid
         ORDER BY t.created_at
       `,
       tx<{ id: string; from_node_id: string; to_node_id: string; label: string | null }[]>`
         SELECT id, from_node_id, to_node_id, label
         FROM topology_link
-        WHERE network_id = ${networkId}::uuid
+        WHERE diagram_id = ${diagramId}::uuid
         ORDER BY created_at
       `,
       tx<{ id: string; name: string; primary_ip: string | null; device_type: string; site_id: string | null }[]>`
         SELECT n.id, n.name, host(d.primary_ip) AS primary_ip, d.device_type::text AS device_type, n.site_id
         FROM asset_node n JOIN device d ON d.id = n.id
-        WHERE n.organization_id = ${network.organization_id}::uuid AND n.archived_at IS NULL
+        WHERE n.organization_id = ${diagram.organization_id}::uuid AND n.archived_at IS NULL
         ORDER BY lower(n.name)
         LIMIT 500
       `,
     ]);
 
     return {
-      network: { id: network.id, name: network.name, siteId: network.site_id, siteName: network.site_name },
+      diagram: { id: diagram.id, name: diagram.name, siteId: diagram.site_id, siteName: diagram.site_name },
       nodes: nodes.map((n) => ({
         id: n.id,
         // Only for an entry the reader can open: the id of one they cannot is
