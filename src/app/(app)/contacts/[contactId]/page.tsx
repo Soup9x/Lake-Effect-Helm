@@ -1,6 +1,5 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { Mail, Phone, Server } from 'lucide-react';
+import { Mail, Phone } from 'lucide-react';
 import { isUuid } from '@/lib/ids';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -9,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { NotesCard } from '@/components/notes-card';
 import { ContactPageActions } from '@/components/contact-page-actions';
+import { ContactForCard } from '@/components/contact-for-card';
 import { readChannels } from '@/lib/contacts/channels';
 import { contactTags, type ContactFlags } from '@/lib/contacts/tags';
 import { isClientRole } from '@/lib/ui/roles';
@@ -51,11 +51,15 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
       WHERE c.id = ${contactId}::uuid AND c.deleted_at IS NULL
     `;
     if (!row) return null;
-    // Configurations that name this person as their contact (0800).
-    const configurations = await tx<{ id: string; name: string }[]>`
-      SELECT n.id, n.name FROM device d JOIN asset_node n ON n.id = d.id
-      WHERE d.contact_id = ${contactId}::uuid AND n.archived_at IS NULL
-      ORDER BY n.name
+    // This client's configurations, and who each names as its contact (0800):
+    // the ones naming this person are "Contact for", the rest can be added.
+    const configurations = await tx<{ id: string; name: string; contact_id: string | null; contact_name: string | null }[]>`
+      SELECT n.id, n.name, d.contact_id,
+             CASE WHEN c.id IS NULL THEN NULL ELSE c.first_name || ' ' || c.last_name END AS contact_name
+      FROM device d JOIN asset_node n ON n.id = d.id
+      LEFT JOIN contact c ON c.id = d.contact_id AND c.deleted_at IS NULL
+      WHERE n.organization_id = ${row.organization_id}::uuid AND n.archived_at IS NULL
+      ORDER BY lower(n.name)
     `;
     return { row, channels: await readChannels(tx, contactId), configurations };
   });
@@ -162,24 +166,14 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
 
         <NotesCard endpoint={`/api/contacts/${row.id}`} notes={row.notes} canEdit={canWrite} />
 
-        {configurations.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Server className="size-4 text-ink-faint" aria-hidden /> Contact for
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-1 text-sm">
-                {configurations.map((c) => (
-                  <li key={c.id}>
-                    <Link href={`/assets/${c.id}`} className="text-ink hover:underline">{c.name}</Link>
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
-        )}
+        <ContactForCard
+          contactId={row.id}
+          linked={configurations.filter((c) => c.contact_id === row.id).map((c) => ({ id: c.id, name: c.name }))}
+          options={configurations
+            .filter((c) => c.contact_id !== row.id)
+            .map((c) => ({ id: c.id, name: c.name, currentContact: c.contact_name }))}
+          canEdit={canWrite}
+        />
       </PageBody>
     </>
   );
