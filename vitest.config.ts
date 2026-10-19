@@ -17,5 +17,9 @@ export default defineConfig({
     fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // next-auth imports 'next/server' without an extension, which Node's ESM
+    // loader cannot resolve; letting Vite transform it resolves it the way
+    // Next does. Needed by tests that drive next-auth's real route handler.
+    server: { deps: { inline: ['next-auth'] } },
   },
 });

@@ -31,6 +31,7 @@ import {
 } from '@db/schema/identity';
 import { useSessionResolver } from './session';
 import { clientIp } from './identity';
+import { withForwardedOrigin } from './forwarded-origin';
 import {
   oidcBySlug,
   oidcEnabledProviders,
@@ -409,8 +410,11 @@ function nextAuth(): NextAuthResult {
  * scope and reintroduce the build failure described above.
  */
 export const handlers: NextAuthResult['handlers'] = {
-  GET: (request) => nextAuth().handlers.GET(request),
-  POST: (request) => nextAuth().handlers.POST(request),
+  // On the address the browser used, not the one Next listens on — see
+  // forwarded-origin.ts for why that is the difference between a working
+  // sign-in and a redirect to localhost:3000.
+  GET: (request) => nextAuth().handlers.GET(withForwardedOrigin(request)),
+  POST: (request) => nextAuth().handlers.POST(withForwardedOrigin(request)),
 };
 
 export const auth: NextAuthResult['auth'] = ((...args: unknown[]) =>

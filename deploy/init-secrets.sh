@@ -108,11 +108,15 @@ cat > "$ENV_FILE" <<ENVEOF
 # means rebuilding the roles by hand.
 
 # --- Where Helm is reached -----------------------------------------------
-# Must match the certificate and what people type in a browser. AUTH_URL is
-# derived from it, and an Auth.js callback that disagrees with the address in
-# the address bar fails in a way that is tedious to diagnose.
+# Helm answers on ANY address that reaches it — its IP, a DNS name, a
+# tunnel's public name — so none of these restrict access. setup.sh writes
+# them: HELM_LAN_ADDRESS is this host's IP, HELM_PUBLIC_HOST an optional
+# hostname (the IP when there is none), HELM_SITE_ADDRESSES every address
+# Caddy issues a certificate for, and HELM_PUBLIC_URL the address in links
+# Helm emails. The placeholder below is replaced by setup.sh.
 HELM_PUBLIC_HOST=helm.internal.example.com
 HELM_PUBLIC_URL=https://helm.internal.example.com
+HELM_SITE_ADDRESSES=
 
 # Caddy's internal CA by default: no public DNS, no ACME. Trust its root on the
 # technicians' machines (setup guide §4), or point this at your own cert:
@@ -128,6 +132,7 @@ HELM_HTTPS_PORT=443
 # the right choice behind a Cloudflare connector running here.
 HELM_EDGE=direct
 HELM_BIND_ADDRESS=0.0.0.0
+HELM_LAN_ADDRESS=
 HELM_CLIENT_IP_HEADER=
 HELM_TRUSTED_PROXY_HOPS=1
 
@@ -198,7 +203,7 @@ mkdir -p backups && chown "${HELM_UID}:${HELM_GID}" backups && chmod 0700 backup
 echo
 
 echo "Next:"
-note "1. Edit ${ENV_FILE} and set HELM_PUBLIC_HOST and HELM_PUBLIC_URL."
+note "1. Run deploy/setup.sh, which sets the addresses; or edit ${ENV_FILE} by hand."
 note "2. docker compose up -d"
 note "3. Create the first tenant and administrator — setup guide §6."
 echo

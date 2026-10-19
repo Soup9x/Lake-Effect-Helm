@@ -416,6 +416,38 @@ jobs:
             *) echo "  FAIL  health is not ok"; exit 1 ;;
           esac
 
+      # Helm answers on any address that reaches it: the host's IP (detected by
+      # setup.sh), the name it was installed with, and a name it has never
+      # heard of — what a tunnel or proxy publishes. Each must reach the app,
+      # and Auth.js must build its URLs for the address actually used (AUTH_URL
+      # is unset on purpose, and src/lib/auth/forwarded-origin.ts hands Auth.js
+      # the forwarded host instead of Next's own localhost:3000).
+      - name: Helm answers on its IP and on any name
+        run: |
+          lan=$(sudo awk -F= '$1=="HELM_LAN_ADDRESS" {print $2}' .env)
+          echo "  HELM_LAN_ADDRESS=$lan"
+          [ -n "$lan" ] || { echo "  FAIL  setup.sh detected no LAN address"; exit 1; }
+          check() {  # $1 = address as the browser names it, rest = curl args
+            local addr=$1; shift
+            code=$(curl -sk -o /dev/null -w '%{http_code}' "$@" "https://$addr/sign-in")
+            # Auth.js's sign-in redirect carries the callback URL it derived:
+            # the address the browser used, or (the bug) localhost:3000.
+            loc=$(curl -sk -o /dev/null -D - "$@" "https://$addr/api/auth/signin" \
+                    | tr -d '\r' | awk 'tolower($1)=="location:" {print $2}')
+            echo "  https://$addr/sign-in -> $code   auth redirect: $loc"
+            [ "$code" = "200" ] || { echo "  FAIL  expected 200"; exit 1; }
+            case "$loc" in
+              *"callbackUrl=https%3A%2F%2F$addr"|*"callbackUrl=https%3A%2F%2F$addr&"*) ;;
+              *) echo "  FAIL  Auth.js built its URLs for another address"; exit 1 ;;
+            esac
+          }
+          check "$lan"
+          check helm.ci.internal  --resolve helm.ci.internal:443:127.0.0.1
+          check never-configured.example --resolve never-configured.example:443:127.0.0.1
+          out=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://$lan/sign-in")
+          echo "  http://$lan/sign-in -> $out"
+          [ "$out" = "308 https://$lan/sign-in" ] || { echo "  FAIL  expected a 308 to https on the same address"; exit 1; }
+
       - name: Tear down
         if: always()
         run: sudo docker compose down -v --remove-orphans || true
