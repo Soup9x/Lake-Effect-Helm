@@ -38,6 +38,8 @@ export interface CategoryRecord {
   name: string;
   /** Where the name links. Omitted for rows with no detail page yet. */
   href?: string | undefined;
+  /** A line under the name: a contact's tags. Matched by the filter too. */
+  subtext?: string | null | undefined;
   /** Username, email, city — whatever the second column means here. */
   secondary?: string | null | undefined;
   /** Status, title, code. */
@@ -186,14 +188,17 @@ export function CategoryGrid({
         ...(canWrite && kind && supportsMode(kind, 'restore')
           ? [{ label: 'Restore', icon: ArchiveRestore, onClick: () => setRemoving({ record, mode: 'restore' }) }]
           : []),
-        ...(canWrite && canDelete && kind && supportsMode(kind, 'delete')
+        // A contact's removal is asset:write, as its creation is; files and
+        // written documents are asset:delete.
+        ...(canWrite && (canDelete || kind === 'contact') && kind && supportsMode(kind, 'delete')
           ? [{ label: 'Delete permanently', icon: Trash2, tone: 'danger' as const,
                onClick: () => setRemoving({ record, mode: 'delete' }) }]
           : []),
       ];
     }
     return [
-      ...(canWrite && record.href
+      // A row whose edit is a dialog links its name to its page instead.
+      ...(canWrite && record.href && !record.editContact && !record.editSite
         ? [{ label: 'Edit', icon: Pencil, href: record.href }]
         : []),
       // A contact has no page of its own; its edit is a dialog (0790).
@@ -227,7 +232,7 @@ export function CategoryGrid({
           ? { folder: { label: record.name, ...record.folder } }
           : {}),
         // Lowercased once here rather than per keystroke in the table.
-        search: [record.name, record.secondary, record.type, record.extra,
+        search: [record.name, record.subtext, record.secondary, record.type, record.extra,
                  ...Object.values(record.cells ?? {})]
           .filter(Boolean)
           .join(' ')
@@ -245,13 +250,18 @@ export function CategoryGrid({
         sortBy: (r) => r.record.name.toLowerCase(),
         cell: (r) => (
           <span className="flex items-center gap-1.5">
-            {r.record.href ? (
-              <Link href={r.record.href} className="font-medium text-ink hover:underline">
-                {r.record.name}
-              </Link>
-            ) : (
-              <span className="font-medium text-ink">{r.record.name}</span>
-            )}
+            <span className="min-w-0">
+              {r.record.href ? (
+                <Link href={r.record.href} className="font-medium text-ink hover:underline">
+                  {r.record.name}
+                </Link>
+              ) : (
+                <span className="font-medium text-ink">{r.record.name}</span>
+              )}
+              {r.record.subtext && (
+                <span className="block text-xs text-ink-faint">{r.record.subtext}</span>
+              )}
+            </span>
             {r.record.archived && <Badge tone="neutral">Archived</Badge>}
             {r.record.internalOnly && (
               <span title="Internal only — not visible to the client">

@@ -10,8 +10,10 @@
  *   set, it leaves the list, and it can be restored. Nothing is destroyed, and
  *   the credential material behind a password survives untouched.
  *
- *   A contact or a site is REMOVED. Those tables carry deleted_at and have no
- *   archive view and no restore path, so from the interface this is one way.
+ *   A contact ARCHIVES too, since 0850, and is deleted from the archive.
+ *
+ *   A site is REMOVED. It carries deleted_at and has no archive view and no
+ *   restore path, so from the interface this is one way.
  *
  *   A folder is DELETED, and only when it is empty: both foreign keys into the
  *   tree are ON DELETE RESTRICT, so the database refuses anything else.
@@ -54,9 +56,9 @@ const COPY: Record<RemoveKind, { verb: string; body: string; reversible: boolean
     reversible: false,
   },
   contact: {
-    verb: 'Remove',
-    body: 'This person stops appearing anywhere in Helm. Contacts have no archive view, so this cannot be undone from the interface.',
-    reversible: false,
+    verb: 'Archive',
+    body: 'This person leaves the list, search and the contact pickers. Everything about them is kept and they can be restored — tick "Include archived" to find them. Deleting them permanently is done from there.',
+    reversible: true,
   },
   site: {
     verb: 'Remove',
@@ -75,7 +77,7 @@ function requestFor(kind: RemoveKind, mode: RemoveMode, id: string): [string, Ap
       case 'document': return [`/api/documents/${id}`, { method: 'PATCH', json: { archived: true } }];
       case 'page': return [`/api/document-pages/${id}`, { method: 'PATCH', json: { archived: true } }];
       case 'folder': return [`/api/document-folders/${id}`, { method: 'DELETE' }];
-      case 'contact': return [`/api/contacts/${id}`, { method: 'DELETE' }];
+      case 'contact': return [`/api/contacts/${id}`, { method: 'PATCH', json: { archived: true } }];
       case 'site': return [`/api/sites/${id}`, { method: 'DELETE' }];
     }
   }
@@ -84,12 +86,14 @@ function requestFor(kind: RemoveKind, mode: RemoveMode, id: string): [string, Ap
       case 'node': return ['/api/bulk/archive', { json: { target: 'node', ids: [id], archived: false } }];
       case 'document': return [`/api/documents/${id}`, { method: 'PATCH', json: { archived: false } }];
       case 'page': return [`/api/document-pages/${id}`, { method: 'PATCH', json: { archived: false } }];
+      case 'contact': return [`/api/contacts/${id}`, { method: 'PATCH', json: { archived: false } }];
       default: return null;
     }
   }
   switch (kind) {
     case 'document': return [`/api/documents/${id}`, { method: 'DELETE' }];
     case 'page': return [`/api/document-pages/${id}`, { method: 'DELETE' }];
+    case 'contact': return [`/api/contacts/${id}`, { method: 'DELETE' }];
     default: return null;
   }
 }
@@ -129,7 +133,9 @@ export function RowRemoveDialog({
             verb: 'Delete permanently',
             body: kind === 'page'
               ? 'The document and every one of its versions are destroyed. Files attached to it go with it.'
-              : 'The file is destroyed. Anything that linked to it will show it as gone.',
+              : kind === 'contact'
+                ? 'This person is removed from Helm for good, and cannot be restored.'
+                : 'The file is destroyed. Anything that linked to it will show it as gone.',
             reversible: false,
           }
         : COPY[kind];

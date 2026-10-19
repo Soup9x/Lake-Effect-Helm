@@ -9,11 +9,13 @@ interface ContactRow {
   id: string; organization_id: string; site_id: string | null;
   first_name: string; last_name: string; title: string | null; notes: string | null;
   is_primary: boolean; is_technical: boolean; is_billing: boolean; is_emergency: boolean; is_authorised: boolean;
+  archived: boolean;
 }
 
 const SELECT = (tx: Parameters<Parameters<typeof tenantRoute>[0]>[0]['tx'], id: string) => tx<ContactRow[]>`
   SELECT id, organization_id, site_id, first_name, last_name, title, notes,
-         is_primary, is_technical, is_billing, is_emergency, is_authorised
+         is_primary, is_technical, is_billing, is_emergency, is_authorised,
+         archived_at IS NOT NULL AS archived
   FROM contact WHERE id = ${id}::uuid AND deleted_at IS NULL
 `;
 
@@ -27,6 +29,7 @@ async function view(tx: Parameters<typeof SELECT>[0], id: string) {
       firstName: row.first_name, lastName: row.last_name, title: row.title, notes: row.notes,
       isPrimary: row.is_primary, isTechnical: row.is_technical, isBilling: row.is_billing,
       isEmergency: row.is_emergency, isAuthorised: row.is_authorised,
+      archived: row.archived,
       ...channels,
     },
   };
@@ -57,6 +60,8 @@ const patchSchema = z
     /** The whole list for that kind (0790); omit a list to leave it alone. */
     emails: z.array(emailEntrySchema).max(20).optional(),
     phones: z.array(phoneEntrySchema).max(20).optional(),
+    /** Archive (true) or restore (false), as for assets and documents (0850). */
+    archived: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'nothing to change' });
 
@@ -89,6 +94,9 @@ export const PATCH = tenantRoute(
           is_billing    = coalesce(${body.isBilling ?? null}, is_billing),
           is_emergency  = coalesce(${body.isEmergency ?? null}, is_emergency),
           is_authorised = coalesce(${body.isAuthorised ?? null}, is_authorised),
+          archived_at   = ${body.archived === undefined
+            ? tx`archived_at`
+            : body.archived ? tx`coalesce(archived_at, now())` : tx`NULL`},
           updated_by    = ${identity.actorId}::uuid
         WHERE id = ${contactId.data}::uuid AND deleted_at IS NULL
         RETURNING id
@@ -108,17 +116,12 @@ export const PATCH = tenantRoute(
 );
 
 /**
- * DELETE /api/contacts/:id — the person is no longer at this client.
+ * DELETE /api/contacts/:id — the person is gone for good.
  *
- * A SOFT DELETE, because `contact` carries deleted_at and not archived_at, and
- * the difference is not cosmetic. An archived asset has somewhere to live — the
- * archive view, a restore path, a bulk endpoint that flips the flag back. A
- * removed contact has none of those: the row stays for referential integrity and
- * for the audit trail, and nothing in the product shows it again.
- *
- * So the interface says "remove" rather than "archive", and says it is not
- * reversible from here. Promising an undo that does not exist is worse than
- * being plain about it.
+ * A SOFT DELETE: the row stays for referential integrity and for the audit
+ * trail, and nothing in the product shows it again. Since 0850 the reversible
+ * step is archiving (PATCH `archived`), and the interface offers this only
+ * from the archive — the same archive-then-delete order as everything else.
  *
  * `asset:write`, matching creation and matching contact's own RLS write rank of
  * 40. Deleting a contact destroys no credential material, which is why this is

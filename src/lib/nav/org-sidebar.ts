@@ -47,7 +47,8 @@ export async function loadOrgNav(tx: HelmTx, organizationId: string): Promise<Or
     tx<{ contacts: string; locations: string; documents: string }[]>`
       SELECT
         (SELECT count(*)::text FROM contact
-          WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL) AS contacts,
+          WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+            AND archived_at IS NULL) AS contacts,
         (SELECT count(*)::text FROM site
           WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL) AS locations,
         -- Uploaded files AND written documents, live ones only: the same

@@ -13,6 +13,8 @@
  *   4. THE LIST IS REPLACED WHOLE, and a contact can at last be corrected.
  *   5. SCOPE. A client administrator reaches their own people's numbers and
  *      nobody else's, as with the contacts themselves.
+ *   6. ARCHIVE (0850). An archived contact leaves the list, search, the tab
+ *      count and the pickers, comes back on restore, and has a page of its own.
  */
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -22,6 +24,8 @@ import { actor, connectPools, disconnectPools, IDS, resetDatabase, superuserSql 
 import { POST as createContact } from '../../src/app/api/contacts/route';
 import { GET as getContact, PATCH as patchContact, DELETE as deleteContact } from '../../src/app/api/contacts/[contactId]/route';
 import { readChannels } from '../../src/lib/contacts/channels';
+import { listContacts } from '../../src/lib/clients/queries';
+import { loadOrgNav } from '../../src/lib/nav/org-sidebar';
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
@@ -187,5 +191,90 @@ describe('scope', () => {
     expect(mine.emails).toHaveLength(1);
     const theirs = await withTenant(asAcmeAdmin, (tx) => readChannels(tx, globex));
     expect(theirs.emails).toHaveLength(0);
+  });
+});
+
+/** The props a named component was handed, found anywhere in the tree. */
+function propsOf(node: unknown, componentName: string): Record<string, unknown> | null {
+  if (node === null || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = propsOf(child, componentName);
+      if (found) return found;
+    }
+    return null;
+  }
+  const element = node as { type?: unknown; props?: Record<string, unknown> };
+  if (typeof element.type === 'function' && element.type.name === componentName) {
+    return element.props ?? {};
+  }
+  return element.props ? propsOf(element.props.children, componentName) : null;
+}
+
+describe('archiving a contact', () => {
+  const p = <T,>(value: T) => Promise.resolve(value);
+  const indexed = async (id: string) => {
+    const sql = superuserSql();
+    try {
+      const [row] = await sql<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM search_document WHERE entity_type = 'contact' AND entity_id = ${id}::uuid
+      `;
+      return row!.n;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  };
+  const tabCount = () => withTenant(asAdmin, async (tx) => (await loadOrgNav(tx, IDS.orgAcme)).counts.contacts ?? 0);
+  const listed = async (id: string) =>
+    (await withTenant(asAdmin, (tx) => listContacts(tx, IDS.orgAcme))).some((c) => c.id === id);
+  const gridRecords = async (archived: boolean) => {
+    const page = await (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({
+      params: p({ organizationId: IDS.orgAcme, category: 'contacts' }),
+      searchParams: p(archived ? { archived: '1' } : {}),
+    });
+    return propsOf(page, 'CategoryGrid')!.records as { id: string; href?: string; subtext?: string | null; archived?: boolean }[];
+  };
+
+  it('takes them off the list, search, the count and the pickers, and restore brings them back', async () => {
+    const id = await create({ firstName: 'Archie', lastName: 'Ved', isTechnical: true, isBilling: true });
+    const before = await tabCount();
+    expect(await indexed(id)).toBe(1);
+
+    currentUser = ADMIN;
+    const archived = await ok<{ contact: { archived: boolean } }>(
+      await patchContact(req('PATCH', `/api/contacts/${id}`, { archived: true }), params(id)));
+    expect(archived.contact.archived).toBe(true);
+    expect(await indexed(id), 'an archived contact is not a search result').toBe(0);
+    expect(await tabCount()).toBe(before - 1);
+    expect(await listed(id), 'nor on the client page').toBe(false);
+    expect((await gridRecords(false)).some((r) => r.id === id)).toBe(false);
+    const shown = (await gridRecords(true)).find((r) => r.id === id);
+    expect(shown?.archived, '"Include archived" shows them, marked').toBe(true);
+
+    await ok(await patchContact(req('PATCH', `/api/contacts/${id}`, { archived: false }), params(id)));
+    expect(await indexed(id)).toBe(1);
+    expect(await tabCount()).toBe(before);
+    expect(await listed(id)).toBe(true);
+  });
+
+  it('lists them with a link to their page and their tags under the name', async () => {
+    const id = await create({ firstName: 'Tess', lastName: 'Tagged', isPrimary: true, isTechnical: true });
+    currentUser = ADMIN;
+    const record = (await gridRecords(false)).find((r) => r.id === id)!;
+    expect(record.href).toBe(`/contacts/${id}`);
+    expect(record.subtext).toBe('Primary contact · Technical');
+  });
+
+  it('renders their page, and a 404 for a contact that is not there', async () => {
+    const id = await create({ firstName: 'Paige', lastName: 'Viewed', emails: [{ address: 'paige@acme.test' }] });
+    currentUser = ADMIN;
+    const contactPage = (await import('../../src/app/(app)/contacts/[contactId]/page')).default;
+    const page = await contactPage({ params: p({ contactId: id }) });
+    const header = propsOf(page, 'PageHeader')!;
+    expect(header.title).toBe('Paige Viewed');
+    expect((header.actions as { props: Record<string, unknown> }).props)
+      .toMatchObject({ contactId: id, archived: false });
+    await expect(contactPage({ params: p({ contactId: '00000000-0000-4000-8000-000000000000' }) }))
+      .rejects.toThrow(/NEXT_HTTP_ERROR_FALLBACK;404/);
   });
 });

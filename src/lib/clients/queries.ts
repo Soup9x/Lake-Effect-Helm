@@ -110,6 +110,7 @@ export function listContacts(tx: HelmTx, organizationId: string): Promise<Contac
         SELECT id, first_name, last_name, title, email::text, phone,
                is_primary, is_emergency, is_technical, is_billing, is_authorised
         FROM contact WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+          AND archived_at IS NULL
         ORDER BY is_primary DESC, last_name NULLS LAST, first_name
       `;
 }

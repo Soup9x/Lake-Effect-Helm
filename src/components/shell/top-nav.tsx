@@ -34,7 +34,7 @@ export interface TopNavTab {
 
 const TOP_NAV_TABS: readonly TopNavTab[] = [
   { href: '/dashboard', label: 'Dashboard', owns: ['/dashboard'] },
-  { href: '/organizations', label: 'Organizations', owns: ['/organizations', '/assets'] },
+  { href: '/organizations', label: 'Organizations', owns: ['/organizations', '/assets', '/contacts', '/documents'] },
   /*
    * PERSONAL AND GLOBAL POINT AT PAGES NOW, not at aliases. Until group L,
    * Personal was /account and Global was /search — which is why both read as
