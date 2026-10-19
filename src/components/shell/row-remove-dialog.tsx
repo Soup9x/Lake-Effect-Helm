@@ -6,27 +6,31 @@
  * IT MEANS DIFFERENT THINGS PER CATEGORY, and a single "Are you sure?" would be
  * lying about at least one of them:
  *
- *   An asset or a document ARCHIVES. archived_at is set, it leaves the list, and
- *   it can be restored — the bulk endpoint flips the same flag back. Nothing is
- *   destroyed, and the credential material behind a password survives untouched.
+ *   An asset, an uploaded file or a written document ARCHIVES. archived_at is
+ *   set, it leaves the list, and it can be restored. Nothing is destroyed, and
+ *   the credential material behind a password survives untouched.
  *
  *   A contact or a site is REMOVED. Those tables carry deleted_at and have no
  *   archive view and no restore path, so from the interface this is one way.
  *
- * Permanent destruction is deliberately NOT here. helm.delete_credential and
- * helm.delete_document both refuse to run on anything that is not already
- * archived and both sit behind asset:delete — a trash icon on a grid row is the
- * wrong affordance for an irreversible act on encrypted material, and the API
- * says so independently of what this dialog offers.
+ *   A folder is DELETED, and only when it is empty: both foreign keys into the
+ *   tree are ON DELETE RESTRICT, so the database refuses anything else.
+ *
+ * THREE MODES. 'remove' is the above. 'restore' flips archived_at back.
+ * 'delete' is permanent destruction, offered only on a row that is ALREADY
+ * archived and only to asset:delete — helm.delete_document and
+ * helm.delete_document_page refuse anything else whatever this dialog offers,
+ * so archive-then-delete is the database's rule and this is just its door.
  */
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, Loader2, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArchiveRestore, Loader2, Trash2 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/modal';
-import { apiFetch } from '@/lib/ui/api';
+import { apiFetch, type ApiRequest } from '@/lib/ui/api';
 
-export type RemoveKind = 'node' | 'document' | 'contact' | 'site';
+export type RemoveKind = 'node' | 'document' | 'page' | 'folder' | 'contact' | 'site';
+export type RemoveMode = 'remove' | 'restore' | 'delete';
 
 const COPY: Record<RemoveKind, { verb: string; body: string; reversible: boolean }> = {
   node: {
@@ -36,8 +40,18 @@ const COPY: Record<RemoveKind, { verb: string; body: string; reversible: boolean
   },
   document: {
     verb: 'Archive',
-    body: 'It leaves this list. The file itself is kept and can be restored; permanently destroying it is a separate, more privileged act.',
+    body: 'It leaves this list. The file is kept and can be restored from the archive — tick "Include archived" to find it. Deleting it permanently is done from there.',
     reversible: true,
+  },
+  page: {
+    verb: 'Archive',
+    body: 'It leaves this list and stops appearing in search. Every version is kept and it can be restored from the archive — tick "Include archived" to find it. Deleting it permanently is done from there.',
+    reversible: true,
+  },
+  folder: {
+    verb: 'Delete',
+    body: 'The folder is removed. Only an empty folder can be deleted.',
+    reversible: false,
   },
   contact: {
     verb: 'Remove',
@@ -51,48 +65,86 @@ const COPY: Record<RemoveKind, { verb: string; body: string; reversible: boolean
   },
 };
 
+/** The request each kind and mode makes. Null where the pair is not offered. */
+function requestFor(kind: RemoveKind, mode: RemoveMode, id: string): [string, ApiRequest] | null {
+  if (mode === 'remove') {
+    switch (kind) {
+      // The same endpoint the bulk toolbar uses, with one id — so a single row
+      // and a selection of forty take exactly the same path.
+      case 'node': return ['/api/bulk/archive', { json: { target: 'node', ids: [id], archived: true } }];
+      case 'document': return [`/api/documents/${id}`, { method: 'PATCH', json: { archived: true } }];
+      case 'page': return [`/api/document-pages/${id}`, { method: 'PATCH', json: { archived: true } }];
+      case 'folder': return [`/api/document-folders/${id}`, { method: 'DELETE' }];
+      case 'contact': return [`/api/contacts/${id}`, { method: 'DELETE' }];
+      case 'site': return [`/api/sites/${id}`, { method: 'DELETE' }];
+    }
+  }
+  if (mode === 'restore') {
+    switch (kind) {
+      case 'node': return ['/api/bulk/archive', { json: { target: 'node', ids: [id], archived: false } }];
+      case 'document': return [`/api/documents/${id}`, { method: 'PATCH', json: { archived: false } }];
+      case 'page': return [`/api/document-pages/${id}`, { method: 'PATCH', json: { archived: false } }];
+      default: return null;
+    }
+  }
+  switch (kind) {
+    case 'document': return [`/api/documents/${id}`, { method: 'DELETE' }];
+    case 'page': return [`/api/document-pages/${id}`, { method: 'DELETE' }];
+    default: return null;
+  }
+}
+
+/** Whether a kind can be restored from, or deleted out of, the archive. */
+export function supportsMode(kind: RemoveKind, mode: RemoveMode): boolean {
+  return requestFor(kind, mode, '00000000-0000-0000-0000-000000000000') !== null;
+}
+
 export function RowRemoveDialog({
   rowId,
   rowLabel,
   kind,
+  mode = 'remove',
+  blockedReason,
   open,
   onOpenChange,
 }: {
   rowId: string;
   rowLabel: string;
   kind: RemoveKind;
+  mode?: RemoveMode;
+  /** Why this cannot go ahead — a folder that still holds things. */
+  blockedReason?: string | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const copy = COPY[kind];
+
+  const copy =
+    mode === 'restore'
+      ? { verb: 'Restore', body: 'It goes back on the list and into search, exactly as it was archived.', reversible: true }
+      : mode === 'delete'
+        ? {
+            verb: 'Delete permanently',
+            body: kind === 'page'
+              ? 'The document and every one of its versions are destroyed. Files attached to it go with it.'
+              : 'The file is destroyed. Anything that linked to it will show it as gone.',
+            reversible: false,
+          }
+        : COPY[kind];
 
   async function confirm() {
+    const request = requestFor(kind, mode, rowId);
+    if (!request) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await (() => {
-        switch (kind) {
-          case 'node':
-            // The same endpoint the bulk toolbar uses, with one id — so a single
-            // row and a selection of forty take exactly the same path.
-            return apiFetch('/api/bulk/archive', { json: { target: 'node', ids: [rowId], archived: true } });
-          case 'document':
-            return apiFetch(`/api/documents/${rowId}`, { method: 'PATCH', json: { archived: true } });
-          case 'contact':
-            return apiFetch(`/api/contacts/${rowId}`, { method: 'DELETE' });
-          case 'site':
-            return apiFetch(`/api/sites/${rowId}`, { method: 'DELETE' });
-        }
-      })();
-
+      const result = await apiFetch(request[0], request[1]);
       if (!result.ok) {
         setError(result.message);
         return;
       }
-
       onOpenChange(false);
       router.refresh();
     } finally {
@@ -104,13 +156,18 @@ export function RowRemoveDialog({
     <Modal
       open={open}
       onOpenChange={onOpenChange}
-      title={`${copy.verb} ${rowLabel}?`}
-      icon={Trash2}
+      title={mode === 'delete' ? `Delete ${rowLabel} permanently?` : `${copy.verb} ${rowLabel}?`}
+      icon={mode === 'restore' ? ArchiveRestore : Trash2}
     >
       <div className="space-y-4">
         <p className="text-sm text-ink-muted">{copy.body}</p>
 
-        {!copy.reversible && (
+        {blockedReason ? (
+          <p className="flex items-start gap-2 rounded-md border border-sev-warning/30 bg-sev-warning/5 px-3 py-2 text-sm text-ink">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-sev-warning" aria-hidden />
+            {blockedReason}
+          </p>
+        ) : !copy.reversible && (
           <p className="flex items-start gap-2 rounded-md border border-sev-warning/30 bg-sev-warning/5 px-3 py-2 text-sm text-ink">
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-sev-warning" aria-hidden />
             This cannot be undone from Helm.
@@ -123,7 +180,12 @@ export function RowRemoveDialog({
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="danger" size="sm" onClick={() => void confirm()} disabled={busy}>
+          <Button
+            variant={mode === 'restore' ? 'primary' : 'danger'}
+            size="sm"
+            onClick={() => void confirm()}
+            disabled={busy || Boolean(blockedReason)}
+          >
             {busy && <Loader2 className="animate-spin" />}
             {copy.verb}
           </Button>

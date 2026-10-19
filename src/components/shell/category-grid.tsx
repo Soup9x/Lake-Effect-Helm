@@ -14,15 +14,17 @@
  * grid that minted codes for eighty rows on render would be eighty audited
  * reveals nobody asked for.
  */
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Check, Copy, ExternalLink, EyeOff, KeyRound, Lock, Pencil, Trash2 } from 'lucide-react';
+import {
+  ArchiveRestore, Check, Copy, ExternalLink, EyeOff, KeyRound, Lock, Pencil, Trash2,
+} from 'lucide-react';
 import { FilterToolbar } from './filter-toolbar';
 import { ColumnMenu, useHiddenColumns, type ColumnChoice } from './column-menu';
 import { DataTable, type Column, type GridRow } from './data-table';
 import { matchesBrowse } from '@/lib/ui/browse';
-import { RowRemoveDialog, type RemoveKind } from './row-remove-dialog';
+import { RowRemoveDialog, supportsMode, type RemoveKind, type RemoveMode } from './row-remove-dialog';
 import { ContactForm } from './contact-form';
 import { SiteForm } from '../site-form';
 import type { SiteValues } from '@/lib/sites/values';
@@ -51,6 +53,11 @@ export interface CategoryRecord {
   folder?: { itemCount: number; itemNoun: string; href: string } | undefined;
   /** What removing this row actually does. Omitted where it cannot be removed. */
   removeKind?: RemoveKind | undefined;
+  /**
+   * Shown because "Include archived" is on. Its actions become Restore and,
+   * for whoever holds asset:delete, Delete permanently.
+   */
+  archived?: boolean | undefined;
   /** Who can see it. Omitted for rows with no visibility flag — contacts, sites. */
   permissions?: RowPermissions | undefined;
   /** A contact row: Edit opens the contact dialog rather than a page. */
@@ -130,6 +137,7 @@ export function CategoryGrid({
   actorRoleRank,
   columnScope,
   extraColumns = [],
+  canDelete = false,
 }: {
   records: readonly CategoryRecord[];
   total: number;
@@ -141,6 +149,8 @@ export function CategoryGrid({
   /** Namespaces the viewer's column choice. One per category. */
   columnScope: string;
   extraColumns?: readonly ExtraColumn[] | undefined;
+  /** asset:delete — offers Delete permanently on archived rows. */
+  canDelete?: boolean | undefined;
 }) {
   const params = useSearchParams();
   const query = params?.get('q') ?? '';
@@ -153,10 +163,59 @@ export function CategoryGrid({
    */
   const { hidden, toggle, reset } = useHiddenColumns(columnScope);
 
-  const [removing, setRemoving] = useState<CategoryRecord | null>(null);
+  const [removing, setRemoving] = useState<{ record: CategoryRecord; mode: RemoveMode } | null>(null);
   const [permissioning, setPermissioning] = useState<CategoryRecord | null>(null);
   const [editingContact, setEditingContact] = useState<CategoryRecord | null>(null);
   const [editingSite, setEditingSite] = useState<CategoryRecord | null>(null);
+
+  /*
+   * A row's actions. A folder's is Delete, only ever of an empty folder; an
+   * archived row's are Restore and, for asset:delete, Delete permanently —
+   * archive first, then delete, which is the rule the database enforces too.
+   */
+  const actionsFor = useCallback((record: CategoryRecord) => {
+    const kind = record.removeKind;
+    if (record.folder) {
+      return canWrite && kind
+        ? [{ label: 'Delete', icon: Trash2, tone: 'danger' as const,
+             onClick: () => setRemoving({ record, mode: 'remove' }) }]
+        : [];
+    }
+    if (record.archived) {
+      return [
+        ...(canWrite && kind && supportsMode(kind, 'restore')
+          ? [{ label: 'Restore', icon: ArchiveRestore, onClick: () => setRemoving({ record, mode: 'restore' }) }]
+          : []),
+        ...(canWrite && canDelete && kind && supportsMode(kind, 'delete')
+          ? [{ label: 'Delete permanently', icon: Trash2, tone: 'danger' as const,
+               onClick: () => setRemoving({ record, mode: 'delete' }) }]
+          : []),
+      ];
+    }
+    return [
+      ...(canWrite && record.href
+        ? [{ label: 'Edit', icon: Pencil, href: record.href }]
+        : []),
+      // A contact has no page of its own; its edit is a dialog (0790).
+      ...(canWrite && record.editContact
+        ? [{ label: 'Edit', icon: Pencil, onClick: () => setEditingContact(record) }]
+        : []),
+      ...(canWrite && record.editSite
+        ? [{ label: 'Edit', icon: Pencil, onClick: () => setEditingSite(record) }]
+        : []),
+      // Only where there is a flag to edit: a contact has no visibility
+      // of its own, so offering the control would be offering nothing.
+      ...(canWrite && record.permissions
+        ? [{ label: 'Permissions', icon: Lock, onClick: () => setPermissioning(record) }]
+        : []),
+      ...(canWrite && kind
+        ? [{
+            label: 'Remove', icon: Trash2, tone: 'danger' as const,
+            onClick: () => setRemoving({ record, mode: 'remove' }),
+          }]
+        : []),
+    ];
+  }, [canWrite, canDelete]);
 
   const rows = useMemo<Row[]>(
     () =>
@@ -173,33 +232,9 @@ export function CategoryGrid({
           .filter(Boolean)
           .join(' ')
           .toLowerCase(),
-        actions: record.folder
-          ? []
-          : [
-              ...(canWrite && record.href
-                ? [{ label: 'Edit', icon: Pencil, href: record.href }]
-                : []),
-              // A contact has no page of its own; its edit is a dialog (0790).
-              ...(canWrite && record.editContact
-                ? [{ label: 'Edit', icon: Pencil, onClick: () => setEditingContact(record) }]
-                : []),
-              ...(canWrite && record.editSite
-                ? [{ label: 'Edit', icon: Pencil, onClick: () => setEditingSite(record) }]
-                : []),
-              // Only where there is a flag to edit: a contact has no visibility
-              // of its own, so offering the control would be offering nothing.
-              ...(canWrite && record.permissions
-                ? [{ label: 'Permissions', icon: Lock, onClick: () => setPermissioning(record) }]
-                : []),
-              ...(canWrite && record.removeKind
-                ? [{
-                    label: 'Remove', icon: Trash2, tone: 'danger' as const,
-                    onClick: () => setRemoving(record),
-                  }]
-                : []),
-            ],
+        actions: actionsFor(record),
       })),
-    [records, canWrite],
+    [records, actionsFor],
   );
 
   const columns = useMemo<Column<Row>[]>(
@@ -217,6 +252,7 @@ export function CategoryGrid({
             ) : (
               <span className="font-medium text-ink">{r.record.name}</span>
             )}
+            {r.record.archived && <Badge tone="neutral">Archived</Badge>}
             {r.record.internalOnly && (
               <span title="Internal only — not visible to the client">
                 <EyeOff className="size-3.5 text-ink-faint" aria-label="Internal only" />
@@ -335,11 +371,17 @@ export function CategoryGrid({
         emptyMessage={`No ${categoryLabel.toLowerCase()} recorded for this client yet.`}
       />
 
-      {removing?.removeKind && (
+      {removing?.record.removeKind && (
         <RowRemoveDialog
-          rowId={removing.id}
-          rowLabel={removing.name}
-          kind={removing.removeKind}
+          rowId={removing.record.id}
+          rowLabel={removing.record.name}
+          kind={removing.record.removeKind}
+          mode={removing.mode}
+          blockedReason={
+            removing.record.folder && removing.record.folder.itemCount > 0
+              ? `It still holds ${removing.record.folder.itemCount} item${removing.record.folder.itemCount === 1 ? '' : 's'}, counting archived ones. Move or delete them first.`
+              : undefined
+          }
           open
           onOpenChange={(next) => { if (!next) setRemoving(null); }}
         />

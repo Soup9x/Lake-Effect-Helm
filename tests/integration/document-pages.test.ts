@@ -11,6 +11,8 @@
  *      and leave with the page.
  *   4. ARCHIVE BEFORE DELETE, and a folder with a page in it is not empty.
  *   5. SCOPE: an internal-only page is not there for a client administrator.
+ *   6. THE TAB COUNTS WHAT THE LIST SHOWS: live files plus live pages, so the
+ *      sidebar badge and the Documents list agree.
  */
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -23,6 +25,7 @@ import { actor, buildHarness, connectPools, disconnectPools, IDS, resetDatabase,
 import { POST as createRoute } from '../../src/app/api/document-pages/route';
 import { GET as getRoute, PATCH as patchRoute, DELETE as deleteRoute } from '../../src/app/api/document-pages/[pageId]/route';
 import { plainText } from '../../src/lib/documents/pages';
+import { loadOrgNav } from '../../src/lib/nav/org-sidebar';
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
@@ -209,5 +212,37 @@ describe('correcting a document', () => {
       organizationId: IDS.orgAcme, folderId: folder, pageId: page.id,
       filename: 'x.pdf', contentType: 'application/pdf', isInternalOnly: false, bytes: Buffer.from('x'),
     })).rejects.toThrow();
+  });
+});
+
+describe('the Documents tab count', () => {
+  const tabCount = () => withTenant(asAdmin, async (tx) => (await loadOrgNav(tx, IDS.orgAcme)).counts.documents ?? 0);
+  // What the list itself totals: live files and live pages, nothing archived.
+  const listed = () => su(async (sql) => {
+    const [row] = await sql<{ n: string }[]>`
+      SELECT ((SELECT count(*) FROM attachment WHERE organization_id = ${IDS.orgAcme}::uuid
+                 AND is_document AND deleted_at IS NULL AND archived_at IS NULL)
+            + (SELECT count(*) FROM document_page WHERE organization_id = ${IDS.orgAcme}::uuid
+                 AND deleted_at IS NULL AND archived_at IS NULL))::text AS n
+    `;
+    return Number(row!.n);
+  });
+
+  it('counts written documents, and stops counting anything archived', async () => {
+    const before = await tabCount();
+    expect(before).toBe(await listed());
+
+    const page = await create({ title: 'Counted page' });
+    const file = await harness.documents.upload(asAdmin, {
+      organizationId: IDS.orgAcme, folderId: null, pageId: null,
+      filename: 'counted.pdf', contentType: 'application/pdf', isInternalOnly: false, bytes: Buffer.from('x'),
+    });
+    expect(await tabCount(), 'a page and a file both count').toBe(before + 2);
+
+    currentUser = ADMIN;
+    await ok(await patchRoute(req('PATCH', `/api/document-pages/${page.id}`, { archived: true }), params(page.id)));
+    await withTenant(asAdmin, (tx) => tx`UPDATE attachment SET archived_at = now() WHERE id = ${file.id}::uuid`);
+    expect(await tabCount(), 'archived ones leave the badge as they leave the list').toBe(before);
+    expect(await tabCount()).toBe(await listed());
   });
 });
