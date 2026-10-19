@@ -89,6 +89,8 @@ let runId = '';
 let pageId = '';
 /** Set in beforeAll: the folder both live in, for the Documents directory's folder view. */
 let renderedFolderId = '';
+/** Set in beforeAll: a contact (0850), because the contact page takes one in its path. */
+let contactId = '';
 
 beforeAll(async () => {
   resetDatabase();
@@ -152,6 +154,13 @@ beforeAll(async () => {
     `;
     pageId = page!.id;
     renderedFolderId = folder!.id;
+
+    const [contact] = await tx<{ id: string }[]>`
+      INSERT INTO contact (tenant_id, organization_id, first_name, last_name, title, is_technical)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'Rendered', 'Person', 'IT lead', true)
+      RETURNING id
+    `;
+    contactId = contact!.id;
 
     /*
      * A checklist run, for the same reason: the run page takes one in its path.
@@ -297,6 +306,13 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () =>
       (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
         params: p({ nodeId: IDS.domain }),
+      }),
+  },
+  {
+    name: 'the contact page',
+    load: async () =>
+      (await import('../../src/app/(app)/contacts/[contactId]/page')).default({
+        params: p({ contactId }),
       }),
   },
   {
@@ -1407,6 +1423,13 @@ describe('a malformed id in the path', () => {
       load: async () =>
         (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
           params: p({ nodeId: NOT_A_UUID }),
+        }),
+    },
+    {
+      name: 'a contact',
+      load: async () =>
+        (await import('../../src/app/(app)/contacts/[contactId]/page')).default({
+          params: p({ contactId: NOT_A_UUID }),
         }),
     },
     {

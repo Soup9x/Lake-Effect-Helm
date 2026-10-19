@@ -279,6 +279,8 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           contacts: await tx<{ id: string; name: string }[]>`
             SELECT id, first_name || ' ' || last_name AS name FROM contact
             WHERE organization_id = ${node.organization_id}::uuid AND deleted_at IS NULL
+              -- Archived people are not offered, unless already the one chosen.
+              AND (archived_at IS NULL OR id = (SELECT contact_id FROM device WHERE id = ${node.id}::uuid))
             ORDER BY last_name, first_name
           `,
           connectable: await tx<{ id: string; name: string }[]>`

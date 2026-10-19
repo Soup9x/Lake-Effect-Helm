@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import { contactTags, type ContactFlags } from '@/lib/contacts/tags';
 import { siteValuesFrom } from '@/lib/sites/values';
 import { isUuid } from '@/lib/ids';
 import { withTenant } from '@/lib/db/client';
@@ -242,13 +243,16 @@ export default async function CategoryPage({
     }
 
     if (category.source === 'contact') {
-      const rows = await tx<{
+      const rows = await tx<({
         id: string; first_name: string; last_name: string | null; title: string | null;
-        email: string | null; phone: string | null; is_primary: boolean; updated_at: Date;
-      }[]>`
-        SELECT id, first_name, last_name, title, email::text, phone, is_primary, updated_at
+        email: string | null; phone: string | null; updated_at: Date; archived: boolean;
+      } & ContactFlags)[]>`
+        SELECT id, first_name, last_name, title, email::text, phone, updated_at,
+               is_primary, is_technical, is_billing, is_emergency, is_authorised,
+               archived_at IS NOT NULL AS archived
         FROM contact
         WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+          ${includeArchived ? tx`` : tx`AND archived_at IS NULL`}
         ORDER BY is_primary DESC, last_name NULLS LAST, first_name
       `;
       return {
@@ -258,6 +262,12 @@ export default async function CategoryPage({
         records: rows.map<CategoryRecord>((r) => ({
           id: r.id,
           name: [r.first_name, r.last_name].filter(Boolean).join(' '),
+          // Each contact has a page of its own now; Edit stays a dialog.
+          href: `/contacts/${r.id}`,
+          // Primary · Technical · Billing — under the name, and matched by the
+          // list's filter, so "technical" narrows to the technical people.
+          subtext: contactTags(r).join(' · ') || null,
+          archived: r.archived,
           secondary: r.email,
           type: r.title,
           extra: r.phone,
@@ -436,7 +446,7 @@ export default async function CategoryPage({
         const [contacts, connectable] = await Promise.all([
           tx<{ id: string; name: string }[]>`
             SELECT id, first_name || ' ' || last_name AS name FROM contact
-            WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+            WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL AND archived_at IS NULL
             ORDER BY last_name, first_name
           `,
           tx<{ id: string; name: string }[]>`

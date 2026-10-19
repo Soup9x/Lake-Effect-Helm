@@ -125,6 +125,8 @@ export const contact = pgTable('contact', {
   notes: text('notes'),
   appUserId: uuid('app_user_id'),
   psaContactId: text('psa_contact_id'),
+  /** 0850: off the list and out of search, restorable. Distinct from deleted_at. */
+  archivedAt: tstz('archived_at'),
   ...auditColumns,
   ...softDelete,
 }, (t) => [

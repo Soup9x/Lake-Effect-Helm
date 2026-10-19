@@ -475,7 +475,9 @@ export function ImportantContactsWidget({
           {ranked.map(({ contact, reason }) => (
             <li key={contact.id} className="space-y-0.5">
               <div className="flex flex-wrap items-baseline gap-x-2">
-                <span className="text-ink">{contact.name}</span>
+                <Link href={`/contacts/${contact.id}`} className="text-ink hover:underline">
+                  {contact.name}
+                </Link>
                 <Badge tone={reason === 'emergency' ? 'critical' : 'neutral'}>
                   {REASON_LABEL[reason]}
                 </Badge>

@@ -207,6 +207,9 @@ function hrefFor(row: RawHit): string {
       // An attachment hangs off the node it documents; a credential and an
       // asset ARE nodes. All three open the asset page when there is one.
       return row.node_id ? `/assets/${row.node_id}` : `/organizations/${row.organization_id}`;
+    case 'contact':
+      // A contact has a page of its own since 0850.
+      return `/contacts/${row.entity_id}`;
     default:
       return `/organizations/${row.organization_id}`;
   }
