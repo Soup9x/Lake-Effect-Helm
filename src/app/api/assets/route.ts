@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { NODE_STATUSES } from '@/lib/assets/statuses';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 
@@ -39,6 +40,7 @@ const createSchema = z.object({
    */
   notes: z.string().trim().max(4000).optional(),
   criticality: z.number().int().min(1).max(5).default(3),
+  status: z.enum(NODE_STATUSES).default('active'),
   isInternalOnly: z.boolean().default(false),
   tags: z.array(z.string().trim().min(1).max(60)).max(30).default([]),
 
@@ -120,13 +122,13 @@ export const POST = tenantRoute(
       [node] = await tx<{ id: string }[]>`
         INSERT INTO asset_node (
           tenant_id, organization_id, site_id, node_type, name, description, notes,
-          criticality, is_internal_only, tags, created_by, updated_by
+          criticality, status, is_internal_only, tags, created_by, updated_by
         )
         VALUES (
           ${identity.tenantId}::uuid, ${body.organizationId}::uuid,
           ${body.siteId ?? null}, ${body.nodeType}::node_type, ${body.name},
           ${body.description ?? null}, ${body.notes ?? null},
-          ${body.criticality}, ${body.isInternalOnly},
+          ${body.criticality}, ${body.status}::node_status, ${body.isInternalOnly},
           ${body.tags}, ${identity.actorId}::uuid, ${identity.actorId}::uuid
         )
         RETURNING id

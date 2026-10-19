@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { NODE_STATUSES } from '@/lib/assets/statuses';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 
@@ -98,9 +99,7 @@ const patchSchema = z
     /** Informal context, bounded at 4000 characters by a CHECK in 0370. */
     notes: z.string().trim().max(4000).nullable().optional(),
     siteId: z.guid().nullable().optional(),
-    status: z
-      .enum(['planned', 'active', 'maintenance', 'retired', 'decommissioned'])
-      .optional(),
+    status: z.enum(NODE_STATUSES).optional(),
     criticality: z.number().int().min(1).max(5).optional(),
     isInternalOnly: z.boolean().optional(),
     tags: z.array(z.string().trim().min(1).max(60)).max(30).optional(),

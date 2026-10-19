@@ -261,6 +261,44 @@ describe('POST /api/assets', () => {
     }
   });
 
+  it('takes the description, status, criticality and tags the New dialog asks for', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const created = await createAsset(
+      post('/api/assets', {
+        organizationId: IDS.orgAcme,
+        nodeType: 'network',
+        name: 'Voice VLAN',
+        networkKind: 'vlan',
+        description: 'Phones and the PBX',
+        status: 'planned',
+        criticality: 4,
+        tags: ['voice', 'pbx'],
+      }),
+    );
+    expect(created.status).toBe(200);
+    const assetId = ((await body(created)).asset as { id: string }).id;
+    const sql = superuserSql();
+    try {
+      const [node] = await sql<{ description: string; status: string; criticality: number; tags: string[] }[]>`
+        SELECT description, status::text, criticality, tags FROM asset_node WHERE id = ${assetId}::uuid
+      `;
+      expect(node).toEqual({ description: 'Phones and the PBX', status: 'planned', criticality: 4, tags: ['voice', 'pbx'] });
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('offers exactly the statuses the database holds', async () => {
+    const { NODE_STATUSES } = await import('../../src/lib/assets/statuses');
+    const sql = superuserSql();
+    try {
+      const [row] = await sql<{ values: string[] }[]>`SELECT enum_range(NULL::node_status)::text[] AS values`;
+      expect([...NODE_STATUSES].sort()).toEqual([...row!.values].sort());
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
   it('leaves no orphan node when the subtype field is missing', async () => {
     // A device with no device_type cannot be written. The node must not be
     // left behind on its own: it would list everywhere and open to nothing.

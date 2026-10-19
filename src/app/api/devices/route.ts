@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { NODE_STATUSES } from '@/lib/assets/statuses';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 import { DEVICE_TYPES, detailFieldsFor } from '@/lib/assets/detail-fields';
@@ -14,7 +15,7 @@ import { contactBelongs, interfaceSchema, readDevice, replaceInterfaces } from '
  * behind. The device columns go through the detail catalogue, so the same
  * casts and refusals apply as to PATCH /api/assets/:id/detail.
  */
-export const NODE_STATUSES = ['active', 'inactive', 'retired', 'planned', 'maintenance'] as const;
+
 
 export const createSchema = z.object({
   organizationId: z.guid(),

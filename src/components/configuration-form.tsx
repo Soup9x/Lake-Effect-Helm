@@ -26,10 +26,11 @@ import { Button } from './ui/button';
 import { Modal } from './ui/modal';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { apiFetch } from '@/lib/ui/api';
+import { NODE_STATUSES } from '@/lib/assets/statuses';
 import { humanise, toDateTimeLocalInput } from '@/lib/ui/format';
 import { DEVICE_TYPES, detailFieldsFor, type DetailField } from '@/lib/assets/detail-fields';
 
-const STATUSES = ['active', 'inactive', 'retired', 'planned', 'maintenance'] as const;
+const STATUSES = NODE_STATUSES;
 
 interface InterfaceDraft {
   name: string; ipAddress: string; macAddress: string; port: string; isPrimary: boolean; notes: string; connectedToNodeId: string;

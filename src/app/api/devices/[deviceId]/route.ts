@@ -4,7 +4,7 @@ import { ApiError, zodIssues } from '@/lib/api/errors';
 import { DEVICE_TYPES, detailFieldsFor } from '@/lib/assets/detail-fields';
 import { writeDetail } from '@/lib/assets/detail-write';
 import { contactBelongs, interfaceSchema, readDevice, replaceInterfaces } from '@/lib/assets/devices';
-import { NODE_STATUSES } from '../route';
+import { NODE_STATUSES } from '@/lib/assets/statuses';
 
 /** GET — the configuration whole, for the edit form. */
 export const GET = tenantRoute(
