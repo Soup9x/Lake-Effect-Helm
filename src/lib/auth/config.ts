@@ -30,6 +30,7 @@ import {
   authVerificationToken,
 } from '@db/schema/identity';
 import { useSessionResolver } from './session';
+import { enforceSessionPolicy } from './session-policy';
 import { clientIp } from './identity';
 import { withForwardedOrigin } from './forwarded-origin';
 import {
@@ -251,6 +252,35 @@ function stampingAdapter(base: Adapter, method: 'sso' | 'oidc', request: Request
 }
 
 /**
+ * Wrap the adapter so reading a session enforces the session policy (0890):
+ * one idle too long, or older than the absolute limit, is ended and reads as
+ * no session at all.
+ *
+ * FAILS CLOSED. If the policy cannot be read the session is not honoured: the
+ * adapter's own read has just succeeded on the same pool, so a failure here is
+ * a fault worth a sign-in prompt rather than a limit quietly not applied.
+ */
+function policyAdapter(base: Adapter): Adapter {
+  const getSessionAndUser = base.getSessionAndUser?.bind(base);
+  if (!getSessionAndUser) return base;
+
+  return {
+    ...base,
+    async getSessionAndUser(sessionToken) {
+      const found = await getSessionAndUser(sessionToken);
+      if (!found) return found;
+      try {
+        if ((await enforceSessionPolicy(sessionToken)) !== 'live') return null;
+      } catch (error) {
+        console.error('helm: could not apply the session policy', error);
+        return null;
+      }
+      return found;
+    },
+  };
+}
+
+/**
  * Everything below is built LAZILY, on the first request that needs it.
  *
  * It used to run at module scope, and that quietly broke the Docker image
@@ -294,7 +324,7 @@ async function buildConfig(request: Request | undefined): Promise<NextAuthConfig
     // The instantiation expression pins the adapter's generic to the Postgres
     // flavour; without it `Parameters<typeof DrizzleAdapter>` is a union across
     // every dialect the package supports and resolves to none of them.
-    adapter: stampingAdapter(
+    adapter: policyAdapter(stampingAdapter(
       DrizzleAdapter(
         authDb,
         adapterTables as unknown as Parameters<typeof DrizzleAdapter<typeof authDb>>[1],
@@ -303,14 +333,18 @@ async function buildConfig(request: Request | undefined): Promise<NextAuthConfig
       // door. Entra and the built-in pages leave this as 'sso'.
       oidcProviders.length > 0 ? 'oidc' : 'sso',
       request,
-    ),
+    )),
 
     session: {
       // Database sessions, not JWTs. A JWT cannot be revoked before it expires,
       // and "this technician left, cut their access now" is a routine MSP event
       // that has to take effect immediately.
       strategy: 'database',
-      maxAge: 60 * 60 * 8,
+      // The ceiling, not the policy. The session policy (0890) ends a session
+      // idle for less than this, or older than its absolute limit, when the
+      // session is read; this only has to be at least the longest idle
+      // timeout an administrator may set, which is a day.
+      maxAge: 60 * 60 * 24,
       updateAge: 60 * 15,
     },
 

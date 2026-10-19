@@ -348,7 +348,8 @@ with a `flexible_asset_secret` row.
 A step-up is a person proving, again, that they are the one holding the session.
 `POST /api/auth/step-up` takes the caller's **local password**, verifies it
 through the ordinary sign-in path, and calls `helm.record_step_up()` to write a
-`step_up_verification` row valid for **15 minutes**.
+`step_up_verification` row valid for **15 minutes** by default — the session
+policy's step-up window (0890), which an administrator may set between 1 and 60.
 
 Three properties are load-bearing:
 
@@ -390,6 +391,28 @@ step-up but *can* be rotated without one. A `critical` secret needs one for
 both — and, because of the `CHECK`, always carries `requires_step_up` anyway.
 This is stated because two code comments previously asserted the stronger,
 untrue rule.
+
+### 4.4.3 Session policy (0890)
+
+How long a session lives is a tenant setting, under Global → Settings →
+Sessions and sign-in, and needs `tenant:write`:
+
+- **Idle timeout** (default 480 minutes). `auth_session.last_seen_at` moves
+  forward, at most once a minute, whenever the session is resolved; a session
+  unused for longer is deleted the next time it is read. The shell warns a
+  minute before and, while somebody is active on a page, pings so that reading
+  is not idleness.
+- **Absolute lifetime** (default none). Measured from `created_at`, which
+  nothing moves: sign in again every N hours, however active.
+- **Step-up window** (default 15 minutes) and the **local lockout** threshold
+  and ceiling (default 5 and 15 minutes).
+
+A person with memberships in several tenants is held to the strictest of
+their tenants' policies (`helm.session_policy_for_user`). The enforcement runs
+on `helm_auth` in the Auth.js adapter, so it covers SSO, OIDC, RADIUS and local
+sessions alike, and it fails closed: a policy that cannot be read is a sign-in
+prompt. **Sign everybody else out** ends every session of every member of the
+tenant but the caller's, and is audited as `session.ended_all`.
 
 ### 4.5 Password reuse detection
 
