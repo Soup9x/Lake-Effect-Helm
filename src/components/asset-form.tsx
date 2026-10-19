@@ -26,8 +26,9 @@ import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
 import { changedFields, hasChanges, type FieldValue } from '@/lib/ui/form-diff';
 import { apiFetch } from '@/lib/ui/api';
+import { NODE_STATUSES } from '@/lib/assets/statuses';
 
-const STATUSES = ['active', 'inactive', 'retired', 'planned', 'maintenance'] as const;
+const STATUSES = NODE_STATUSES;
 
 export interface AssetValues extends Record<string, FieldValue> {
   name: string;

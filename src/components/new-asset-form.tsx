@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Modal } from './ui/modal';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { apiFetch } from '@/lib/ui/api';
+import { NODE_STATUSES } from '@/lib/assets/statuses';
 
 /**
  * Documenting an asset.
@@ -134,6 +135,10 @@ export function NewAssetForm({
   const [siteId, setSiteId] = useState('');
   const [extra, setExtra] = useState('');
   const [notes, setNotes] = useState('');
+  const [description, setDescription] = useState('');
+  const [status, setStatus] = useState<string>('active');
+  const [criticality, setCriticality] = useState(3);
+  const [tagText, setTagText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -142,6 +147,10 @@ export function NewAssetForm({
     setSiteId('');
     setExtra('');
     setNotes('');
+    setDescription('');
+    setStatus('active');
+    setCriticality(3);
+    setTagText('');
     setNodeType('device');
     setError(null);
     setOpen(false);
@@ -191,6 +200,10 @@ export function NewAssetForm({
           ...(siteId ? { siteId } : {}),
           ...(key ? { [key]: extraValue } : {}),
           ...(notes.trim() ? { notes: notes.trim() } : {}),
+          ...(description.trim() ? { description: description.trim() } : {}),
+          status,
+          criticality,
+          tags: tagText.split(',').map((t) => t.trim()).filter(Boolean),
         },
       });
       if (!result.ok) {
@@ -316,6 +329,55 @@ export function NewAssetForm({
                 </Select>
               </div>
             )}
+          </div>
+
+          {/*
+            The fields every kind shares, asked for up front so nobody has to
+            open the entry straight after creating it to say how critical it
+            is. Each kind's own fields stay in its Details editor.
+          */}
+          <div>
+            <Label htmlFor="asset-description">Description</Label>
+            <Input
+              id="asset-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              maxLength={2000}
+              placeholder="Optional. One line: what it is for."
+            />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <Label htmlFor="asset-status">Status</Label>
+              <Select id="asset-status" value={status} onChange={(e) => setStatus(e.target.value)}>
+                {NODE_STATUSES.map((s) => (
+                  <option key={s} value={s}>{humanise(s)}</option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="asset-criticality">Criticality</Label>
+              <Select
+                id="asset-criticality"
+                value={String(criticality)}
+                onChange={(e) => setCriticality(Number(e.target.value))}
+              >
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </Select>
+              <FieldHint>5 is “the business stops”.</FieldHint>
+            </div>
+            <div>
+              <Label htmlFor="asset-tags">Tags</Label>
+              <Input
+                id="asset-tags"
+                value={tagText}
+                onChange={(e) => setTagText(e.target.value)}
+                placeholder="comma, separated"
+              />
+            </div>
           </div>
 
           <div>
