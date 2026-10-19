@@ -48,7 +48,7 @@ const TOP_NAV_TABS: readonly TopNavTab[] = [
    * Global, which is also the answer to "where did My Tasks go" — it is still
    * at /tasks and now has a scope that claims it.
    */
-  { href: '/personal', label: 'Personal', owns: ['/personal', '/account', '/tasks'] },
+  { href: '/personal', label: 'Personal', owns: ['/personal', '/account', '/profile', '/tasks'] },
   {
     href: '/global',
     label: 'Global',

@@ -494,6 +494,12 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () => (await import('../../src/app/(app)/account/page')).default(),
   },
   {
+    // 'Profile & password', opened from the account menu: the password card
+    // and the profile form moved here from /account.
+    name: 'the profile page',
+    load: async () => (await import('../../src/app/(app)/profile/page')).default(),
+  },
+  {
     // 0700's two landing pages. Worth running here specifically because each
     // collects reads that belonged to other pages — the task list, the inbox,
     // the expiry view, the coverage floor — and a landing page that 500s takes

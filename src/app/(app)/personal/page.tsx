@@ -185,8 +185,8 @@ export default async function PersonalPage() {
             <AccountLink
               href="/account"
               icon={KeyRound}
-              title="Account settings"
-              detail="Password, profile (name, time zone, theme), email notifications, active sessions, personal API tokens, and the role and access you hold."
+              title="Security & notifications"
+              detail="Email notifications, active sessions, personal API tokens, and the role and access you hold. Your profile and password are under your name in the top right."
             />
           </CardContent>
         </Card>
