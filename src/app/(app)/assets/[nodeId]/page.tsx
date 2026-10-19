@@ -20,7 +20,8 @@ import { recordView } from '@/lib/workspace/queries';
 import { NotesCard } from '@/components/notes-card';
 import { FlexibleRecordForm } from '@/components/flexible-record-form';
 import { pointerFor, schemaToFields, type FieldDef } from '@/lib/flexible/fields';
-import { listAssignableUsers, readTemplate } from '@/lib/sops/queries';
+import { listAssignableUsers, listRunsForSop, readTemplate } from '@/lib/sops/queries';
+import { ChecklistRunsCard } from '@/components/checklist-runs-card';
 import { ChecklistTemplateCard } from '@/components/checklist-template-card';
 import { ChecklistSchedulesCard } from '@/components/checklist-schedules-card';
 import { listSchedules } from '@/lib/sops/schedules';
@@ -224,6 +225,8 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     const template = node.node_type === 'sop' ? await readTemplate(tx, node.id) : null;
     // And its schedules, the runs it raises on its own (0770).
     const schedules = template ? await listSchedules(tx, node.id) : [];
+    // Every run of this procedure, for the Runs card's Open / Completed tabs.
+    const runs = template ? await listRunsForSop(tx, node.id) : [];
     /*
      * Only for the two node types a probe can reach. Read even when checking is
      * OFF, because "off" is the sentence the card needs: never checked because
@@ -293,7 +296,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       : null;
 
     return {
-      node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, expiries, sites, record, template, schedules,
+      node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, expiries, sites, record, template, schedules, runs,
       attachments, device,
       canDeleteAttachments: session.permissions.includes('asset:delete'),
       totp: totp ?? null,
@@ -308,7 +311,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   if (!data) notFound();
   const {
-    node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, totp, canReveal,
+    node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, runs, totp, canReveal,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
     attachments, canDeleteAttachments, device,
   } = data;
@@ -750,6 +753,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             sites={sites}
           />
         )}
+        {template && <ChecklistRunsCard runs={runs} title="Runs" showClient />}
 
         {!isCredential && showCredentials && credentialsCard}
 

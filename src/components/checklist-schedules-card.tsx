@@ -148,11 +148,22 @@ export function ChecklistSchedulesCard({
       </CardHeader>
 
       <CardContent className="space-y-3">
+        {/*
+          Said in the card, not only in the button's tooltip: a greyed-out
+          button with the reason on hover reads as broken to anybody who does
+          not hover.
+        */}
+        {!published && canManage && (
+          <p className="rounded-md border border-sev-warning/30 bg-sev-warning/5 px-3 py-2 text-sm text-ink">
+            Publish this procedure to schedule it. A schedule runs the published version, and
+            this one has none yet — use Publish in the Checklist card above.
+          </p>
+        )}
         {schedules.length === 0 ? (
           <p className="text-sm text-ink-faint">
             {published
               ? 'No schedules. A schedule raises a run of this procedure every so many days, assigned and dated, without anyone starting it.'
-              : 'Publish the procedure, then a schedule can raise runs of it.'}
+              : canManage ? 'No schedules yet.' : 'Publish the procedure, then a schedule can raise runs of it.'}
           </p>
         ) : (
           <ul className="divide-y divide-border">

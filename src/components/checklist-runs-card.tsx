@@ -1,3 +1,23 @@
+'use client';
+
+/**
+ * Checklist runs, in three tabs: Open, Completed and Abandoned.
+ *
+ * ON A CLIENT'S PAGE it is that client's runs of every procedure; ON A
+ * PROCEDURE'S PAGE it is every run of that procedure, with the client each was
+ * for. A completed run is the record of what was done, by whom and when — the
+ * tab exists so that record can be found again, rather than scrolling past
+ * every open run to reach it.
+ *
+ * The rows come from one query (listRunsForOrganization / listRunsForSop) and
+ * are split here, so switching tabs is instant and the counts on the tabs are
+ * the rows behind them.
+ *
+ * NO "START A RUN" BUTTON on the client's card, deliberately. Starting one means
+ * choosing a procedure AND seeing which published version it would follow, and
+ * that is visible on the procedure's own page where the version is.
+ */
+import { useState } from 'react';
 import Link from 'next/link';
 import { ListChecks } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -6,20 +26,6 @@ import type { RunSummary } from '@/lib/sops/queries';
 import { formatDate } from '@/lib/ui/format';
 import { cn } from '@/lib/ui/cn';
 
-/**
- * This client's checklist runs, open ones first.
- *
- * A SERVER COMPONENT — it reads nothing and does nothing, so there is no reason
- * to ship it. The ordering comes from the query (`listRunsForOrganization`),
- * which puts open runs above finished ones because an open run is work and a
- * finished one is a record.
- *
- * NO "START A RUN" BUTTON HERE, deliberately. Starting one means choosing a
- * procedure AND seeing which published version it would follow, and that is
- * visible on the procedure's own page where the version is. A button here would
- * have to open a procedure picker that then explains versioning, which is the
- * same screen one click further away.
- */
 const TONE: Record<string, 'ok' | 'neutral' | 'brand' | 'warning'> = {
   completed: 'ok',
   abandoned: 'neutral',
@@ -28,19 +34,65 @@ const TONE: Record<string, 'ok' | 'neutral' | 'brand' | 'warning'> = {
   blocked: 'warning',
 };
 
-export function ChecklistRunsCard({ runs }: { runs: readonly RunSummary[] }) {
-  const open = runs.filter((r) => r.status !== 'completed' && r.status !== 'abandoned');
+type Tab = 'open' | 'completed' | 'abandoned';
+const TABS: readonly [Tab, string][] = [['open', 'Open'], ['completed', 'Completed'], ['abandoned', 'Abandoned']];
+
+const tabOf = (status: string): Tab =>
+  status === 'completed' ? 'completed' : status === 'abandoned' ? 'abandoned' : 'open';
+
+export function ChecklistRunsCard({
+  runs,
+  title = 'Checklists',
+  showClient = false,
+}: {
+  runs: readonly RunSummary[];
+  title?: string;
+  /** On a procedure's page: name the client each run was for. */
+  showClient?: boolean;
+}) {
+  const counts: Record<Tab, number> = { open: 0, completed: 0, abandoned: 0 };
+  for (const run of runs) counts[tabOf(run.status)] += 1;
+  // Opens on the open runs when there are any: those are work.
+  const [tab, setTab] = useState<Tab>(counts.open > 0 || counts.completed === 0 ? 'open' : 'completed');
+  const shown = runs
+    .filter((r) => tabOf(r.status) === tab)
+    // Finished ones newest first; open ones as the query ordered them.
+    .sort((a, b) => (tab === 'open' ? 0 : (b.completedAt ?? b.startedAt ?? '').localeCompare(a.completedAt ?? a.startedAt ?? '')));
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
         <CardTitle className="flex items-center gap-2">
-          <ListChecks className="size-4 text-ink-faint" aria-hidden /> Checklists
-          {open.length > 0 && <Badge tone="brand">{open.length} open</Badge>}
+          <ListChecks className="size-4 text-ink-faint" aria-hidden /> {title}
+          {counts.open > 0 && <Badge tone="brand">{counts.open} open</Badge>}
         </CardTitle>
+        <div className="flex gap-1" role="tablist" aria-label="Which runs">
+          {TABS.map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={tab === key}
+              onClick={() => setTab(key)}
+              className={cn(
+                'rounded-full border px-3 py-1 text-xs',
+                tab === key
+                  ? 'border-transparent bg-brand font-medium text-on-brand'
+                  : 'border-border text-ink-muted hover:border-border-strong hover:text-ink',
+              )}
+            >
+              {label} <span className="tabular-nums opacity-80">{counts[key]}</span>
+            </button>
+          ))}
+        </div>
       </CardHeader>
       <CardContent className="space-y-0">
-        {runs.map((run) => {
+        {shown.length === 0 && (
+          <p className="text-sm text-ink-faint">
+            {tab === 'open' ? 'No open runs.' : tab === 'completed' ? 'No completed runs yet.' : 'No abandoned runs.'}
+          </p>
+        )}
+        {shown.map((run) => {
           const finished = run.status === 'completed' || run.status === 'abandoned';
           return (
             <div
@@ -49,7 +101,7 @@ export function ChecklistRunsCard({ runs }: { runs: readonly RunSummary[] }) {
             >
               <Link
                 href={`/runs/${run.id}`}
-                className={cn('min-w-0 flex-1 truncate text-sm', finished ? 'text-ink-muted' : 'text-ink hover:underline')}
+                className={cn('min-w-0 flex-1 truncate text-sm hover:underline', finished ? 'text-ink-muted' : 'text-ink')}
               >
                 {run.title}
               </Link>
@@ -63,11 +115,12 @@ export function ChecklistRunsCard({ runs }: { runs: readonly RunSummary[] }) {
                 )}
               </span>
               <span className="text-xs text-ink-faint">
+                {showClient && `${run.organizationName} · `}
                 {run.ticketRef && `${run.ticketRef} · `}
-                {finished
-                  ? `finished ${formatDate(run.completedAt)}`
+                {run.status === 'completed'
+                  ? `completed ${formatDate(run.completedAt)}${run.completedBy ? ` by ${run.completedBy}` : ''}`
                   : `started ${formatDate(run.startedAt)}`}
-                {run.assignedTo && ` · ${run.assignedTo}`}
+                {!finished && run.assignedTo && ` · ${run.assignedTo}`}
                 {/*
                   The run's own due date, not a step's. A step can be due
                   sooner than the run, and surfacing the earliest step date
