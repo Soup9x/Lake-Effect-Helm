@@ -411,7 +411,9 @@ export default async function OrganizationPage({
                 .filter(Boolean).join(' ').toLowerCase(),
               cells: [
                 <div key="name" className="flex items-center gap-2">
-                  <span className="font-medium text-ink">{site.name}</span>
+                  <Link href={`/locations/${site.id}`} className="font-medium text-ink hover:underline">
+                    {site.name}
+                  </Link>
                   {site.is_primary && <Badge tone="brand">Primary</Badge>}
                   {canWrite && (
                     <SiteForm

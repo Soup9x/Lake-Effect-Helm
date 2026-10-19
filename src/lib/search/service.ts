@@ -47,7 +47,7 @@ export type ResultKind = (typeof RESULT_KINDS)[number];
 export const KIND_LABELS: Record<ResultKind, { singular: string; plural: string }> = {
   client: { singular: 'Client', plural: 'Clients' },
   credential: { singular: 'Credential', plural: 'Credentials' },
-  site: { singular: 'Site', plural: 'Sites' },
+  site: { singular: 'Location', plural: 'Locations' },
   document: { singular: 'Document', plural: 'Documents' },
   asset: { singular: 'Asset', plural: 'Assets' },
   contact: { singular: 'Contact', plural: 'Contacts' },
@@ -189,9 +189,8 @@ function groupHits(hits: SearchHit[]): SearchGroup[] {
 /**
  * Where a result goes when clicked.
  *
- * A site and an attachment have no page of their own, so both land on the
- * client that owns them — which is where somebody who searched for a site is
- * going anyway. Computed once here rather than in each component, so the two
+ * An attachment with no node has no page of its own, so it lands on the client
+ * that owns it. Computed once here rather than in each component, so the two
  * places that render results cannot disagree about it.
  */
 function hrefFor(row: RawHit): string {
@@ -210,6 +209,8 @@ function hrefFor(row: RawHit): string {
     case 'contact':
       // A contact has a page of its own since 0850.
       return `/contacts/${row.entity_id}`;
+    case 'site':
+      return `/locations/${row.entity_id}`;
     default:
       return `/organizations/${row.organization_id}`;
   }

@@ -138,7 +138,10 @@ describe('the fields that are searched', () => {
   it('a site, by its STREET ADDRESS', async () => {
     const found = await find('Delaware Avenue');
     expect(titles(found)).toContain('Buffalo Headquarters');
-    expect(found.hits.find((h) => h.title === 'Buffalo Headquarters')!.kind).toBe('site');
+    const hit = found.hits.find((h) => h.title === 'Buffalo Headquarters')!;
+    expect(hit.kind).toBe('site');
+    // A location has a page of its own; the hit opens it, not the client.
+    expect(hit.href).toBe(`/locations/${SITE_ID}`);
   });
 
   it('a site, by its postcode and by its code', async () => {
