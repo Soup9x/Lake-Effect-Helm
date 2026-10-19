@@ -22,6 +22,7 @@ import { FlexibleRecordForm } from '@/components/flexible-record-form';
 import { pointerFor, schemaToFields, type FieldDef } from '@/lib/flexible/fields';
 import { listAssignableUsers, listRunsForSop, readTemplate } from '@/lib/sops/queries';
 import { ChecklistRunsCard } from '@/components/checklist-runs-card';
+import { TopologyDesigner } from '@/components/topology-designer';
 import { ChecklistTemplateCard } from '@/components/checklist-template-card';
 import { ChecklistSchedulesCard } from '@/components/checklist-schedules-card';
 import { listSchedules } from '@/lib/sops/schedules';
@@ -227,6 +228,15 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     const schedules = template ? await listSchedules(tx, node.id) : [];
     // Every run of this procedure, for the Runs card's Open / Completed tabs.
     const runs = template ? await listRunsForSop(tx, node.id) : [];
+    // The network diagrams a configuration is drawn on, for the way back (0860).
+    const diagrams = node.node_type === 'device'
+      ? await tx<{ id: string; name: string }[]>`
+          SELECT DISTINCT n.id, n.name FROM topology_node t
+          JOIN asset_node n ON n.id = t.network_id
+          WHERE t.asset_node_id = ${node.id}::uuid
+          ORDER BY n.name
+        `
+      : [];
     /*
      * Only for the two node types a probe can reach. Read even when checking is
      * OFF, because "off" is the sentence the card needs: never checked because
@@ -296,7 +306,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       : null;
 
     return {
-      node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, expiries, sites, record, template, schedules, runs,
+      node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams,
       attachments, device,
       canDeleteAttachments: session.permissions.includes('asset:delete'),
       totp: totp ?? null,
@@ -311,7 +321,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   if (!data) notFound();
   const {
-    node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, runs, totp, canReveal,
+    node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams, totp, canReveal,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
     attachments, canDeleteAttachments, device,
   } = data;
@@ -714,8 +724,30 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         ) : wideDetails ? (
           <>
             {detailsCard}
+            {/* A network entry's own diagram (0860), full width under its details. */}
+            {node.node_type === 'network' && (
+              <TopologyDesigner networkId={node.id} networkName={node.name} canEdit={canWrite} />
+            )}
             {checkNote}
             {dependenciesCard}
+            {diagrams.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Network className="size-4 text-ink-faint" aria-hidden /> On network diagrams
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-wrap gap-2">
+                    {diagrams.map((d) => (
+                      <Link key={d.id} href={`/assets/${d.id}`} className="rounded-md border border-border px-2.5 py-1 text-sm text-ink hover:bg-surface-sunken">
+                        {d.name}
+                      </Link>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </>
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">

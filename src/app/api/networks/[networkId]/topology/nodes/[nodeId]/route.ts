@@ -29,21 +29,21 @@ const patchSchema = z
     message: 'a position needs both posX and posY',
   });
 
-function ids(params: Record<string, string>): { siteId: string; nodeId: string } {
-  const siteId = params.siteId;
+function ids(params: Record<string, string>): { networkId: string; nodeId: string } {
+  const networkId = params.networkId;
   const nodeId = params.nodeId;
-  if (!siteId || !z.guid().safeParse(siteId).success) {
-    throw ApiError.invalid('siteId must be a UUID');
+  if (!networkId || !z.guid().safeParse(networkId).success) {
+    throw ApiError.invalid('networkId must be a UUID');
   }
   if (!nodeId || !z.guid().safeParse(nodeId).success) {
     throw ApiError.invalid('nodeId must be a UUID');
   }
-  return { siteId, nodeId };
+  return { networkId, nodeId };
 }
 
 export const PATCH = tenantRoute(
   async ({ tx, request, params }) => {
-    const { siteId, nodeId } = ids(params);
+    const { networkId, nodeId } = ids(params);
 
     const body = await readJson(request, (raw) => {
       const result = patchSchema.safeParse(raw);
@@ -59,19 +59,27 @@ export const PATCH = tenantRoute(
      * COALESCE over the parameter, so an absent field is left alone and an
      * explicit null clears it — the same shape PATCH /api/sites uses.
      */
-    const [row] = await tx<{ id: string }[]>`
-      UPDATE topology_node SET
-        pos_x       = CASE WHEN ${body.posX !== undefined} THEN ${body.posX ?? null}::double precision ELSE pos_x END,
-        pos_y       = CASE WHEN ${body.posY !== undefined} THEN ${body.posY ?? null}::double precision ELSE pos_y END,
-        label       = COALESCE(${body.label ?? null}, label),
-        ip_address  = CASE WHEN ${body.ipAddress !== undefined} THEN ${body.ipAddress ?? null} ELSE ip_address END,
-        subnet      = CASE WHEN ${body.subnet !== undefined} THEN ${body.subnet ?? null} ELSE subnet END,
-        device_type = COALESCE(${body.deviceType ?? null}::topology_device_type, device_type),
-        asset_node_id = CASE WHEN ${body.assetNodeId !== undefined}
-                             THEN ${body.assetNodeId ?? null}::uuid ELSE asset_node_id END
-      WHERE id = ${nodeId}::uuid AND site_id = ${siteId}::uuid
-      RETURNING id
-    `;
+    let row: { id: string } | undefined;
+    try {
+      [row] = await tx<{ id: string }[]>`
+        UPDATE topology_node SET
+          pos_x       = CASE WHEN ${body.posX !== undefined} THEN ${body.posX ?? null}::double precision ELSE pos_x END,
+          pos_y       = CASE WHEN ${body.posY !== undefined} THEN ${body.posY ?? null}::double precision ELSE pos_y END,
+          label       = COALESCE(${body.label ?? null}, label),
+          ip_address  = CASE WHEN ${body.ipAddress !== undefined} THEN ${body.ipAddress ?? null} ELSE ip_address END,
+          subnet      = CASE WHEN ${body.subnet !== undefined} THEN ${body.subnet ?? null} ELSE subnet END,
+          device_type = COALESCE(${body.deviceType ?? null}::topology_device_type, device_type),
+          asset_node_id = CASE WHEN ${body.assetNodeId !== undefined}
+                               THEN ${body.assetNodeId ?? null}::uuid ELSE asset_node_id END
+        WHERE id = ${nodeId}::uuid AND network_id = ${networkId}::uuid
+        RETURNING id
+      `;
+    } catch (error) {
+      if ((error as { code?: string }).code === '23514') {
+        throw ApiError.invalid('a box can only stand for one of this client’s entries');
+      }
+      throw error;
+    }
 
     // RLS refuses a node outside the actor's reach by matching no row, so this
     // is the same answer for "not there" and "not yours".
@@ -90,11 +98,11 @@ export const PATCH = tenantRoute(
  */
 export const DELETE = tenantRoute(
   async ({ tx, params }) => {
-    const { siteId, nodeId } = ids(params);
+    const { networkId, nodeId } = ids(params);
 
     const [row] = await tx<{ id: string }[]>`
       DELETE FROM topology_node
-      WHERE id = ${nodeId}::uuid AND site_id = ${siteId}::uuid
+      WHERE id = ${nodeId}::uuid AND network_id = ${networkId}::uuid
       RETURNING id
     `;
     if (!row) throw ApiError.notFound('no such topology node');

@@ -1,6 +1,6 @@
 /**
- * Per-site network topology: what it isolates, and what it lets a person
- * change.
+ * Network diagrams, one per network entry (0860): what they isolate, what they
+ * let a person change, and how a box stands for a configuration.
  *
  * A person is the only writer (0580 removed the UniFi seeding), so what is
  * worth asserting here is tenant and organisation isolation, the shape of a
@@ -16,13 +16,13 @@ import {
   buildHarness, connectPools, disconnectPools, IDS, resetDatabase, superuserSql, type Harness,
 } from './harness';
 
-import { GET as getTopology } from '../../src/app/api/sites/[siteId]/topology/route';
-import { POST as postNode } from '../../src/app/api/sites/[siteId]/topology/nodes/route';
+import { GET as getTopology } from '../../src/app/api/networks/[networkId]/topology/route';
+import { POST as postNode } from '../../src/app/api/networks/[networkId]/topology/nodes/route';
 import {
   PATCH as patchNode, DELETE as deleteNode,
-} from '../../src/app/api/sites/[siteId]/topology/nodes/[nodeId]/route';
-import { POST as postLink } from '../../src/app/api/sites/[siteId]/topology/links/route';
-import { DELETE as deleteLink } from '../../src/app/api/sites/[siteId]/topology/links/[linkId]/route';
+} from '../../src/app/api/networks/[networkId]/topology/nodes/[nodeId]/route';
+import { POST as postLink } from '../../src/app/api/networks/[networkId]/topology/links/route';
+import { DELETE as deleteLink } from '../../src/app/api/networks/[networkId]/topology/links/[linkId]/route';
 
 let h: Harness;
 let currentUser: SessionUser | null = null;
@@ -33,33 +33,39 @@ const asUser = (id: string, email: string) => { currentUser = { id, email }; };
 // services without a key would fail before any test ran.
 process.env.HELM_BLIND_INDEX_KEY_B64 = Buffer.alloc(32, 7).toString('base64');
 
-const SITE = '1e900000-0000-0000-0000-000000000001';
-const SITE_B = '1e900000-0000-0000-0000-000000000002';
-/** Tenant 2's site, for the isolation tests. */
-const SITE_T2 = '2e900000-0000-0000-0000-000000000001';
+/** Acme's network from the fixtures, and a second one of Acme's. */
+const NET: string = IDS.network;
+const NET_B = '1e900000-0000-0000-0000-000000000002';
+/** Tenant 2's network, for the isolation tests. */
+const NET_T2 = '2e900000-0000-0000-0000-000000000001';
 
 const request = (method: string, payload?: unknown) =>
-  new NextRequest(new Request('https://helm.test/api/sites/x/topology', {
+  new NextRequest(new Request('https://helm.test/api/networks/x/topology', {
     method,
     headers: { 'content-type': 'application/json' },
     ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
   }));
 
 const body = async (r: Response) => (await r.json()) as Record<string, unknown>;
-const siteParams = (siteId = SITE) => ({ params: Promise.resolve({ siteId }) });
-const nodeParams = (nodeId: string, siteId = SITE) =>
-  ({ params: Promise.resolve({ siteId, nodeId }) });
-const linkParams = (linkId: string, siteId = SITE) =>
-  ({ params: Promise.resolve({ siteId, linkId }) });
+const siteParams = (networkId: string = NET) => ({ params: Promise.resolve({ networkId }) });
+const nodeParams = (nodeId: string, networkId: string = NET) =>
+  ({ params: Promise.resolve({ networkId, nodeId }) });
+const linkParams = (linkId: string, networkId: string = NET) =>
+  ({ params: Promise.resolve({ networkId, linkId }) });
 
-async function seedSites(): Promise<void> {
+async function seedNetworks(): Promise<void> {
   const sql = superuserSql();
   try {
     await sql`
-      INSERT INTO site (id, tenant_id, organization_id, name) VALUES
-        (${SITE}::uuid,    ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid,    'Acme HQ'),
-        (${SITE_B}::uuid,  ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid,    'Acme Annexe'),
-        (${SITE_T2}::uuid, ${IDS.tenant2}::uuid, ${IDS.orgContoso}::uuid, 'Contoso HQ')
+      INSERT INTO asset_node (id, tenant_id, organization_id, node_type, name) VALUES
+        (${NET_B}::uuid,  ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid,    'network', 'Acme guest wifi'),
+        (${NET_T2}::uuid, ${IDS.tenant2}::uuid, ${IDS.orgContoso}::uuid, 'network', 'Contoso LAN')
+      ON CONFLICT (id) DO NOTHING
+    `;
+    await sql`
+      INSERT INTO network (id, tenant_id, kind) VALUES
+        (${NET_B}::uuid,  ${IDS.tenant1}::uuid, 'wifi'),
+        (${NET_T2}::uuid, ${IDS.tenant2}::uuid, 'subnet')
       ON CONFLICT (id) DO NOTHING
     `;
   } finally {
@@ -68,8 +74,8 @@ async function seedSites(): Promise<void> {
 }
 
 /** Create a manual node through the real route. */
-async function makeNode(label: string, extra: Record<string, unknown> = {}, siteId = SITE) {
-  const response = await postNode(request('POST', { label, ...extra }), siteParams(siteId));
+async function makeNode(label: string, extra: Record<string, unknown> = {}, networkId: string = NET) {
+  const response = await postNode(request('POST', { label, ...extra }), siteParams(networkId));
   expect(response.status).toBe(200);
   return (await body(response)).nodeId as string;
 }
@@ -93,7 +99,7 @@ beforeAll(async () => {
   useSessionResolver(async () => currentUser);
   await h.keys.provision(IDS.tenant1, IDS.admin1, { reason: 'topology tests' });
   await h.keys.provision(IDS.tenant2, IDS.admin2, { reason: 'topology tests' });
-  await seedSites();
+  await seedNetworks();
 }, 180_000);
 
 afterEach(async () => {
@@ -113,17 +119,17 @@ describe('tenant isolation', () => {
     const b = await makeNode('Acme firewall');
     await postLink(request('POST', { fromNodeId: a, toNodeId: b }), siteParams());
 
-    // The other tenant's administrator, on their own site.
+    // The other tenant's administrator, on their own network.
     asUser(IDS.admin2, 'admin@contoso.test');
-    const response = await getTopology(request('GET'), siteParams(SITE_T2));
+    const response = await getTopology(request('GET'), siteParams(NET_T2));
     expect(response.status).toBe(200);
     const seen = await body(response);
     expect(seen.nodes).toEqual([]);
     expect(seen.links).toEqual([]);
 
-    // And asking for tenant 1's site directly is a 404, not a peek: RLS
-    // refuses the site, so "not there" and "not yours" are one answer.
-    expect((await getTopology(request('GET'), siteParams(SITE))).status).toBe(404);
+    // And asking for tenant 1's network directly is a 404, not a peek: RLS
+    // refuses the entry, so "not there" and "not yours" are one answer.
+    expect((await getTopology(request('GET'), siteParams(NET))).status).toBe(404);
   });
 
   it('refuses a raw cross-tenant read at the table, not just at the route', async () => {
@@ -181,10 +187,10 @@ describe('drawing by hand', () => {
     expect((await postLink(request('POST', { fromNodeId: b, toNodeId: a }), siteParams())).status).toBe(409);
   });
 
-  it('refuses a link to itself and a link across two sites', async () => {
+  it('refuses a link to itself and a link across two diagrams', async () => {
     asUser(IDS.admin1, 'admin@northwind.test');
     const a = await makeNode('Core switch');
-    const elsewhere = await makeNode('Annexe switch', {}, SITE_B);
+    const elsewhere = await makeNode('Guest AP', {}, NET_B);
 
     expect((await postLink(request('POST', { fromNodeId: a, toNodeId: a }), siteParams())).status).toBe(400);
     const crossed = await postLink(
@@ -318,6 +324,71 @@ describe('who may edit', () => {
       expect(row!.n).toBe('0');
     } finally {
       await sql.end({ timeout: 5 });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('a box that stands for a configuration', () => {
+  const nodesOf = async (networkId: string = NET) =>
+    (await body(await getTopology(request('GET'), siteParams(networkId)))).nodes as Record<string, unknown>[];
+  const su = async (fn: (sql: ReturnType<typeof superuserSql>) => Promise<unknown>) => {
+    const sql = superuserSql();
+    try { await fn(sql); } finally { await sql.end({ timeout: 5 }); }
+  };
+
+  it('offers this client’s configurations, and no other client’s', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const graph = await body(await getTopology(request('GET'), siteParams()));
+    const names = (graph.configurations as { name: string; shape: string }[]).map((c) => c.name);
+    expect(names).toContain('acme-fw-01');
+    expect(names).not.toContain('globex-app-01');
+    const firewall = (graph.configurations as { name: string; shape: string }[]).find((c) => c.name === 'acme-fw-01');
+    expect(firewall?.shape, 'drawn with the shape its device type suggests').toBe('firewall');
+  });
+
+  it('shows the configuration’s current name and IP, and opens it', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    await makeNode('acme-fw-01', { assetNodeId: IDS.firewall, deviceType: 'firewall' });
+    await su((sql) => sql`
+      UPDATE asset_node SET name = 'acme-fw-renamed' WHERE id = ${IDS.firewall}::uuid`);
+    await su((sql) => sql`
+      UPDATE device SET primary_ip = '10.9.9.1' WHERE id = ${IDS.firewall}::uuid`);
+    try {
+      const [box] = await nodesOf();
+      expect(box).toMatchObject({ assetNodeId: IDS.firewall, label: 'acme-fw-renamed', ipAddress: '10.9.9.1' });
+    } finally {
+      await su((sql) => sql`
+        UPDATE asset_node SET name = 'acme-fw-01' WHERE id = ${IDS.firewall}::uuid`);
+      await su((sql) => sql`UPDATE device SET primary_ip = NULL WHERE id = ${IDS.firewall}::uuid`);
+    }
+  });
+
+  it('refuses another client’s configuration on this diagram', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const response = await postNode(
+      request('POST', { label: 'globex-app-01', assetNodeId: IDS.globexServer }), siteParams());
+    expect(response.status).toBe(400);
+  });
+
+  it('belongs to a network entry and nothing else', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    expect((await getTopology(request('GET'), siteParams(IDS.firewall))).status).toBe(404);
+    expect((await postNode(request('POST', { label: 'Misplaced' }), siteParams(IDS.firewall))).status).toBe(400);
+  });
+
+  it('says "restricted" to a reader who may not see the configuration', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    await makeNode('acme-dc01', { assetNodeId: IDS.domainController });
+    await su((sql) => sql`
+      UPDATE asset_node SET is_internal_only = true WHERE id = ${IDS.domainController}::uuid`);
+    try {
+      asUser(IDS.acmeViewer, 'viewer@acme.test');
+      const [box] = await nodesOf();
+      expect(box).toMatchObject({ label: 'Restricted entry', assetNodeId: null, ipAddress: null });
+    } finally {
+      await su((sql) => sql`
+        UPDATE asset_node SET is_internal_only = false WHERE id = ${IDS.domainController}::uuid`);
     }
   });
 });

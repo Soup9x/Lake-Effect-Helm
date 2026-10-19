@@ -3,7 +3,7 @@ import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 
 /**
- * POST /api/sites/{siteId}/topology/links — draw a line between two boxes.
+ * POST /api/networks/{networkId}/topology/links — draw a line between two boxes.
  *
  * NOT the dependency graph. `POST /api/assets/links` records reliance and is
  * gated on asset:link; this records a cable. A firewall is connected to a
@@ -23,9 +23,9 @@ const createSchema = z.object({
 
 export const POST = tenantRoute(
   async ({ tx, request, params }) => {
-    const siteId = params.siteId;
-    if (!siteId || !z.guid().safeParse(siteId).success) {
-      throw ApiError.invalid('siteId must be a UUID');
+    const networkId = params.networkId;
+    if (!networkId || !z.guid().safeParse(networkId).success) {
+      throw ApiError.invalid('networkId must be a UUID');
     }
 
     const body = await readJson(request, (raw) => {
@@ -44,9 +44,9 @@ export const POST = tenantRoute(
 
     try {
       const [link] = await tx<{ id: string }[]>`
-        INSERT INTO topology_link (tenant_id, site_id, from_node_id, to_node_id, label)
+        INSERT INTO topology_link (tenant_id, network_id, from_node_id, to_node_id, label)
         VALUES (
-          helm.require_tenant_id(), ${siteId}::uuid,
+          helm.require_tenant_id(), ${networkId}::uuid,
           ${body.fromNodeId}::uuid, ${body.toNodeId}::uuid,
           ${body.label ?? null})
         RETURNING id
@@ -62,11 +62,11 @@ export const POST = tenantRoute(
         throw ApiError.conflict('these two nodes are already linked');
       }
       if (code === '23503') {
-        throw ApiError.invalid('no such site or node');
+        throw ApiError.invalid('no such network or box');
       }
-      // The endpoint guard in 0570: both nodes must be on this site.
-      if (code === '23514' || /must join two nodes on its own site/.test(String((error as Error).message))) {
-        throw ApiError.invalid('both nodes must be on this site');
+      // The endpoint guard in 0570: both boxes must be on this diagram.
+      if (code === '23514' || /must join two nodes on its own diagram/.test(String((error as Error).message))) {
+        throw ApiError.invalid('both boxes must be on this diagram');
       }
       throw error;
     }

@@ -1,7 +1,15 @@
 'use client';
 
 /**
- * The per-site network diagram.
+ * A network entry's diagram, drawn full width on its page (0860).
+ *
+ * A BOX IS A CONFIGURATION OR A LABEL. "Use an existing configuration" picks
+ * one of the client's configurations: the box is drawn with its name, primary
+ * IP and a matching shape, and keeps showing the configuration's CURRENT name
+ * and IP (the server joins them on read), and clicking it opens it. "Something
+ * else" is a typed label, for the ISP handoff or a patch panel with no entry.
+ * "Add this location's configurations" drops in every configuration at the
+ * network's location that is not on the diagram yet.
  *
  * WHY SVG AND NOT A LIBRARY. v1 draws boxes and straight lines and lets you
  * drag a box. That is a few hundred lines of pointer handling against an SVG,
@@ -21,11 +29,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Loader2, Network, Plus, RefreshCw, Router, Server, Shield, Trash2, Wifi, X,
+  Loader2, Network, Plus, RefreshCw, Router, Server, Shield, Trash2, Wifi, X, Layers,
 } from 'lucide-react';
 import { Button } from './ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Input, Label, Select } from './ui/field';
-import { Modal } from './ui/modal';
 import { apiFetch, type ApiRequest } from '@/lib/ui/api';
 
 const DEVICE_TYPES = [
@@ -66,10 +74,20 @@ interface TopologyLink {
   label: string | null;
 }
 
+interface Configuration {
+  id: string;
+  name: string;
+  primaryIp: string | null;
+  shape: DeviceType;
+  siteId: string | null;
+}
+
 interface Graph {
-  site: { id: string; name: string };
+  network: { id: string; name: string; siteId: string | null; siteName: string | null };
   nodes: TopologyNode[];
   links: TopologyLink[];
+  /** The client's configurations, for the picker. */
+  configurations: Configuration[];
 }
 
 /** Box geometry. Shared by the renderer and the hit testing, so they agree. */
@@ -100,15 +118,15 @@ function layout(nodes: TopologyNode[]): Map<string, { x: number; y: number }> {
 }
 
 export interface TopologyDesignerProps {
-  siteId: string;
-  siteName: string;
+  networkId: string;
+  networkName: string;
   /** False for a viewer: the canvas still renders, nothing is draggable. */
   canEdit: boolean;
 }
 
-export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesignerProps) {
+export function TopologyDesigner({ networkId, networkName, canEdit }: TopologyDesignerProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const base = `/api/networks/${networkId}/topology`;
   const [graph, setGraph] = useState<Graph | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +145,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
     setBusy(true);
     setError(null);
     try {
-      const result = await apiFetch<Graph>(`/api/sites/${siteId}/topology`);
+      const result = await apiFetch<Graph>(base);
       if (!result.ok) {
         setError(result.message);
         return;
@@ -138,11 +156,11 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
     } finally {
       setBusy(false);
     }
-  }, [siteId]);
+  }, [base]);
 
   useEffect(() => {
-    if (open) void load();
-  }, [open, load]);
+    void load();
+  }, [load]);
 
   /** One place that turns a failed write into a message, since every action writes. */
   const send = useCallback(async (path: string, request: ApiRequest): Promise<boolean> => {
@@ -198,7 +216,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
 
     const at = positions.get(d.id);
     if (!at) return;
-    await send(`/api/sites/${siteId}/topology/nodes/${d.id}`, {
+    await send(`${base}/nodes/${d.id}`, {
       method: 'PATCH',
       json: { posX: Math.round(at.x), posY: Math.round(at.y) },
     });
@@ -210,7 +228,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
 
     if (linkingFrom !== null) {
       if (linkingFrom === node.id) { setLinkingFrom(null); return; }
-      const created = await send(`/api/sites/${siteId}/topology/links`, {
+      const created = await send(`${base}/links`, {
         json: { fromNodeId: linkingFrom, toNodeId: node.id },
       });
       setLinkingFrom(null);
@@ -221,14 +239,14 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
   };
 
   const removeNode = async (node: TopologyNode) => {
-    if (await send(`/api/sites/${siteId}/topology/nodes/${node.id}`, { method: 'DELETE' })) {
+    if (await send(`${base}/nodes/${node.id}`, { method: 'DELETE' })) {
       setSelected(null);
       await load();
     }
   };
 
   const removeLink = async (link: TopologyLink) => {
-    if (await send(`/api/sites/${siteId}/topology/links/${link.id}`, { method: 'DELETE' })) {
+    if (await send(`${base}/links/${link.id}`, { method: 'DELETE' })) {
       setSelected(null);
       await load();
     }
@@ -236,7 +254,6 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
 
   const openAsset = (node: TopologyNode) => {
     if (!node.assetNodeId) return;
-    setOpen(false);
     router.push(`/assets/${node.assetNodeId}`);
   };
 
@@ -249,6 +266,36 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
     [graph, selected],
   );
 
+  /** Configurations not on the diagram yet: what the picker and the bulk add offer. */
+  const unplaced = useMemo(() => {
+    const placed = new Set(graph?.nodes.map((n) => n.assetNodeId).filter(Boolean));
+    return (graph?.configurations ?? []).filter((c) => !placed.has(c.id));
+  }, [graph]);
+  const atThisLocation = useMemo(
+    () => (graph?.network.siteId ? unplaced.filter((c) => c.siteId === graph.network.siteId) : []),
+    [unplaced, graph],
+  );
+
+  /** One box per configuration at the location, then one reload. */
+  const addLocation = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      for (const c of atThisLocation) {
+        const ok = await send(`${base}/nodes`, {
+          json: {
+            assetNodeId: c.id, label: c.name.slice(0, 120), deviceType: c.shape,
+            ...(c.primaryIp ? { ipAddress: c.primaryIp } : {}),
+          },
+        });
+        if (!ok) break;
+      }
+    } finally {
+      setBusy(false);
+    }
+    await load();
+  };
+
   const extent = useMemo(() => {
     let w = 720;
     let h = 360;
@@ -260,20 +307,13 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
   }, [positions]);
 
   return (
-    <>
-      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
-        <Network className="size-4" />
-        Topology
-      </Button>
-
-      <Modal
-        open={open}
-        onOpenChange={setOpen}
-        title={`${siteName} — network topology`}
-        description="What is plugged into what. Separate from asset dependencies, which record reliance rather than cabling."
-        icon={Network}
-        size="lg"
-      >
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Network className="size-4 text-ink-faint" aria-hidden /> Network diagram
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
         <div className="space-y-3">
           {error && (
             <p className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-ink">
@@ -286,8 +326,14 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
               <>
                 <Button size="sm" variant="secondary" onClick={() => setAdding((v) => !v)}>
                   <Plus className="size-4" />
-                  Add node
+                  Add a box
                 </Button>
+                {atThisLocation.length > 0 && (
+                  <Button size="sm" variant="secondary" onClick={() => void addLocation()} disabled={busy}>
+                    <Layers className="size-4" />
+                    Add {graph?.network.siteName ?? 'this location'}’s configurations ({atThisLocation.length})
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant={linkingFrom ? 'primary' : 'secondary'}
@@ -311,7 +357,8 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
 
           {adding && canEdit && (
             <AddNodeForm
-              siteId={siteId}
+              base={base}
+              configurations={unplaced}
               onDone={async (created) => {
                 setAdding(false);
                 if (created) await load();
@@ -323,7 +370,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
           <div className="overflow-auto rounded-md border border-border bg-surface-sunken">
             {graph && graph.nodes.length === 0 ? (
               <p className="px-4 py-10 text-center text-sm text-ink-muted">
-                Nothing on this diagram yet. Add a node to start drawing.
+                Nothing on this diagram yet. Add a box — one of this client’s configurations, or anything else on the network.
               </p>
             ) : (
               <svg
@@ -331,7 +378,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
                 width={extent.w}
                 height={extent.h}
                 role="img"
-                aria-label={`Network diagram for ${siteName}`}
+                aria-label={`Network diagram for ${networkName}`}
                 className="block touch-none select-none"
                 onPointerMove={onPointerMove}
                 onPointerUp={() => void onPointerUp()}
@@ -424,7 +471,7 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
               <span className="ml-auto flex items-center gap-2">
                 {selectedNode?.assetNodeId && (
                   <Button size="sm" variant="link" onClick={() => openAsset(selectedNode)}>
-                    Open asset
+                    Open entry
                   </Button>
                 )}
                 {canEdit && selectedNode && (
@@ -456,41 +503,56 @@ export function TopologyDesigner({ siteId, siteName, canEdit }: TopologyDesigner
 
           <FieldHint>
             Drag a node to place it; the position is saved as soon as you let go.
-            Select a node to link it to another, open its asset, or remove it.
+            Select a box to link it to another, open its entry, or remove it. Separate from
+            Dependencies, which record reliance rather than cabling.
           </FieldHint>
         </div>
-      </Modal>
-    </>
+      </CardContent>
+    </Card>
   );
 }
 
-/** The add-a-box form. Inline rather than a second modal stacked on the first. */
+/** The add-a-box form. Inline rather than a dialog stacked on the page. */
 function AddNodeForm({
-  siteId, onDone, onError,
+  base, configurations, onDone, onError,
 }: {
-  siteId: string;
+  base: string;
+  /** The client's configurations not on the diagram yet. */
+  configurations: readonly Configuration[];
   onDone: (created: boolean) => void | Promise<void>;
   onError: (message: string | null) => void;
 }) {
+  const [mode, setMode] = useState<'configuration' | 'other'>(configurations.length > 0 ? 'configuration' : 'other');
+  const [configurationId, setConfigurationId] = useState(configurations[0]?.id ?? '');
   const [label, setLabel] = useState('');
   const [ipAddress, setIpAddress] = useState('');
   const [subnet, setSubnet] = useState('');
   const [deviceType, setDeviceType] = useState<DeviceType>('generic');
   const [busy, setBusy] = useState(false);
 
+  const chosen = configurations.find((c) => c.id === configurationId) ?? null;
+  const ready = mode === 'configuration' ? chosen !== null : label.trim() !== '';
+
   const submit = async () => {
-    if (!label.trim()) return;
+    if (!ready) return;
     setBusy(true);
     onError(null);
     try {
-      const result = await apiFetch(`/api/sites/${siteId}/topology/nodes`, {
-        json: {
-          label: label.trim(),
-          deviceType,
-          ...(ipAddress.trim() ? { ipAddress: ipAddress.trim() } : {}),
-          ...(subnet.trim() ? { subnet: subnet.trim() } : {}),
-        },
-      });
+      const json = mode === 'configuration' && chosen
+        ? {
+            assetNodeId: chosen.id,
+            label: chosen.name.slice(0, 120),
+            deviceType: chosen.shape,
+            ...(chosen.primaryIp ? { ipAddress: chosen.primaryIp } : {}),
+            ...(subnet.trim() ? { subnet: subnet.trim() } : {}),
+          }
+        : {
+            label: label.trim(),
+            deviceType,
+            ...(ipAddress.trim() ? { ipAddress: ipAddress.trim() } : {}),
+            ...(subnet.trim() ? { subnet: subnet.trim() } : {}),
+          };
+      const result = await apiFetch(`${base}/nodes`, { json });
       if (!result.ok) {
         onError(result.message);
         await onDone(false);
@@ -503,51 +565,101 @@ function AddNodeForm({
   };
 
   return (
-    <div className="grid gap-3 rounded-md border border-border bg-surface-raised p-3 sm:grid-cols-4">
-      <div className="sm:col-span-2">
-        <Label htmlFor="topology-label">Label</Label>
-        <Input
-          id="topology-label"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          placeholder="ISP handoff"
-          maxLength={120}
-        />
-      </div>
-      <div>
-        <Label htmlFor="topology-type">Type</Label>
-        <Select
-          id="topology-type"
-          value={deviceType}
-          onChange={(e) => setDeviceType(e.target.value as DeviceType)}
-        >
-          {DEVICE_TYPES.map(([value, text]) => (
-            <option key={value} value={value}>{text}</option>
-          ))}
-        </Select>
-      </div>
-      <div>
-        <Label htmlFor="topology-ip">IP address</Label>
-        <Input
-          id="topology-ip"
-          value={ipAddress}
-          onChange={(e) => setIpAddress(e.target.value)}
-          placeholder="10.0.0.1"
-          maxLength={64}
-        />
-      </div>
-      <div className="sm:col-span-2">
-        <Label htmlFor="topology-subnet">Subnet</Label>
-        <Input
-          id="topology-subnet"
-          value={subnet}
-          onChange={(e) => setSubnet(e.target.value)}
-          placeholder="10.0.0.0/24 — VLAN 20"
-          maxLength={64}
-        />
-      </div>
-      <div className="flex items-end gap-2 sm:col-span-2">
-        <Button size="sm" variant="primary" onClick={() => void submit()} disabled={busy || !label.trim()}>
+    <div className="space-y-3 rounded-md border border-border bg-surface-raised p-3">
+      <fieldset className="flex flex-wrap gap-4 text-sm" aria-label="What the box is">
+        <label className="flex items-center gap-2">
+          <input
+            type="radio"
+            name="topology-mode"
+            checked={mode === 'configuration'}
+            onChange={() => setMode('configuration')}
+            disabled={configurations.length === 0}
+          />
+          Use an existing configuration
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="radio" name="topology-mode" checked={mode === 'other'} onChange={() => setMode('other')} />
+          Something else
+        </label>
+      </fieldset>
+
+      {mode === 'configuration' ? (
+        <div className="grid gap-3 sm:grid-cols-4">
+          <div className="sm:col-span-2">
+            <Label htmlFor="topology-configuration">Configuration</Label>
+            <Select
+              id="topology-configuration"
+              value={configurationId}
+              onChange={(e) => setConfigurationId(e.target.value)}
+            >
+              {configurations.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}{c.primaryIp ? ` — ${c.primaryIp}` : ''}
+                </option>
+              ))}
+            </Select>
+            <FieldHint>Its name and IP stay in step with the configuration.</FieldHint>
+          </div>
+          <div className="sm:col-span-2">
+            <Label htmlFor="topology-subnet">Note on the box</Label>
+            <Input
+              id="topology-subnet"
+              value={subnet}
+              onChange={(e) => setSubnet(e.target.value)}
+              placeholder="Optional, e.g. core switch, rack 2"
+              maxLength={64}
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-4">
+          <div className="sm:col-span-2">
+            <Label htmlFor="topology-label">Label</Label>
+            <Input
+              id="topology-label"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="ISP handoff"
+              maxLength={120}
+            />
+          </div>
+          <div>
+            <Label htmlFor="topology-type">Type</Label>
+            <Select
+              id="topology-type"
+              value={deviceType}
+              onChange={(e) => setDeviceType(e.target.value as DeviceType)}
+            >
+              {DEVICE_TYPES.map(([value, text]) => (
+                <option key={value} value={value}>{text}</option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="topology-ip">IP address</Label>
+            <Input
+              id="topology-ip"
+              value={ipAddress}
+              onChange={(e) => setIpAddress(e.target.value)}
+              placeholder="10.0.0.1"
+              maxLength={64}
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <Label htmlFor="topology-subnet">Subnet</Label>
+            <Input
+              id="topology-subnet"
+              value={subnet}
+              onChange={(e) => setSubnet(e.target.value)}
+              placeholder="10.0.0.0/24 — VLAN 20"
+              maxLength={64}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-end gap-2">
+        <Button size="sm" variant="primary" onClick={() => void submit()} disabled={busy || !ready}>
           {busy && <Loader2 className="size-4 animate-spin" />}
           Add
         </Button>
