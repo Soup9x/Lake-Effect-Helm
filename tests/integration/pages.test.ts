@@ -91,6 +91,8 @@ let pageId = '';
 let renderedFolderId = '';
 /** Set in beforeAll: a contact (0850), because the contact page takes one in its path. */
 let contactId = '';
+/** Set in beforeAll: a password entry with no secret, for its own page layout. */
+let credentialId = '';
 
 beforeAll(async () => {
   resetDatabase();
@@ -161,6 +163,18 @@ beforeAll(async () => {
       RETURNING id
     `;
     contactId = contact!.id;
+
+    const [credential] = await tx<{ id: string }[]>`
+      INSERT INTO asset_node (tenant_id, organization_id, node_type, name, created_by, updated_by)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'credential', 'Rendered login',
+              ${IDS.admin1}::uuid, ${IDS.admin1}::uuid)
+      RETURNING id
+    `;
+    await tx`
+      INSERT INTO credential (id, tenant_id, username, url)
+      VALUES (${credential!.id}::uuid, ${IDS.tenant1}::uuid, 'rendered-admin', 'https://acme.test')
+    `;
+    credentialId = credential!.id;
 
     /*
      * A checklist run, for the same reason: the run page takes one in its path.
@@ -306,6 +320,20 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () =>
       (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
         params: p({ nodeId: IDS.domain }),
+      }),
+  },
+  {
+    name: 'the asset page, for a network',
+    load: async () =>
+      (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
+        params: p({ nodeId: IDS.network }),
+      }),
+  },
+  {
+    name: 'the asset page, for a password entry',
+    load: async () =>
+      (await import('../../src/app/(app)/assets/[nodeId]/page')).default({
+        params: p({ nodeId: credentialId }),
       }),
   },
   {
@@ -1465,4 +1493,41 @@ describe('a malformed id in the path', () => {
       );
     });
   }
+});
+
+/** Every CardTitle's text in a rendered tree, in order. */
+function cardTitles(node: unknown): string[] {
+  const out: string[] = [];
+  const text = (value: unknown): string =>
+    typeof value === 'string' || typeof value === 'number' ? String(value)
+      : Array.isArray(value) ? value.map(text).join('')
+        : value && typeof value === 'object' && 'props' in value
+          ? text((value as { props: { children?: unknown } }).props.children) : '';
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(walk); return; }
+    if (!value || typeof value !== 'object') return;
+    const element = value as { type?: unknown; props?: Record<string, unknown> };
+    if (typeof element.type === 'function' && element.type.name === 'CardTitle') {
+      out.push(text(element.props?.children).trim());
+    }
+    if (element.props) Object.values(element.props).forEach(walk);
+  };
+  walk(node);
+  return out;
+}
+
+describe('how each kind of entry lays out its cards', () => {
+  const assetPage = async (nodeId: string) =>
+    (await import('../../src/app/(app)/assets/[nodeId]/page')).default({ params: p({ nodeId }) });
+
+  it('gives a password entry no Details card, and its fields in Credentials under the notes', async () => {
+    const titles = cardTitles(await assetPage(credentialId));
+    expect(titles).not.toContain('Details');
+    expect(titles).toContain('Credentials');
+    expect(titles.indexOf('Credentials'), 'straight after Notes').toBe(titles.indexOf('Notes') + 1);
+  });
+
+  it('shows no Credentials card on a configuration that holds no secret', async () => {
+    expect(cardTitles(await assetPage(IDS.globexServer))).not.toContain('Credentials');
+  });
 });

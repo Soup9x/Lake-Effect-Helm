@@ -49,7 +49,9 @@ export const ORG_CATEGORIES: readonly OrgCategory[] = [
   { slug: 'domains',        label: 'Domain Tracker', kind: 'node',  source: 'domain',          icon: 'Globe' },
   { slug: 'locations',      label: 'Locations',      kind: 'table', source: 'site',            icon: 'MapPin' },
   { slug: 'networks',       label: 'Networks',       kind: 'node',  source: 'network',         icon: 'Network' },
-  { slug: 'passwords',      label: 'Passwords',      kind: 'node',  source: 'credential',      icon: 'KeyRound' },
+  // Labelled Credentials; the slug stays 'passwords' so saved links, sidebar
+  // layouts (helm.sidebar_layout_valid) and bookmarks keep working.
+  { slug: 'passwords',      label: 'Credentials',    kind: 'node',  source: 'credential',      icon: 'KeyRound' },
   { slug: 'ssl',            label: 'SSL Tracker',    kind: 'node',  source: 'ssl_certificate', icon: 'ShieldCheck' },
 
   // The rest of Helm's node types. Real, less often reached, and therefore

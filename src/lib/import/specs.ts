@@ -117,7 +117,7 @@ const SPECS: readonly ImportSpec[] = [
     hint: 'One person per row. First and last name are required.' },
   { slug: 'locations', label: 'Locations', fields: SITE_FIELDS,
     hint: 'One site per row. Name is required.' },
-  { slug: 'passwords', label: 'Passwords', fields: PASSWORD_FIELDS,
+  { slug: 'passwords', label: 'Credentials', fields: PASSWORD_FIELDS,
     hint: 'One credential per row. Name and password are required; the password is encrypted on arrival and never stored in the file you uploaded.' },
   // Every creatable asset category, sharing one spec.
   ...ORG_CATEGORIES.filter((c) => c.kind === 'node' && c.source !== 'credential' && c.source !== 'sop')

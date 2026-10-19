@@ -362,9 +362,12 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
    * "No credentials attached" card on each of those was the complaint. The
    * card stays where credentials are the normal case, and anywhere one has
    * actually been attached.
+   *
+   * Not configurations: their passwords are credential entries linked as
+   * dependencies, so the card shows only on one that already holds a secret.
    */
   const CREDENTIAL_TYPES = new Set([
-    'device', 'application', 'directory_service', 'network', 'vendor', 'isp_circuit',
+    'application', 'directory_service', 'network', 'vendor', 'isp_circuit',
   ]);
   const showCredentials = secrets.length > 0 || totp !== null || CREDENTIAL_TYPES.has(node.node_type);
 
@@ -384,6 +387,259 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         recordedLabel: node.node_type === 'domain' ? 'Expires' : 'Not after',
       };
   const canWrite = !isClientRole(identity.roleKey);
+
+  /*
+   * THE CARDS, named so each kind of entry can lay them out its own way:
+   *
+   *   A password entry has no Details card. Its username, URL and other
+   *   fields sit in the Credentials card, straight under the notes, because
+   *   that card is what somebody opened the entry for.
+   *   Networks and configurations get a full-width Details card, like Notes:
+   *   their fields are the long part of the page.
+   *   Everything else keeps Details and Dependencies side by side.
+   */
+  const isCredential = node.node_type === 'credential';
+  const wideDetails = node.node_type === 'network' || node.node_type === 'device';
+
+  const detailsCard = (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-2">
+        <CardTitle>Details</CardTitle>
+        {/* Edits the TEMPLATE's fields, which is why it lives on this card
+            and not beside the header's Edit: that one writes asset_node's
+            own columns and knows nothing about a schema. */}
+        {device && canWrite && (
+          <ConfigurationEdit
+            deviceId={node.id}
+            organizationId={node.organization_id}
+            sites={sites}
+            contacts={device.contacts}
+            connectable={device.connectable}
+          />
+        )}
+        {!record && !device && canWrite && detailFields.length > 0 && (
+          <DetailEditForm
+            nodeId={node.id}
+            nodeType={node.node_type}
+            fields={detailFields}
+            values={detailRaw}
+          />
+        )}
+        {record && record.editableFields !== null && canWrite && (
+          <FlexibleRecordForm
+            type={{
+              id: record.typeId,
+              name: record.typeName,
+              fields: record.editableFields,
+            }}
+            organizationId={node.organization_id}
+            sites={sites}
+            record={{
+              nodeId: node.id,
+              values: record.data,
+              heldSecrets: record.heldSecrets,
+            }}
+            trigger={
+              <Button variant="secondary" size="sm">
+                Edit fields
+              </Button>
+            }
+          />
+        )}
+      </CardHeader>
+      <CardContent>
+        {record ? (
+          record.fields.length === 0 ? (
+            <p className="text-sm text-ink-faint">
+              This template has no fields, so there is nothing recorded against it.
+            </p>
+          ) : (
+            <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
+              {record.fields.map((field) => (
+                <div key={field.key} className="contents">
+                  <dt className="truncate text-ink-muted" title={field.help}>
+                    {field.label}
+                  </dt>
+                  <dd className="min-w-0 break-words text-ink">
+                    {field.secret ? (
+                      <span className="text-ink-faint">
+                        {field.held ? 'Encrypted — see Credentials below' : 'Not set'}
+                      </span>
+                    ) : (
+                      renderValue(field.value)
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )
+        ) : Object.keys(detail).length === 0 ? (
+          <p className="text-sm text-ink-faint">
+            {detailFields.length > 0 && canWrite
+              ? 'Nothing recorded yet. Edit details to fill this in.'
+              : 'No type-specific detail recorded.'}
+          </p>
+        ) : (
+          <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
+            {Object.entries(detail).map(([key, value]) => (
+              <div key={key} className="contents">
+                <dt className="truncate text-ink-muted">{detailLabel(key)}</dt>
+                <dd className="min-w-0 break-words text-ink">
+                  {detailValue(key, value)}
+                  {key === 'cidr' && subnetMask && (
+                    <span className="ml-2 text-xs text-ink-faint">mask {subnetMask}</span>
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        <p className="mt-4 text-xs text-ink-faint">
+          Last updated {formatDateTime(node.updated_at)}
+          {record && ` · ${record.typeName} v${record.pinnedVersion}`}
+        </p>
+        {record?.needsMigration && (
+          <p className="mt-2 text-xs text-warning">
+            This record was written against version {record.pinnedVersion} of the template,
+            which has since changed in a way that may not accept it. Opening “Edit fields”
+            and saving validates it against the current version and clears this.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  /*
+   * Above Dependencies because it is about THIS asset's own facts, and
+   * below the detail card because it comments on a value shown there.
+   * Rendered whenever the node type is probeable — including when
+   * checking is switched off, since "off" is the sentence that stops
+   * somebody hunting a fault that does not exist.
+   */
+  const checkNote = checkState && <ExternalCheckNote state={checkState} />;
+
+  const dependenciesCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Network className="size-4 text-ink-faint" aria-hidden /> Dependencies
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {edges.length === 0 ? (
+          <p className="text-sm text-ink-faint">
+            Nothing is linked to this asset yet. Links are what make an impact assessment
+            possible.
+          </p>
+        ) : (
+          /*
+            Chips, not a labelled list. Each one IS the link to the asset
+            it names, so the obvious click goes where the reader expects
+            rather than to a small piece of text beside a relation label
+            most people had to translate anyway. The note, if there is
+            one, is the chip's tooltip.
+          */
+          <div className="flex flex-wrap gap-2">
+            {edges.map((edge) => (
+              <DependencyChip
+                key={`${edge.relation}:${edge.other_id}`}
+                href={`/assets/${edge.other_id}`}
+                label={edge.other_name}
+                kind={humanise(edge.other_type)}
+                note={edge.note}
+                removable={edge.origin === 'manual' && canWrite}
+                sourceNodeId={node.id}
+                relation={edge.relation}
+                targetNodeId={edge.other_id}
+              />
+            ))}
+          </div>
+        )}
+        <DependencyEditor
+          nodeId={node.id}
+          organizationId={node.organization_id}
+          canLink={canWrite}
+        />
+      </CardContent>
+    </Card>
+  );
+
+  const credentialFacts = isCredential && Object.keys(detail).length > 0 ? (
+    <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
+      {Object.entries(detail).map(([key, value]) => (
+        <div key={key} className="contents">
+          <dt className="truncate text-ink-muted">{detailLabel(key)}</dt>
+          <dd className="min-w-0 break-words text-ink">{detailValue(key, value)}</dd>
+        </div>
+      ))}
+    </dl>
+  ) : null;
+
+  const credentialsCard = (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-2">
+        <CardTitle>Credentials</CardTitle>
+        {/* A password entry has no Details card: its username, URL and the
+            rest of its fields are edited and shown here, beside the secret. */}
+        {isCredential && canWrite && detailFields.length > 0 && (
+          <DetailEditForm
+            nodeId={node.id}
+            nodeType={node.node_type}
+            fields={detailFields}
+            values={detailRaw}
+          />
+        )}
+      </CardHeader>
+      <CardContent className={secrets.length === 0 && !totp && !credentialFacts ? 'p-0' : 'space-y-5'}>
+        {credentialFacts}
+        {secrets.length === 0 && !totp ? (
+          <EmptyState title={isCredential ? 'No password stored' : 'No credentials attached to this asset'} />
+        ) : (
+          secrets.map((secret) => (
+            <div key={secret.id} className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-ink">{secret.label}</span>
+                <Badge tone="neutral">{humanise(secret.kind)}</Badge>
+                <Badge
+                  tone={
+                    secret.sensitivity === 'critical'
+                      ? 'critical'
+                      : secret.sensitivity === 'elevated'
+                        ? 'warning'
+                        : 'neutral'
+                  }
+                >
+                  {secret.sensitivity}
+                </Badge>
+                {secret.requires_step_up && <Badge tone="warning">Step-up required</Badge>}
+                {isWeakStrength(secret.strength_score) && (
+                  <Badge tone="warning">{strengthLabel(secret.strength_score)}</Badge>
+                )}
+              </div>
+              <p className="text-xs text-ink-faint">
+                Last rotated {formatDate(secret.last_rotated_at)}
+                {secret.rotation_due_at && ` · due ${formatDate(secret.rotation_due_at)}`}
+              </p>
+              <RevealButton
+                secretId={secret.id}
+                label={secret.label}
+                requiresReason={secret.requires_reason}
+                requiresStepUp={secret.requires_step_up}
+              />
+            </div>
+          ))
+        )}
+        {totp && (
+          <TotpPanel
+            nodeId={node.id}
+            issuer={totp.totp_issuer}
+            account={totp.totp_account}
+            canReveal={canReveal}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
 
   return (
     <>
@@ -447,166 +703,24 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           canEdit={canWrite}
         />
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader className="flex-row items-center justify-between gap-2">
-              <CardTitle>Details</CardTitle>
-              {/* Edits the TEMPLATE's fields, which is why it lives on this card
-                  and not beside the header's Edit: that one writes asset_node's
-                  own columns and knows nothing about a schema. */}
-              {device && canWrite && (
-                <ConfigurationEdit
-                  deviceId={node.id}
-                  organizationId={node.organization_id}
-                  sites={sites}
-                  contacts={device.contacts}
-                  connectable={device.connectable}
-                />
-              )}
-              {!record && !device && canWrite && detailFields.length > 0 && (
-                <DetailEditForm
-                  nodeId={node.id}
-                  nodeType={node.node_type}
-                  fields={detailFields}
-                  values={detailRaw}
-                />
-              )}
-              {record && record.editableFields !== null && canWrite && (
-                <FlexibleRecordForm
-                  type={{
-                    id: record.typeId,
-                    name: record.typeName,
-                    fields: record.editableFields,
-                  }}
-                  organizationId={node.organization_id}
-                  sites={sites}
-                  record={{
-                    nodeId: node.id,
-                    values: record.data,
-                    heldSecrets: record.heldSecrets,
-                  }}
-                  trigger={
-                    <Button variant="secondary" size="sm">
-                      Edit fields
-                    </Button>
-                  }
-                />
-              )}
-            </CardHeader>
-            <CardContent>
-              {record ? (
-                record.fields.length === 0 ? (
-                  <p className="text-sm text-ink-faint">
-                    This template has no fields, so there is nothing recorded against it.
-                  </p>
-                ) : (
-                  <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
-                    {record.fields.map((field) => (
-                      <div key={field.key} className="contents">
-                        <dt className="truncate text-ink-muted" title={field.help}>
-                          {field.label}
-                        </dt>
-                        <dd className="min-w-0 break-words text-ink">
-                          {field.secret ? (
-                            <span className="text-ink-faint">
-                              {field.held ? 'Encrypted — see Credentials below' : 'Not set'}
-                            </span>
-                          ) : (
-                            renderValue(field.value)
-                          )}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                )
-              ) : Object.keys(detail).length === 0 ? (
-                <p className="text-sm text-ink-faint">
-                  {detailFields.length > 0 && canWrite
-                    ? 'Nothing recorded yet. Edit details to fill this in.'
-                    : 'No type-specific detail recorded.'}
-                </p>
-              ) : (
-                <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
-                  {Object.entries(detail).map(([key, value]) => (
-                    <div key={key} className="contents">
-                      <dt className="truncate text-ink-muted">{detailLabel(key)}</dt>
-                      <dd className="min-w-0 break-words text-ink">
-                        {detailValue(key, value)}
-                        {key === 'cidr' && subnetMask && (
-                          <span className="ml-2 text-xs text-ink-faint">mask {subnetMask}</span>
-                        )}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              )}
-              <p className="mt-4 text-xs text-ink-faint">
-                Last updated {formatDateTime(node.updated_at)}
-                {record && ` · ${record.typeName} v${record.pinnedVersion}`}
-              </p>
-              {record?.needsMigration && (
-                <p className="mt-2 text-xs text-warning">
-                  This record was written against version {record.pinnedVersion} of the template,
-                  which has since changed in a way that may not accept it. Opening “Edit fields”
-                  and saving validates it against the current version and clears this.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          {/*
-            Above Dependencies because it is about THIS asset's own facts, and
-            below the detail card because it comments on a value shown there.
-            Rendered whenever the node type is probeable — including when
-            checking is switched off, since "off" is the sentence that stops
-            somebody hunting a fault that does not exist.
-          */}
-          {checkState && <ExternalCheckNote state={checkState} />}
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Network className="size-4 text-ink-faint" aria-hidden /> Dependencies
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {edges.length === 0 ? (
-                <p className="text-sm text-ink-faint">
-                  Nothing is linked to this asset yet. Links are what make an impact assessment
-                  possible.
-                </p>
-              ) : (
-                /*
-                  Chips, not a labelled list. Each one IS the link to the asset
-                  it names, so the obvious click goes where the reader expects
-                  rather than to a small piece of text beside a relation label
-                  most people had to translate anyway. The note, if there is
-                  one, is the chip's tooltip.
-                */
-                <div className="flex flex-wrap gap-2">
-                  {edges.map((edge) => (
-                    <DependencyChip
-                      key={`${edge.relation}:${edge.other_id}`}
-                      href={`/assets/${edge.other_id}`}
-                      label={edge.other_name}
-                      kind={humanise(edge.other_type)}
-                      note={edge.note}
-                      removable={edge.origin === 'manual' && canWrite}
-                      sourceNodeId={node.id}
-                      relation={edge.relation}
-                      targetNodeId={edge.other_id}
-                    />
-                  ))}
-                </div>
-              )}
-              <DependencyEditor
-                nodeId={node.id}
-                organizationId={node.organization_id}
-                canLink={canWrite}
-              />
-            </CardContent>
-          </Card>
-        </div>
+        {isCredential ? (
+          <>
+            {credentialsCard}
+            {dependenciesCard}
+          </>
+        ) : wideDetails ? (
+          <>
+            {detailsCard}
+            {checkNote}
+            {dependenciesCard}
+          </>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {detailsCard}
+            {checkNote}
+            {dependenciesCard}
+          </div>
+        )}
 
         {/*
           A procedure's steps, its published versions, and the controls that
@@ -637,60 +751,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           />
         )}
 
-        {showCredentials && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Credentials</CardTitle>
-          </CardHeader>
-          <CardContent className={secrets.length === 0 && !totp ? 'p-0' : 'space-y-5'}>
-            {secrets.length === 0 && !totp ? (
-              <EmptyState title="No credentials attached to this asset" />
-            ) : (
-              secrets.map((secret) => (
-                <div key={secret.id} className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium text-ink">{secret.label}</span>
-                    <Badge tone="neutral">{humanise(secret.kind)}</Badge>
-                    <Badge
-                      tone={
-                        secret.sensitivity === 'critical'
-                          ? 'critical'
-                          : secret.sensitivity === 'elevated'
-                            ? 'warning'
-                            : 'neutral'
-                      }
-                    >
-                      {secret.sensitivity}
-                    </Badge>
-                    {secret.requires_step_up && <Badge tone="warning">Step-up required</Badge>}
-                    {isWeakStrength(secret.strength_score) && (
-                      <Badge tone="warning">{strengthLabel(secret.strength_score)}</Badge>
-                    )}
-                  </div>
-                  <p className="text-xs text-ink-faint">
-                    Last rotated {formatDate(secret.last_rotated_at)}
-                    {secret.rotation_due_at && ` · due ${formatDate(secret.rotation_due_at)}`}
-                  </p>
-                  <RevealButton
-                    secretId={secret.id}
-                    label={secret.label}
-                    requiresReason={secret.requires_reason}
-                    requiresStepUp={secret.requires_step_up}
-                  />
-                </div>
-              ))
-            )}
-            {totp && (
-              <TotpPanel
-                nodeId={node.id}
-                issuer={totp.totp_issuer}
-                account={totp.totp_account}
-                canReveal={canReveal}
-              />
-            )}
-          </CardContent>
-        </Card>
-        )}
+        {!isCredential && showCredentials && credentialsCard}
 
         {device && (
           <Card>
@@ -737,14 +798,17 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           </Card>
         )}
 
-        <NodeAttachmentsCard
-          nodeId={node.id}
-          organizationId={node.organization_id}
-          attachments={attachmentRows}
-          canWrite={canWrite}
-          canDelete={canDeleteAttachments}
-          maxBytes={maxUploadBytes()}
-        />
+        {/* Not on a password entry, unless something is already attached. */}
+        {(!isCredential || attachmentRows.length > 0) && (
+          <NodeAttachmentsCard
+            nodeId={node.id}
+            organizationId={node.organization_id}
+            attachments={attachmentRows}
+            canWrite={canWrite}
+            canDelete={canDeleteAttachments}
+            maxBytes={maxUploadBytes()}
+          />
+        )}
       </PageBody>
     </>
   );
