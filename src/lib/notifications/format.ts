@@ -63,7 +63,10 @@ export function severityOf(event: NotificationEvent): Severity {
     }
     case 'export.revoked':
     case 'key.rotated':
+    case 'task.assigned':
       return 'notice';
+    case 'task.overdue':
+      return 'warning';
     default:
       return 'info';
   }
@@ -106,6 +109,7 @@ const FIELD_ORDER = [
   'include_secrets', 'kind', 'format', 'purpose', 'sensitivity', 'label',
   'cause', 'record_count', 'secret_count', 'byte_size', 'download_number',
   'days_remaining', 'expires_at', 'provider', 'error',
+  'run', 'procedure', 'step', 'assignee', 'due_at',
 ];
 
 function labelise(key: string): string {
@@ -276,6 +280,10 @@ function titleFor(event: string): string {
       return 'Integration failing';
     case 'key.rotated':
       return 'Encryption key moved';
+    case 'task.assigned':
+      return 'Checklist work assigned';
+    case 'task.overdue':
+      return 'Checklist step overdue';
     default:
       return 'Lake Effect Helm';
   }

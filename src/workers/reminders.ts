@@ -100,9 +100,15 @@ async function raiseReminders(ctx: JobContext): Promise<JobResult> {
     SELECT helm.raise_task_reminders(500) AS raised
   `;
   const raised = Number(row?.raised ?? 0);
+  // And the team-channel side (0870): steps that fell due, for destinations
+  // subscribed to task.overdue. Independent of anybody's own preferences.
+  const [channel] = await db('worker')<{ queued: number }[]>`
+    SELECT helm.raise_task_channel_events(500) AS queued
+  `;
+  const queued = Number(channel?.queued ?? 0);
 
-  if (raised > 0) ctx.log.info('raised', { reminders: raised });
-  return { counts: { raised }, idle: raised === 0 };
+  if (raised > 0 || queued > 0) ctx.log.info('raised', { reminders: raised, channelEvents: queued });
+  return { counts: { raised, channelEvents: queued }, idle: raised === 0 && queued === 0 };
 }
 
 async function deliverReminders(ctx: JobContext): Promise<JobResult> {

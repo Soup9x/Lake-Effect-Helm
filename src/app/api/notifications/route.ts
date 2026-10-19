@@ -43,6 +43,8 @@ const EVENTS = [
   'expiration.warning',
   'integration.failed',
   'key.rotated',
+  'task.assigned',
+  'task.overdue',
 ] as const;
 
 const destinationSchema = z.object({

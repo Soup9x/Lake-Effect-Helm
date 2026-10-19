@@ -1011,3 +1011,94 @@ describe('who may point Helm at a channel', () => {
     expect(response.status).toBe(400);
   });
 });
+
+describe('checklist work in a team channel (0870)', () => {
+  /** A live run of the fixture procedure with two steps, written directly. */
+  async function runWithSteps(assignee: string | null): Promise<{ runId: string; steps: string[] }> {
+    const sql = superuserSql();
+    try {
+      const [run] = await sql<{ id: string }[]>`
+        INSERT INTO sop_run (tenant_id, organization_id, sop_id, sop_version_id, title, status, started_at)
+        SELECT ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, v.sop_id, v.id, 'Offboard Dana', 'in_progress', now()
+        FROM sop_version v WHERE v.sop_id = ${IDS.sopOffboard}::uuid
+        ORDER BY v.version DESC LIMIT 1
+        RETURNING id
+      `;
+      const steps = await sql<{ id: string }[]>`
+        INSERT INTO sop_run_step (tenant_id, run_id, position, title, kind, assigned_to)
+        VALUES (${IDS.tenant1}::uuid, ${run!.id}::uuid, 1, 'Disable the account', 'manual', ${assignee}::uuid),
+               (${IDS.tenant1}::uuid, ${run!.id}::uuid, 2, 'Forward the mailbox', 'manual', ${assignee}::uuid)
+        RETURNING id
+      `;
+      return { runId: run!.id, steps: steps.map((r) => r.id) };
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  }
+  const queuedFor = async (event: string) => {
+    const sql = superuserSql();
+    try {
+      return await sql<{ subject: string; payload: Record<string, unknown> }[]>`
+        SELECT subject, payload FROM webhook_delivery WHERE event_type = ${event} ORDER BY created_at
+      `;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  };
+
+  it('tells the channel once per run per person when work is assigned', async () => {
+    await seedDestination('https://hooks.example.test/a', 'teams', ['task.assigned']);
+    const { steps } = await runWithSteps(IDS.tech1);
+
+    let queued = await queuedFor('task.assigned');
+    expect(queued, 'two steps for one person on one run is one message').toHaveLength(1);
+    expect(queued[0]!.subject).toContain('was assigned work on “Offboard Dana”');
+    expect(Object.keys(queued[0]!.payload).sort()).toEqual(['assignee', 'due_at', 'procedure', 'run', 'step']);
+
+    // Handing a step to somebody else is news; handing it back is not twice.
+    const sql = superuserSql();
+    try {
+      await sql`UPDATE sop_run_step SET assigned_to = ${IDS.admin1}::uuid WHERE id = ${steps[0]!}::uuid`;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+    queued = await queuedFor('task.assigned');
+    expect(queued).toHaveLength(2);
+  });
+
+  it('tells the channel when a step falls due undone, once', async () => {
+    await seedDestination('https://hooks.example.test/b', 'discord', ['task.overdue']);
+    const { steps } = await runWithSteps(IDS.tech1);
+    const sql = superuserSql();
+    try {
+      await sql`UPDATE sop_run_step SET due_at = now() - interval '2 hours' WHERE id = ${steps[0]!}::uuid`;
+      // Long overdue: before the window, so a newly added channel is not flooded.
+      await sql`UPDATE sop_run_step SET due_at = now() - interval '3 days' WHERE id = ${steps[1]!}::uuid`;
+      const [first] = await sql<{ n: number }[]>`SELECT helm.raise_task_channel_events(500) AS n`;
+      const [again] = await sql<{ n: number }[]>`SELECT helm.raise_task_channel_events(500) AS n`;
+      expect(first!.n).toBe(1);
+      expect(again!.n, 'the sweep runs hourly and says it once').toBe(0);
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+    const [overdue] = await queuedFor('task.overdue');
+    expect(overdue!.subject).toContain('“Disable the account” is overdue');
+  });
+
+  it('is not sent to a channel that did not subscribe', async () => {
+    await seedDestination('https://hooks.example.test/c', 'slack', ['export.requested']);
+    await runWithSteps(IDS.tech1);
+    expect(await queuedFor('task.assigned')).toHaveLength(0);
+  });
+
+  it('is in the vocabulary the API and the database share', async () => {
+    const { NOTIFICATION_EVENTS } = await import('../../src/lib/notifications/queries');
+    const sql = superuserSql();
+    try {
+      const [row] = await sql<{ events: string[] }[]>`SELECT helm.notification_events() AS events`;
+      expect([...NOTIFICATION_EVENTS].sort()).toEqual([...row!.events].sort());
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+});
