@@ -20,7 +20,8 @@
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { SearchBox } from './search-box';
 import { useShell } from './shell-context';
 import { cn } from '@/lib/ui/cn';
 import { HelmMark } from '../ui/helm-mark';
@@ -72,33 +73,6 @@ function activeTab(pathname: string): TopNavTab | undefined {
     }
   }
   return best;
-}
-
-/** One utility icon. A button, not a link, when it opens something in place. */
-function Utility({
-  label,
-  icon: Icon,
-  href,
-  onClick,
-}: {
-  label: string;
-  icon: typeof Search;
-  href?: string;
-  onClick?: () => void;
-}) {
-  const className =
-    'flex size-8 items-center justify-center rounded-md text-nav-ink transition-colors ' +
-    'hover:bg-white/10 hover:text-nav-ink-active focus-visible:text-nav-ink-active';
-  const inner = <Icon className="size-4" aria-hidden />;
-  return href ? (
-    <Link href={href} className={className} title={label} aria-label={label}>
-      {inner}
-    </Link>
-  ) : (
-    <button type="button" className={className} title={label} aria-label={label} onClick={onClick}>
-      {inner}
-    </button>
-  );
 }
 
 export function TopNav({
@@ -167,10 +141,11 @@ export function TopNav({
           same icon, same destination — and the badge is the one that says in
           its own comment that it is the route to a human.
 
-          What remains is Search, plus the per-user controls the shell passes
+          What remains is the search box — suggestions as you type, in this
+          client or all of them — plus the per-user controls the shell passes
           in: Recently viewed (a real popover now) and the notification bell.
         */}
-        <Utility label="Search" icon={Search} href="/search" />
+        <SearchBox />
         {utilities}
         {/*
           Only rendered inside an organization: there is no drawer to collapse
