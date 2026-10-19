@@ -482,6 +482,16 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
       }),
   },
   {
+    // Locations: rows carry the whole location to the edit dialog (0840), so
+    // this is the page that crosses the server/client boundary with them.
+    name: 'the Locations grid',
+    load: async () =>
+      (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({
+        params: p({ organizationId: IDS.orgAcme, category: 'locations' }),
+        searchParams: p({}),
+      }),
+  },
+  {
     name: 'the flexible-asset grid',
     load: async () =>
       (await import('../../src/app/(app)/organizations/[organizationId]/flexible/[typeId]/page'))

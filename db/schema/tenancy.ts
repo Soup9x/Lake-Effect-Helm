@@ -7,8 +7,9 @@
  * in db/sql — which is why db/sql is the schema authority and this file is the
  * query layer.
  */
+import { sql } from 'drizzle-orm';
 import { boolean, index, integer, jsonb, numeric, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import { auditColumns, citext, softDelete, textArray, tstz } from './_types';
+import { auditColumns, citext, inetArray, softDelete, textArray, tstz } from './_types';
 import { organizationRelationship, organizationStatus, tenantStatus } from './enums';
 
 export const tenant = pgTable('tenant', {
@@ -93,6 +94,8 @@ export const site = pgTable('site', {
   physicalSecurity: text('physical_security'),
   /** Informal context. `accessNotes` is how to get in; this is everything else. */
   notes: text('notes'),
+  /** Static WAN addresses or blocks the location is reached on (0840). */
+  publicIps: inetArray('public_ips').notNull().default(sql`'{}'`),
   ...auditColumns,
   ...softDelete,
 }, (t) => [

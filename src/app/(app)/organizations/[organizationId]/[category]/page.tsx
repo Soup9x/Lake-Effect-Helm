@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import { siteValuesFrom } from '@/lib/sites/values';
 import { isUuid } from '@/lib/ids';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -264,11 +265,13 @@ export default async function CategoryPage({
     }
 
     if (category.source === 'site') {
-      const rows = await tx<{
-        id: string; name: string; code: string | null; city: string | null;
-        main_phone: string | null; is_primary: boolean; updated_at: Date;
-      }[]>`
-        SELECT id, name, code, city, main_phone, is_primary, updated_at
+      const rows = await tx<(Parameters<typeof siteValuesFrom>[0] & {
+        id: string; updated_at: Date;
+      })[]>`
+        SELECT id, name, code, is_primary, address_line1, address_line2, city, region, postal_code,
+               country, timezone, main_phone, after_hours_phone,
+               ARRAY(SELECT abbrev(ip) FROM unnest(public_ips) AS ip) AS public_ips,
+               access_notes, physical_security, notes, updated_at
         FROM site
         WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
         ORDER BY is_primary DESC, name
@@ -286,6 +289,8 @@ export default async function CategoryPage({
           flagged: r.is_primary,
           updatedAt: r.updated_at.toISOString(),
           removeKind: 'site',
+          // A location has no page of its own; Edit opens the location dialog.
+          editSite: { organizationId, values: siteValuesFrom(r) },
         })),
       };
     }

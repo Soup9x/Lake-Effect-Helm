@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
+import { publicIpsSchema } from '@/lib/sites/public-ips';
 
 const patchSchema = z
   .object({
@@ -18,6 +19,10 @@ const patchSchema = z
     afterHoursPhone: z.string().trim().max(40).nullable().optional(),
     /** Informal context, bounded at 4000 characters by a CHECK in 0370. */
     notes: z.string().trim().max(4000).nullable().optional(),
+    accessNotes: z.string().trim().max(4000).nullable().optional(),
+    physicalSecurity: z.string().trim().max(4000).nullable().optional(),
+    /** The whole list; an empty one clears it (0840). */
+    publicIps: publicIpsSchema.nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
 
@@ -73,6 +78,9 @@ export const PATCH = tenantRoute(
         main_phone        = ${body.mainPhone === undefined ? tx`main_phone` : body.mainPhone},
         after_hours_phone = ${body.afterHoursPhone === undefined ? tx`after_hours_phone` : body.afterHoursPhone},
         notes             = ${body.notes === undefined ? tx`notes` : body.notes},
+        access_notes      = ${body.accessNotes === undefined ? tx`access_notes` : body.accessNotes},
+        physical_security = ${body.physicalSecurity === undefined ? tx`physical_security` : body.physicalSecurity},
+        public_ips        = ${body.publicIps === undefined ? tx`public_ips` : tx`${body.publicIps ?? []}::inet[]`},
         updated_at        = now(),
         updated_by        = ${identity.actorId}::uuid
       WHERE id = ${siteId.data}::uuid AND deleted_at IS NULL
