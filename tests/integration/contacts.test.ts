@@ -26,6 +26,7 @@ import { GET as getContact, PATCH as patchContact, DELETE as deleteContact } fro
 import { readChannels } from '../../src/lib/contacts/channels';
 import { listContacts } from '../../src/lib/clients/queries';
 import { loadOrgNav } from '../../src/lib/nav/org-sidebar';
+import { PATCH as patchDevice } from '../../src/app/api/devices/[deviceId]/route';
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
@@ -276,5 +277,45 @@ describe('archiving a contact', () => {
       .toMatchObject({ contactId: id, archived: false });
     await expect(contactPage({ params: p({ contactId: '00000000-0000-4000-8000-000000000000' }) }))
       .rejects.toThrow(/NEXT_HTTP_ERROR_FALLBACK;404/);
+  });
+});
+
+describe('"Contact for", from the person’s side', () => {
+  const p = <T,>(value: T) => Promise.resolve(value);
+  const card = async (contactId: string) => {
+    const page = await (await import('../../src/app/(app)/contacts/[contactId]/page')).default({ params: p({ contactId }) });
+    return propsOf(page, 'ContactForCard') as {
+      linked: { id: string; name: string }[];
+      options: { id: string; name: string; currentContact: string | null }[];
+      canEdit: boolean;
+    };
+  };
+
+  it('lists the configurations naming this person, offers the rest, and the add is the configuration’s own write', async () => {
+    const id = await create({ firstName: 'Connie', lastName: 'Fig' });
+    currentUser = ADMIN;
+    let props = await card(id);
+    expect(props.canEdit).toBe(true);
+    expect(props.linked).toEqual([]);
+    expect(props.options.map((o) => o.id)).toContain(IDS.firewall);
+    expect(props.options.map((o) => o.id), 'only this client’s configurations').not.toContain(IDS.globexServer);
+
+    const response = await patchDevice(req('PATCH', `/api/devices/${IDS.firewall}`, { contactId: id }),
+      { params: Promise.resolve({ deviceId: IDS.firewall }) });
+    expect(response.status, await response.clone().text()).toBe(200);
+
+    props = await card(id);
+    expect(props.linked.map((c) => c.id)).toEqual([IDS.firewall]);
+    expect(props.options.map((o) => o.id)).not.toContain(IDS.firewall);
+
+    // Somebody else's page now shows the firewall as theirs to take over.
+    const other = await create({ firstName: 'Otto', lastName: 'Other' });
+    currentUser = ADMIN;
+    const theirs = (await card(other)).options.find((o) => o.id === IDS.firewall);
+    expect(theirs?.currentContact).toBe('Connie Fig');
+
+    await patchDevice(req('PATCH', `/api/devices/${IDS.firewall}`, { contactId: null }),
+      { params: Promise.resolve({ deviceId: IDS.firewall }) });
+    expect((await card(id)).linked).toEqual([]);
   });
 });
