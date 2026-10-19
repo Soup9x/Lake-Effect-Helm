@@ -91,6 +91,8 @@ let pageId = '';
 let renderedFolderId = '';
 /** Set in beforeAll: a contact (0850), because the contact page takes one in its path. */
 let contactId = '';
+/** Set in beforeAll: a location, because the location page takes one in its path. */
+let siteId = '';
 /** Set in beforeAll: a password entry with no secret, for its own page layout. */
 let credentialId = '';
 
@@ -163,6 +165,17 @@ beforeAll(async () => {
       RETURNING id
     `;
     contactId = contact!.id;
+
+    // A location with something at it, so the page's "People here" and
+    // "Recorded here" queries return rows rather than resolving against nothing.
+    const [site] = await tx<{ id: string }[]>`
+      INSERT INTO site (tenant_id, organization_id, name, code, address_line1, city, public_ips)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'Rendered office', 'REN-1',
+              '1 Main Street', 'Buffalo', '{203.0.113.10}')
+      RETURNING id
+    `;
+    siteId = site!.id;
+    await tx`UPDATE contact SET site_id = ${siteId}::uuid WHERE id = ${contactId}::uuid`;
 
     const [credential] = await tx<{ id: string }[]>`
       INSERT INTO asset_node (tenant_id, organization_id, node_type, name, created_by, updated_by)
@@ -341,6 +354,13 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () =>
       (await import('../../src/app/(app)/contacts/[contactId]/page')).default({
         params: p({ contactId }),
+      }),
+  },
+  {
+    name: 'the location page',
+    load: async () =>
+      (await import('../../src/app/(app)/locations/[siteId]/page')).default({
+        params: p({ siteId }),
       }),
   },
   {
@@ -1473,6 +1493,13 @@ describe('a malformed id in the path', () => {
       load: async () =>
         (await import('../../src/app/(app)/contacts/[contactId]/page')).default({
           params: p({ contactId: NOT_A_UUID }),
+        }),
+    },
+    {
+      name: 'a location',
+      load: async () =>
+        (await import('../../src/app/(app)/locations/[siteId]/page')).default({
+          params: p({ siteId: NOT_A_UUID }),
         }),
     },
     {

@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Mail, Phone } from 'lucide-react';
 import { isUuid } from '@/lib/ids';
@@ -36,12 +37,12 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
     const [row] = await tx<({
       id: string; organization_id: string; organization_name: string;
       first_name: string; last_name: string; title: string | null; notes: string | null;
-      site_name: string | null; login_name: string | null; login_email: string | null;
+      site_id: string | null; site_name: string | null; login_name: string | null; login_email: string | null;
       psa_contact_id: string | null; archived_at: Date | null; updated_at: Date;
     } & ContactFlags)[]>`
       SELECT c.id, c.organization_id, o.name AS organization_name,
              c.first_name, c.last_name, c.title, c.notes,
-             s.name AS site_name, u.name AS login_name, u.email::text AS login_email,
+             s.id AS site_id, s.name AS site_name, u.name AS login_name, u.email::text AS login_email,
              c.psa_contact_id, c.archived_at, c.updated_at,
              c.is_primary, c.is_technical, c.is_billing, c.is_emergency, c.is_authorised
       FROM contact c
@@ -144,7 +145,11 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
                 <dt className="text-ink-muted">Title</dt>
                 <dd className="text-ink">{row.title ?? '—'}</dd>
                 <dt className="text-ink-muted">Location</dt>
-                <dd className="text-ink">{row.site_name ?? 'Not at a specific location'}</dd>
+                <dd className="text-ink">
+                  {row.site_id && row.site_name ? (
+                    <Link href={`/locations/${row.site_id}`} className="hover:underline">{row.site_name}</Link>
+                  ) : 'Not at a specific location'}
+                </dd>
                 <dt className="text-ink-muted">May authorise changes</dt>
                 <dd className="text-ink">{row.is_authorised ? 'Yes' : 'No'}</dd>
                 <dt className="text-ink-muted">Helm login</dt>

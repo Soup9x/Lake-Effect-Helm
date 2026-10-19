@@ -305,7 +305,8 @@ export default async function CategoryPage({
           flagged: r.is_primary,
           updatedAt: r.updated_at.toISOString(),
           removeKind: 'site',
-          // A location has no page of its own; Edit opens the location dialog.
+          // The name opens the location's page; Edit opens the location dialog.
+          href: `/locations/${r.id}`,
           editSite: { organizationId, values: siteValuesFrom(r) },
         })),
       };

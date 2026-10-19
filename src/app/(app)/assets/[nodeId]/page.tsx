@@ -659,15 +659,16 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       <PageHeader
         title={node.name}
         description={node.description ?? undefined}
-        // The site is a crumb without a link: it is genuinely where this asset
-        // sits, and it has no page of its own to go to.
+        // The site is where this asset sits, and opens that location's page.
         trail={[
           { label: 'Clients', href: '/organizations' },
           { label: node.organization_name, href: `/organizations/${node.organization_id}` },
           ...(category
             ? [{ label: category.label, href: `/organizations/${node.organization_id}/${category.slug}` }]
             : []),
-          ...(node.site_name ? [{ label: node.site_name }] : []),
+          ...(node.site_name && node.site_id
+            ? [{ label: node.site_name, href: `/locations/${node.site_id}` }]
+            : []),
         ]}
         actions={
           <AssetForm
@@ -698,7 +699,11 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           <Badge tone={node.criticality >= 4 ? 'critical' : 'neutral'}>
             Criticality {node.criticality}
           </Badge>
-          {node.site_name && <Badge tone="neutral">{node.site_name}</Badge>}
+          {node.site_name && node.site_id && (
+            <Link href={`/locations/${node.site_id}`}>
+              <Badge tone="neutral">{node.site_name}</Badge>
+            </Link>
+          )}
           {/* Editable rather than decorative: same control, same endpoint. */}
           <TagEditor target="node" id={node.id} tags={node.tags} canWrite={canWrite} />
           {expiries.map((expiry) => (

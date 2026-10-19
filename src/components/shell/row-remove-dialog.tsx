@@ -111,6 +111,7 @@ export function RowRemoveDialog({
   blockedReason,
   open,
   onOpenChange,
+  afterHref,
 }: {
   rowId: string;
   rowLabel: string;
@@ -120,6 +121,8 @@ export function RowRemoveDialog({
   blockedReason?: string | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Where to go once it is gone, when the page showing it no longer exists. */
+  afterHref?: string | undefined;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -152,7 +155,8 @@ export function RowRemoveDialog({
         return;
       }
       onOpenChange(false);
-      router.refresh();
+      if (afterHref) router.push(afterHref);
+      else router.refresh();
     } finally {
       setBusy(false);
     }
