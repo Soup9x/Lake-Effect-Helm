@@ -50,8 +50,15 @@ export async function loadOrgNav(tx: HelmTx, organizationId: string): Promise<Or
           WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL) AS contacts,
         (SELECT count(*)::text FROM site
           WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL) AS locations,
-        (SELECT count(*)::text FROM attachment
-          WHERE organization_id = ${organizationId}::uuid AND is_document) AS documents
+        -- Uploaded files AND written documents, live ones only: the same
+        -- population the Documents list's own total counts, so the badge and
+        -- the list agree.
+        ((SELECT count(*) FROM attachment
+           WHERE organization_id = ${organizationId}::uuid AND is_document
+             AND deleted_at IS NULL AND archived_at IS NULL)
+         + (SELECT count(*) FROM document_page
+           WHERE organization_id = ${organizationId}::uuid
+             AND deleted_at IS NULL AND archived_at IS NULL))::text AS documents
     `,
     /*
      * Apps & Services: the tenant's own flexible asset types, with their

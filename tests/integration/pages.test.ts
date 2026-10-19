@@ -463,6 +463,16 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
       }),
   },
   {
+    // The top of the directory with archived rows shown: each row then carries
+    // Restore and Delete permanently, folders carry Delete.
+    name: 'the Documents directory, archived included',
+    load: async () =>
+      (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({
+        params: p({ organizationId: IDS.orgAcme, category: 'documents' }),
+        searchParams: p({ archived: '1' }),
+      }),
+  },
+  {
     name: 'the per-category grid',
     load: async () =>
       (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({

@@ -64,11 +64,14 @@ export default async function CategoryPage({
   const view = search.view === 'internal' ? 'internal' : search.view === 'shared' ? 'shared' : 'all';
   const identity = await getServerIdentity();
 
-  const data = await withTenant(actorOf(identity), async (tx) => {
+  let canDelete = false;
+  const data = await withTenant(actorOf(identity), async (tx, session) => {
     const [org] = await tx<{ id: string; name: string }[]>`
       SELECT id, name FROM organization WHERE id = ${organizationId}::uuid
     `;
     if (!org) return null;
+    // Offers Delete permanently on archived documents; the database decides.
+    canDelete = session.permissions.includes('asset:delete');
 
     // Authoritative, and the same number helm.reveal_secret compares against —
     // rather than mapping a role key to a rank in the browser.
@@ -86,9 +89,10 @@ export default async function CategoryPage({
         id: string; name: string; status: string; updated_at: Date; updated_by_name: string | null;
         is_internal_only: boolean; device_type: string; operating_system: string | null;
         os_version: string | null; primary_ip: string | null; serial_number: string | null;
-        warranty_expires_at: Date | null; site_name: string | null;
+        warranty_expires_at: Date | null; site_name: string | null; archived: boolean;
       }[]>`
         SELECT n.id, n.name, n.status::text, n.updated_at, u.name AS updated_by_name, n.is_internal_only,
+               n.archived_at IS NOT NULL AS archived,
                d.device_type::text, d.operating_system, d.os_version, host(d.primary_ip) AS primary_ip,
                d.serial_number, d.warranty_expires_at, s.name AS site_name
         FROM asset_node n
@@ -125,6 +129,7 @@ export default async function CategoryPage({
           updatedAt: r.updated_at.toISOString(),
           updatedBy: r.updated_by_name,
           removeKind: 'node',
+          archived: r.archived,
           permissions: { internalOnly: r.is_internal_only },
           cells: {
             primaryIp: r.primary_ip,
@@ -153,9 +158,9 @@ export default async function CategoryPage({
         secret_label: string | null; is_internal_only: boolean;
         secret_id: string | null; sensitivity: string | null;
         requires_step_up: boolean | null; requires_reason: boolean | null;
-        min_role_rank: number | null;
+        min_role_rank: number | null; archived: boolean;
       }[]>`
-        SELECT n.id, n.name, n.status::text,
+        SELECT n.id, n.name, n.status::text, n.archived_at IS NOT NULL AS archived,
                n.updated_at, u.name AS updated_by_name,
                c.username, c.url,
                c.totp_secret_id IS NOT NULL AS has_totp,
@@ -217,6 +222,7 @@ export default async function CategoryPage({
           updatedAt: r.updated_at.toISOString(),
           updatedBy: r.updated_by_name,
           removeKind: 'node',
+          archived: r.archived,
           permissions: {
             internalOnly: r.is_internal_only,
             ...(r.secret_id
@@ -326,10 +332,10 @@ export default async function CategoryPage({
       `,
       tx<{
         id: string; filename: string; content_type: string; byte_size: number;
-        uploaded_at: Date; uploaded_by_name: string | null; is_internal_only: boolean;
+        uploaded_at: Date; uploaded_by_name: string | null; is_internal_only: boolean; archived: boolean;
       }[]>`
         SELECT a.id, a.filename, a.content_type, a.byte_size, a.uploaded_at,
-               u.name AS uploaded_by_name, a.is_internal_only
+               u.name AS uploaded_by_name, a.is_internal_only, a.archived_at IS NOT NULL AS archived
         FROM attachment a
         LEFT JOIN app_user u ON u.id = a.uploaded_by
         WHERE a.organization_id = ${organizationId}::uuid
@@ -340,10 +346,10 @@ export default async function CategoryPage({
       `,
       tx<{
         id: string; title: string; version: number; updated_at: Date; updated_by_name: string | null;
-        is_internal_only: boolean;
+        is_internal_only: boolean; archived: boolean;
       }[]>`
         SELECT p.id, p.title, p.version, p.updated_at, coalesce(u.name, u.email::text) AS updated_by_name,
-               p.is_internal_only
+               p.is_internal_only, p.archived_at IS NOT NULL AS archived
         FROM document_page p
         LEFT JOIN app_user u ON u.id = p.updated_by
         WHERE p.organization_id = ${organizationId}::uuid
@@ -376,6 +382,7 @@ export default async function CategoryPage({
             itemNoun: 'Item',
             href: `/organizations/${organizationId}/documents?folder=${f.id}`,
           },
+          removeKind: 'folder',
         })),
         ...pages.map<CategoryRecord>((p) => ({
           id: p.id,
@@ -386,6 +393,8 @@ export default async function CategoryPage({
           internalOnly: p.is_internal_only,
           updatedAt: p.updated_at.toISOString(),
           updatedBy: p.updated_by_name,
+          removeKind: 'page',
+          archived: p.archived,
         })),
         ...docs.map<CategoryRecord>((d) => ({
           id: d.id,
@@ -397,6 +406,7 @@ export default async function CategoryPage({
           updatedAt: d.uploaded_at.toISOString(),
           updatedBy: d.uploaded_by_name,
           removeKind: 'document',
+          archived: d.archived,
           permissions: { internalOnly: d.is_internal_only },
         })),
       ],
@@ -554,6 +564,7 @@ export default async function CategoryPage({
         }
         categoryLabel={category.label}
         canWrite={canWrite}
+        canDelete={canDelete}
         labels={labels}
         actorRoleRank={data.actorRoleRank}
         columnScope={category.slug}
