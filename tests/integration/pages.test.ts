@@ -611,6 +611,25 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
       }),
   },
   {
+    name: 'the Global Assets list',
+    load: async () =>
+      (await import('../../src/app/(app)/global/assets/page')).default({ searchParams: p({}) }),
+  },
+  {
+    name: 'the Global Assets list, filtered',
+    load: async () =>
+      (await import('../../src/app/(app)/global/assets/page')).default({
+        searchParams: p({ client: IDS.orgAcme, type: 'device', status: 'active', view: 'shared', archived: '1' }),
+      }),
+  },
+  {
+    name: 'the Global Configurations list',
+    load: async () =>
+      (await import('../../src/app/(app)/global/configurations/page')).default({
+        searchParams: p({ client: IDS.orgAcme, site: siteId, type: 'firewall' }),
+      }),
+  },
+  {
     name: 'the flexible-asset grid',
     load: async () =>
       (await import('../../src/app/(app)/organizations/[organizationId]/flexible/[typeId]/page'))

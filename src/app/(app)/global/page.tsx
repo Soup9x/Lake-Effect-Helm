@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
-  Activity, Boxes, CalendarClock, FileDown, Grid3x3, Search, Settings, Users,
+  Activity, Boxes, CalendarClock, FileDown, Grid3x3, Layers, Search, Server, Settings, Users,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -99,6 +99,20 @@ export default async function GlobalPage() {
             icon={Search}
             title="Search"
             detail="Every client, asset, credential and contact you may see."
+          />
+
+          <Tile
+            href="/global/assets"
+            icon={Layers}
+            title="Assets"
+            detail="Every client’s documented assets, filtered by client, location, type and status."
+          />
+
+          <Tile
+            href="/global/configurations"
+            icon={Server}
+            title="Configurations"
+            detail="Every client’s servers, network gear and endpoints, filtered the same way."
           />
 
           <Tile
