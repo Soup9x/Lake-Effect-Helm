@@ -456,6 +456,28 @@ describe('secret reveal endpoint', () => {
     expect(payload.auditEventUid).toBeTruthy();
   });
 
+  it('records a quick copy as a copy, not a view', async () => {
+    // The Copy button beside Reveal never displays the value: it reveals with
+    // purpose 'copy' and writes straight to the clipboard, so the one audit
+    // row it leaves has to say what actually happened.
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const response = await reveal(standardSecretId, { purpose: 'copy' });
+    expect(response.status).toBe(200);
+    const { value, auditEventUid } = await body(response);
+    expect(value).toBe('guest-wifi-password');
+
+    const sql = superuserSql();
+    try {
+      const [row] = await sql<{ action: string; purpose: string }[]>`
+        SELECT action, metadata->>'purpose' AS purpose FROM audit_log
+        WHERE event_uid = ${auditEventUid as string}::uuid
+      `;
+      expect(row).toEqual({ action: 'secret.revealed', purpose: 'copy' });
+    } finally {
+      await sql.end();
+    }
+  });
+
   it('maps a step-up refusal to a distinguishable status the UI can act on', async () => {
     asUser(IDS.admin1, 'admin@northwind.test');
     const response = await reveal(criticalSecretId, { reason: 'INC-1234 investigating an outage' });

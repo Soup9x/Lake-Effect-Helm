@@ -15,6 +15,8 @@ import { Badge, severityTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { RevealButton } from '@/components/reveal-button';
 import { TotpPanel } from '@/components/totp-panel';
+import { TotpSeedControl } from '@/components/totp-seed-control';
+import { CopyValueButton } from '@/components/copy-value-button';
 import { formatDate, formatDateTime, humanise } from '@/lib/ui/format';
 import { recordView } from '@/lib/workspace/queries';
 import { NotesCard } from '@/components/notes-card';
@@ -211,10 +213,12 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
      * does not carry it. These only decide what the page OFFERS — every route
      * and every policy checks again.
      */
-    const [perm] = await tx<{ reveal: boolean; author: boolean; run: boolean }[]>`
+    const [perm] = await tx<{ reveal: boolean; author: boolean; run: boolean; seed: boolean }[]>`
       SELECT helm.has_permission('secret:reveal') AS reveal,
              helm.has_permission('sop:write')     AS author,
-             helm.has_permission('sop:execute')   AS run
+             helm.has_permission('sop:execute')   AS run,
+             -- The TOTP route's own pair: it writes a secret onto an asset.
+             helm.has_permission('secret:write') AND helm.has_permission('asset:write') AS seed
     `;
 
     // Only for a record, so the other eleven node types pay nothing for it.
@@ -320,6 +324,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       canDeleteAttachments: session.permissions.includes('asset:delete'),
       totp: totp ?? null,
       canReveal: perm?.reveal ?? false,
+      canManageSeed: perm?.seed ?? false,
       canAuthorProcedures: perm?.author ?? false,
       canRunChecklists: perm?.run ?? false,
       assignable,
@@ -331,7 +336,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   if (!data) notFound();
   const {
-    node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams, totp, canReveal,
+    node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams, totp, canReveal, canManageSeed,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
     attachments, canDeleteAttachments, device, history,
   } = data;
@@ -592,11 +597,18 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       {Object.entries(detail).map(([key, value]) => (
         <div key={key} className="contents">
           <dt className="truncate text-ink-muted">{detailLabel(key)}</dt>
-          <dd className="min-w-0 break-words text-ink">{detailValue(key, value)}</dd>
+          <dd className="flex min-w-0 items-start gap-1 break-words text-ink">
+            <span className="min-w-0 break-words">{detailValue(key, value)}</span>
+            {key === 'username' && typeof value === 'string' && value !== '' && (
+              <CopyValueButton value={value} label="Copy username" />
+            )}
+          </dd>
         </div>
       ))}
     </dl>
   ) : null;
+
+  const showSeedControl = isCredential && canWrite && canManageSeed;
 
   const credentialsCard = (
     <Card>
@@ -613,7 +625,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           />
         )}
       </CardHeader>
-      <CardContent className={secrets.length === 0 && !totp && !credentialFacts ? 'p-0' : 'space-y-5'}>
+      <CardContent className={secrets.length === 0 && !totp && !credentialFacts && !showSeedControl ? 'p-0' : 'space-y-5'}>
         {credentialFacts}
         {secrets.length === 0 && !totp ? (
           <EmptyState title={isCredential ? 'No password stored' : 'No credentials attached to this asset'} />
@@ -659,6 +671,10 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             account={totp.totp_account}
             canReveal={canReveal}
           />
+        )}
+        {/* A one-time code can be added to an entry long after it was made. */}
+        {showSeedControl && (
+          <TotpSeedControl nodeId={node.id} hasTotp={totp !== null} />
         )}
       </CardContent>
     </Card>

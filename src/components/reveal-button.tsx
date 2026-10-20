@@ -38,6 +38,14 @@ import { cn } from '@/lib/ui/cn';
  *   `undefined` on the clipboard under a green "Copied". See
  *   src/lib/ui/clipboard.ts.
  *
+ *   A QUICK COPY skips the display. It is a reveal with purpose 'copy', so the
+ *   same gate decides it and the database writes one audit row saying the
+ *   value was taken for copying rather than looked at — which is the truth.
+ *   The plaintext goes from the response to the clipboard and is never put in
+ *   state, so there is nothing on screen to hide afterwards. /copy is not
+ *   called: it records a copy of a value already revealed, and this one was
+ *   not.
+ *
  *   A refusal renders its cause and its audit event id. When a technician says
  *   "it says I can't see this", support answers with one audit lookup instead
  *   of a log trawl.
@@ -83,6 +91,8 @@ export function RevealButton({
   const [copyOutcome, setCopyOutcome] = useState<CopyOutcome | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Which of the two a refusal's retry should repeat.
+  const lastAttempt = useRef<'view' | 'copy'>('view');
 
   useEffect(() => {
     return () => {
@@ -105,27 +115,31 @@ export function RevealButton({
    * retry re-runs this, and it must send whatever is in the box at that moment
    * — the person may have typed a justification while the prompt was open.
    */
-  const attemptReveal = () =>
+  const attemptReveal = (purpose: 'view' | 'copy') =>
     apiFetch<RevealOk>(`/api/secrets/${secretId}/reveal`, {
-      json: { purpose: 'view', ...(reason ? { reason } : {}) },
+      json: { purpose, ...(reason ? { reason } : {}) },
+    });
+
+  const refused = (result: { message: string; code?: string; auditEventUid?: string }) =>
+    setState({
+      status: 'denied',
+      message: result.message,
+      ...(result.auditEventUid ? { auditEventUid: result.auditEventUid } : {}),
+      needsReason: result.code === 'reason_required',
+      needsStepUp: result.code === STEP_UP_CODE,
     });
 
   const reveal = async () => {
+    lastAttempt.current = 'view';
     setState({ status: 'loading' });
     try {
       // A step-up refusal opens the prompt and, on success, retries once. Any
       // other refusal falls straight through — a password box cannot fix a rank
       // that is too low, and offering one would say it can.
-      const result = await withStepUp(attemptReveal, stepUp.prompt);
+      const result = await withStepUp(() => attemptReveal('view'), stepUp.prompt);
 
       if (!result.ok) {
-        setState({
-          status: 'denied',
-          message: result.message,
-          ...(result.auditEventUid ? { auditEventUid: result.auditEventUid } : {}),
-          needsReason: result.code === 'reason_required',
-          needsStepUp: result.code === STEP_UP_CODE,
-        });
+        refused(result);
         return;
       }
 
@@ -135,6 +149,29 @@ export function RevealButton({
         ...(result.value.auditEventUid ? { auditEventUid: result.value.auditEventUid } : {}),
       });
       timer.current = setTimeout(hide, AUTO_HIDE_MS);
+    } catch {
+      setState({ status: 'error', message: 'The request failed. Check your connection and retry.' });
+    }
+  };
+
+  const quickCopy = async () => {
+    lastAttempt.current = 'copy';
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+    setCopyOutcome(null);
+    setState({ status: 'loading' });
+    try {
+      const result = await withStepUp(() => attemptReveal('copy'), stepUp.prompt);
+      if (!result.ok) {
+        refused(result);
+        return;
+      }
+      // The reveal was the recording, so there is nothing left to record.
+      const outcome = await copyAudited({ value: result.value.value, record: async () => true });
+      setState({ status: 'idle' });
+      setCopyOutcome(outcome);
+      if (outcome === 'copied') {
+        copyTimer.current = setTimeout(() => setCopyOutcome(null), 2500);
+      }
     } catch {
       setState({ status: 'error', message: 'The request failed. Check your connection and retry.' });
     }
@@ -165,6 +202,7 @@ export function RevealButton({
 
   const needsReason = requiresReason || state.needsReason;
   const copyFailure = copyOutcome ? copyFailureMessage(copyOutcome) : null;
+  const blocked = state.status === 'loading' || (Boolean(needsReason) && reason.trim().length < 10);
 
   return (
     <div className="space-y-2" data-secret>
@@ -206,19 +244,38 @@ export function RevealButton({
           </p>
         </div>
       ) : (
-        <Button
-          variant={requiresStepUp ? 'danger' : 'secondary'}
-          size="sm"
-          onClick={reveal}
-          disabled={state.status === 'loading' || (Boolean(needsReason) && reason.trim().length < 10)}
-        >
-          {state.status === 'loading' ? (
-            <Loader2 className="animate-spin" aria-hidden />
-          ) : (
-            <Eye aria-hidden />
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Button
+              variant={requiresStepUp ? 'danger' : 'secondary'}
+              size="sm"
+              onClick={reveal}
+              disabled={blocked}
+            >
+              {state.status === 'loading' ? (
+                <Loader2 className="animate-spin" aria-hidden />
+              ) : (
+                <Eye aria-hidden />
+              )}
+              Reveal
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={quickCopy}
+              disabled={blocked}
+              title="Copy without showing it (recorded as a copy)"
+            >
+              <Copy aria-hidden />
+              Copy
+              <span className="sr-only"> {label}</span>
+            </Button>
+          </div>
+          {copyOutcome === 'copied' && (
+            <p className="text-xs text-ok">Copied — recorded as a copy event.</p>
           )}
-          Reveal
-        </Button>
+          {copyFailure && <p className="text-xs text-danger">{copyFailure}</p>}
+        </div>
       )}
 
       {(state.status === 'denied' || state.status === 'error') && (
@@ -240,7 +297,7 @@ export function RevealButton({
                 variant="secondary"
                 size="sm"
                 className="mt-2"
-                onClick={reveal}
+                onClick={() => (lastAttempt.current === 'copy' ? quickCopy() : reveal())}
               >
                 <ShieldCheck aria-hidden />
                 Re-authenticate and retry

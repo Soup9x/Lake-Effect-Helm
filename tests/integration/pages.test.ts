@@ -1667,6 +1667,12 @@ describe('how each kind of entry lays out its cards', () => {
     expect(form!.values).toMatchObject({ username: 'rendered-admin', url: 'https://acme.test' });
   });
 
+  it('offers a copy of the username, and a one-time code added after the entry was made', async () => {
+    const page = await assetPage(credentialId);
+    expect(propsOf(page, 'CopyValueButton')).toMatchObject({ value: 'rendered-admin' });
+    expect(propsOf(page, 'TotpSeedControl')).toEqual({ nodeId: credentialId, hasTotp: false });
+  });
+
   it('shows no Credentials card on a configuration that holds no secret', async () => {
     expect(cardTitles(await assetPage(IDS.globexServer))).not.toContain('Credentials');
   });
