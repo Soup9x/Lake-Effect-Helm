@@ -155,8 +155,15 @@ export class EmailBatch {
     return this.config.fromAddress;
   }
 
-  async send(mail: OutgoingMail): Promise<void> {
-    if (!(await recipientAllowed(this.actor, mail.to))) {
+  /**
+   * `recipientGate: false` is for account emails (1000) only: an invitation or
+   * password link goes to the person's own sign-in address, typed by an
+   * administrator holding user:write, and carries nothing about any client.
+   * The allow-list exists for notifications, which do — and a client's own
+   * staff, invited to Helm, sit at that client's domain, not the MSP's.
+   */
+  async send(mail: OutgoingMail, options: { recipientGate?: boolean } = {}): Promise<void> {
+    if ((options.recipientGate ?? true) && !(await recipientAllowed(this.actor, mail.to))) {
       // Refused rather than dropped quietly: the caller records it against the
       // row so somebody can see WHY nothing arrived. The message names the
       // setting rather than the address, because the address is in the row.

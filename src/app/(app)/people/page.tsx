@@ -64,9 +64,14 @@ export default async function PeoplePage() {
     const withTotp = new Set((await tx<{ user_id: string }[]>`
       SELECT user_id FROM helm.members_with_totp()
     `).map((r) => r.user_id));
+    // Local password or not, and how the last account email went (1000).
+    const signIn = new Map((await tx<{
+      user_id: string; has_local_password: boolean; must_change: boolean;
+      email_kind: string | null; email_status: string | null; email_error: string | null; email_at: Date | null;
+    }[]>`SELECT * FROM helm.member_sign_in_state()`).map((r) => [r.user_id, r]));
 
     return {
-      members, roles, organizations, myRank, catalogue, permissions, withTotp,
+      members, roles, organizations, myRank, catalogue, permissions, withTotp, signIn,
       myPermissions: session.permissions,
       canWrite: session.permissions.includes('user:write'),
       canManageRoles: session.permissions.includes('tenant:write'),
@@ -107,6 +112,19 @@ export default async function PeoplePage() {
               orgScope: m.org_scope ?? [],
               lastLoginAt: m.last_login_at?.toISOString() ?? null,
               hasTotp: data.withTotp.has(m.user_id),
+              signIn: (() => {
+                const state = data.signIn.get(m.user_id);
+                return {
+                  hasLocalPassword: state?.has_local_password ?? false,
+                  mustChange: state?.must_change ?? false,
+                  lastEmail: state?.email_kind ? {
+                    kind: state.email_kind,
+                    status: state.email_status ?? 'pending',
+                    error: state.email_error,
+                    at: state.email_at?.toISOString() ?? null,
+                  } : null,
+                };
+              })(),
               // Nobody edits their own membership, or one whose role outranks
               // them or carries a permission they lack (0350, 0830).
               editable: m.rank <= data.myRank && grantable.has(m.role_key) && m.user_id !== identity.actorId,

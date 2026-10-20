@@ -24,7 +24,7 @@ export default async function ResetPage({
   return (
     <div className="grid min-h-screen place-items-center bg-surface px-6">
       {token ? (
-        <ResetForm token={token} />
+        <ResetForm token={token} setup={params.setup === '1'} />
       ) : (
         <div className="w-full max-w-sm text-center">
           <h1 className="text-lg font-semibold tracking-tight text-ink">No reset code</h1>
