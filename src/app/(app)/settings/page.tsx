@@ -29,6 +29,8 @@ import { NotificationSettingsCard } from '@/components/notification-settings';
 import { UnifiSettingsCard } from '@/components/unifi-settings';
 import { NinjaSettingsCard } from '@/components/ninja-settings';
 import { readNinjaSettings } from '@/lib/ninja/queries';
+import { M365SettingsCard } from '@/components/m365-settings';
+import { listM365Connections } from '@/lib/m365/queries';
 import { listKeyCustody, listSystemWorkers, readTenantSummary } from '@/lib/tenant/queries';
 import { readOidcSettings, readRadiusSettings } from '@/lib/auth/sign-in-settings';
 import {
@@ -75,7 +77,7 @@ export default async function SettingsPage() {
     unifi, organizations, canManageNetwork, flexibleTypeCount,
     sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow, smtp,
     expiryAlerts, canManageAlerts, serviceAccounts, grantableRoles, canReadUsers, canManageUsers, backups,
-    sessionPolicy, ninja, canManageRmm,
+    sessionPolicy, ninja, canManageRmm, m365, canManageM365,
   } = await withTenant(actorOf(identity), async (tx, session) => {
     const canReadUsers = session.permissions.includes('user:read');
     const [keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
@@ -136,6 +138,9 @@ export default async function SettingsPage() {
       // somebody the routes and functions would let through.
       ninja: await readNinjaSettings(tx),
       canManageRmm: session.permissions.includes('integration:rmm:manage'),
+      // 0990: the same arrangement, one row per connected client.
+      m365: await listM365Connections(tx),
+      canManageM365: session.permissions.includes('integration:m365:manage'),
       keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
       canManageNetwork: networkRows[0]?.permitted ?? false,
       flexibleTypeCount: flexibleTypeRows[0]?.n ?? 0,
@@ -224,6 +229,8 @@ export default async function SettingsPage() {
         />
 
         <NinjaSettingsCard initial={ninja} organizations={organizations} canManage={canManageRmm} />
+
+        <M365SettingsCard initial={m365} organizations={organizations} canManage={canManageM365} />
 
         {sessionPolicy && <SessionPolicyCard initial={sessionPolicy} />}
 

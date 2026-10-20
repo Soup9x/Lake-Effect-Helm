@@ -21,6 +21,7 @@
  *                                                       0d  reminders.deliver
  *                                                       0e  checklists.schedule
  *                                                       0f  ninja.sync
+ *                                                       10  m365.sync
  *
  * 03 belonged to integration.sync, the generic RMM/PSA adapter, removed because
  * nothing could configure a connection for it. Do not reuse it: an old worker
@@ -36,6 +37,7 @@ import { externalChecksJob } from './external-checks';
 import { deliverRemindersJob, raiseRemindersJob } from './reminders';
 import { scheduleChecklistsJob } from './schedules';
 import { ninjaSyncJob } from './ninja-sync';
+import { m365SyncJob } from './m365-sync';
 import type { Job } from './runtime';
 
 export function allJobs(): Job[] {
@@ -77,5 +79,7 @@ export function allJobs(): Job[] {
     // NinjaOne device sync (0980). Idle for a tenant that has not configured
     // a connection: sync_due() only returns enabled ones.
     ninjaSyncJob(),
+    // Microsoft 365 per client (0990). Idle until a client is connected.
+    m365SyncJob(),
   ];
 }

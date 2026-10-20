@@ -57,6 +57,10 @@ enforced by PostgreSQL itself rather than by application code.
   organisation is mapped to, with hostname, OS, hardware, address and check-in
   kept current — and any field somebody edited by hand left alone. Read-only;
   configured under Settings. Needs outbound HTTPS to your NinjaOne region.
+- **Microsoft 365.** Per client: licensed users as contacts, paid subscriptions
+  as licences with seats kept current, and verified domains — through one Entra
+  app (multi-tenant, or one per client) with read-only Graph permissions. Edits
+  made in Helm are kept; nothing is written back.
 - **Sign-in.** Local passwords (the break-glass path), Microsoft Entra ID, any
   OpenID Connect provider, and RADIUS. All produce the same revocable session.
 - **API tokens.** Personal tokens from the account page, scoped to a subset of
@@ -87,7 +91,7 @@ src/
                 documents/, flexible/, graph/, notifications/, email/, unifi/,
                 ui/ (browser helpers: apiFetch, clipboard, step-up retry) …
   workers/      Job runtime and the scheduled jobs (alerts, exports, anchoring,
-                notifications, reminders, external checks, UniFi and NinjaOne sync).
+                notifications, reminders, external checks, UniFi, NinjaOne and M365 sync).
 tests/
   unit/         No database needed.
   integration/  Against a real Postgres, connecting as the real roles.
