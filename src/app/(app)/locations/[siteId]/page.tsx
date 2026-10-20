@@ -8,6 +8,8 @@ import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { NotesCard } from '@/components/notes-card';
+import { HistoryCard } from '@/components/history-card';
+import { listHistory } from '@/lib/history/queries';
 import { SitePageActions } from '@/components/site-page-actions';
 import { siteValuesFrom } from '@/lib/sites/values';
 import { categoryBySource, ORG_CATEGORIES } from '@/lib/nav/org-categories';
@@ -72,11 +74,11 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
       WHERE site_id = ${siteId}::uuid AND archived_at IS NULL
       ORDER BY lower(name)
     `;
-    return { row, contacts, assets, diagrams };
+    return { row, contacts, assets, diagrams, history: await listHistory(tx, 'site', siteId) };
   });
   if (!data) notFound();
 
-  const { row, contacts, assets, diagrams } = data;
+  const { row, contacts, assets, diagrams, history } = data;
   const canWrite = !isClientRole(identity.roleKey);
   const values = siteValuesFrom(row);
 
@@ -242,6 +244,8 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
             </CardContent>
           </Card>
         </div>
+
+        <HistoryCard entries={history} />
       </PageBody>
     </>
   );
