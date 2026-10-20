@@ -76,6 +76,10 @@ export const DEVICE_TYPES = [
   'firewall', 'router', 'switch', 'access_point', 'nas', 'san',
   'printer', 'ups', 'camera', 'phone_system', 'iot', 'other',
 ] as const;
+export const CREDENTIAL_TYPES = [
+  'standard_user', 'local_admin', 'domain_admin', 'service_account', 'api', 'database',
+  'wifi', 'vpn', 'root', 'recovery', 'shared_mailbox', 'other',
+] as const;
 export const NETWORK_KINDS = ['vlan', 'subnet', 'wan', 'vpn', 'wifi', 'management'] as const;
 export const DIRECTORY_KINDS = [
   'active_directory', 'entra_id', 'hybrid', 'ldap', 'google_workspace', 'okta',
@@ -213,6 +217,16 @@ export const DETAIL_FIELDS: Readonly<Record<string, readonly DetailField[]>> = {
     numeric('value', 'Value'),
     { ...text('currency', 'Currency', 'Three letters, e.g. USD'), pg: 'char(3)', required: true },
     text('billing_cycle', 'Billing cycle'),
+  ],
+  /*
+   * A credential's documentation: who it signs in as, where, and what kind of
+   * account it is. The password and second factor are not here — they are
+   * secrets, changed through rotation and the TOTP panel, never a detail PATCH.
+   */
+  credential: [
+    text('username', 'Username'),
+    text('url', 'URL', 'Where it is used: a sign-in page, a host, a console'),
+    select('credential_type', 'Type', 'credential_type', CREDENTIAL_TYPES),
   ],
   license: [
     text('license_type', 'Licence type', 'perpetual, subscription, oem, volume…'),

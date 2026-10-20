@@ -1659,6 +1659,14 @@ describe('how each kind of entry lays out its cards', () => {
     expect(titles.indexOf('Credentials'), 'straight after Notes').toBe(titles.indexOf('Notes') + 1);
   });
 
+  it('lets the username, URL and type be set from the Credentials card', async () => {
+    const form = propsOf(await assetPage(credentialId), 'DetailEditForm');
+    expect(form, 'the Credentials card should offer an edit form').toBeTruthy();
+    const fields = (form!.fields as { key: string }[]).map((f) => f.key);
+    expect(fields).toEqual(['username', 'url', 'credential_type']);
+    expect(form!.values).toMatchObject({ username: 'rendered-admin', url: 'https://acme.test' });
+  });
+
   it('shows no Credentials card on a configuration that holds no secret', async () => {
     expect(cardTitles(await assetPage(IDS.globexServer))).not.toContain('Credentials');
   });
