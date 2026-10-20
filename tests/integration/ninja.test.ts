@@ -229,9 +229,9 @@ describe('setting NinjaOne up', () => {
     expect(body.error.message).toMatch(/refused the client id and secret/);
     expect(body.error.details?.remedy).toMatch(/Monitoring scope/);
 
-    const [{ n }] = await su((sql) => sql<{ n: number }[]>`
+    const [row] = await su((sql) => sql<{ n: number }[]>`
       SELECT count(*)::int AS n FROM integration_connection WHERE provider = 'ninja_one'`);
-    expect(n).toBe(0);
+    expect(row?.n).toBe(0);
   });
 
   it('refuses a region that is not NinjaOne', async () => {

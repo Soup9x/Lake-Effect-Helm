@@ -81,7 +81,10 @@ describe('node classes', () => {
     ['CLOUD_MONITOR_TARGET', undefined, 'other'],
     [undefined, undefined, 'other'],
   ] as const)('%s (%s) is a %s', (nodeClass, chassisType, expected) => {
-    expect(deviceTypeFor({ nodeClass, system: chassisType ? { chassisType } : undefined })).toBe(expected);
+    expect(deviceTypeFor({
+      ...(nodeClass ? { nodeClass } : {}),
+      ...(chassisType ? { system: { chassisType } } : {}),
+    })).toBe(expected);
   });
 });
 
