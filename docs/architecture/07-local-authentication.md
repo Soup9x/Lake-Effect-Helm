@@ -167,6 +167,43 @@ it, and SSO is unaffected. The alternative — no lockout — is worse.
 
 ---
 
+## 5a. A second step: an authenticator-app code (0960)
+
+A person can add a six-digit code from an authenticator app (Microsoft
+Authenticator, Google Authenticator, 1Password and the like) to their local
+password, on Profile & password. An administrator can require one for every
+local sign-in, under Global → Settings → Sessions and sign-in.
+
+* **The seed is enveloped, not hashed** — a code is checked against it, so it
+  has to be read back. It is sealed exactly as the RADIUS secret is: a DEK per
+  row wrapped by the KEK, AES-256-GCM, the AAD naming the person. It lives in
+  `local_totp`, a helm_auth table helm_app cannot read.
+* **Not in force until proven.** Setting it up shows a QR code; the first code
+  from the app confirms it. An unconfirmed seed asks nothing at sign-in.
+* **Each code is good once.** The time step of the last accepted code is
+  stored, and the statement that accepts a code also moves it forward, so a
+  code read over a shoulder — or two requests racing with one — cannot be used
+  twice. A ±30-second window absorbs clock drift.
+* **A wrong code is a failed sign-in.** `bad_totp` counts towards the
+  per-account and per-address throttle and advances the lockout exactly as a
+  wrong password does.
+* **Ten recovery codes**, shown once at setup, each good once, stored as
+  SHA-256. They are typed into the same box as a code.
+* **Only at the door.** Step-up and changing the password re-check only the
+  password: the session they are made from already passed the second step.
+* **Required by policy, not yet set up:** the right password gets a QR code
+  instead of a session, and the next submission with a code from it confirms
+  the app and signs in. There is no half-signed-in session in between.
+* **Single sign-on is unaffected.** An Entra or OIDC sign-in's second factor
+  belongs to the identity provider.
+* An administrator with `user:write` can **reset** a member's authenticator
+  from People, for a lost phone; it is audited as `auth.totp_reset`. Turning it
+  on and off yourself is audited as `auth.totp_enabled` / `auth.totp_disabled`.
+
+The residual risk: asking for a code tells the caller the password was right,
+as every two-step sign-in does; the code is what then stands in the way, and
+the lockout bounds guessing it.
+
 ## 6. Reset
 
 **The administrator-issued path is primary.** An administrator with `user:write`

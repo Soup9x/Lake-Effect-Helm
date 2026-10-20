@@ -60,9 +60,13 @@ export default async function PeoplePage() {
       listRoles(tx),
       listPermissions(tx),
     ]);
+    // Who has an authenticator for local sign-in (0960): yes or no, never more.
+    const withTotp = new Set((await tx<{ user_id: string }[]>`
+      SELECT user_id FROM helm.members_with_totp()
+    `).map((r) => r.user_id));
 
     return {
-      members, roles, organizations, myRank, catalogue, permissions,
+      members, roles, organizations, myRank, catalogue, permissions, withTotp,
       myPermissions: session.permissions,
       canWrite: session.permissions.includes('user:write'),
       canManageRoles: session.permissions.includes('tenant:write'),
@@ -102,6 +106,7 @@ export default async function PeoplePage() {
               orgScopeAll: m.org_scope_all,
               orgScope: m.org_scope ?? [],
               lastLoginAt: m.last_login_at?.toISOString() ?? null,
+              hasTotp: data.withTotp.has(m.user_id),
               // Nobody edits their own membership, or one whose role outranks
               // them or carries a permission they lack (0350, 0830).
               editable: m.rank <= data.myRank && grantable.has(m.role_key) && m.user_id !== identity.actorId,

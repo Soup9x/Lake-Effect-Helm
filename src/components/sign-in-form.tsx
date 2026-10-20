@@ -31,7 +31,9 @@ import { useRouter } from 'next/navigation';
 import { signIn } from 'next-auth/react';
 import { KeyRound, Loader2, ShieldAlert } from 'lucide-react';
 import { Button } from './ui/button';
-import { Input, Label } from './ui/field';
+import { FieldHint, Input, Label } from './ui/field';
+import { QrCode } from './qr-code';
+import { RecoveryCodes } from './recovery-codes';
 import { HelmMark } from './ui/helm-mark';
 import { apiFetch } from '@/lib/ui/api';
 
@@ -89,6 +91,17 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
   const [error, setError] = useState<string | null>(ssoError ? ssoMessage(ssoError) : null);
   const [pending, setPending] = useState(false);
   const [ssoPending, setSsoPending] = useState<string | null>(null);
+  /*
+   * The second step (0960). 'code' asks for the authenticator code; 'enrol'
+   * shows a seed to set the app up with first, because policy requires one and
+   * this account has none. The password stays in state and is sent again with
+   * the code: there is no half-signed-in session in between.
+   */
+  const [step, setStep] = useState<'password' | 'code' | 'enrol'>('password');
+  const [code, setCode] = useState('');
+  const [enrolment, setEnrolment] = useState<{ secret: string; uri: string } | null>(null);
+  /** Set when this sign-in finished setting up the app: shown once, then on. */
+  const [recovery, setRecovery] = useState<{ codes: string[]; destination: string } | null>(null);
 
   /**
    * Hand off to Auth.js. `redirect: true` means this never returns — the
@@ -114,12 +127,25 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
     setPending(true);
 
     try {
-      const result = await apiFetch<{ ok?: boolean; mustChange?: boolean } | undefined>(
+      const result = await apiFetch<{ ok?: boolean; mustChange?: boolean; recoveryCodes?: string[] } | undefined>(
         '/api/auth/local/login',
-        { json: { email, password } },
+        { json: { email, password, ...(step === 'password' ? {} : { code }) } },
       );
 
       if (!result.ok) {
+        if (result.code === 'totp_required') {
+          setStep('code');
+          setCode('');
+          return;
+        }
+        if (result.code === 'totp_enrolment_required') {
+          const secret = result.details?.secret;
+          const uri = result.details?.uri;
+          if (typeof secret === 'string' && typeof uri === 'string') setEnrolment({ secret, uri });
+          setStep('enrol');
+          setCode('');
+          return;
+        }
         setError(result.message);
         return;
       }
@@ -127,11 +153,32 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
       // An administrator-issued password is a temporary one. Sending them
       // straight to the change screen is the difference between a password
       // that gets replaced and one that stays in a handover document forever.
-      router.push(result.value?.mustChange ? '/profile?password=change' : next);
+      const destination = result.value?.mustChange ? '/profile?password=change' : next;
+      if (result.value?.recoveryCodes?.length) {
+        setRecovery({ codes: result.value.recoveryCodes, destination });
+        return;
+      }
+      router.push(destination);
       router.refresh();
     } finally {
       setPending(false);
     }
+  }
+
+  if (recovery) {
+    return (
+      <div className="w-full max-w-sm space-y-4">
+        <div className="text-center">
+          <HelmMark className="mx-auto size-12" />
+          <h1 className="mt-4 text-lg font-semibold tracking-tight text-ink">Your authenticator is set up</h1>
+        </div>
+        <RecoveryCodes codes={recovery.codes} />
+        <Button type="button" variant="primary" className="w-full"
+          onClick={() => { router.push(recovery.destination); router.refresh(); }}>
+          I have saved them — continue
+        </Button>
+      </div>
+    );
   }
 
   return (
@@ -199,31 +246,78 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
       )}
 
       <form onSubmit={submit} className="mt-4 space-y-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="email">Email</Label>
-          <Input
-            id="email"
-            name="email"
-            type="email"
-            autoComplete="username"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </div>
+        {step === 'password' ? (
+          <>
+            <div className="space-y-1.5">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="username"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
 
-        <div className="space-y-1.5">
-          <Label htmlFor="password">Password</Label>
-          <Input
-            id="password"
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+          </>
+        ) : (
+          <div className="space-y-3">
+            {step === 'enrol' && enrolment && (
+              <div className="space-y-2 rounded-md border border-border bg-surface-raised p-3">
+                <p className="text-sm text-ink">
+                  This account needs an authenticator app. Scan this with Microsoft Authenticator,
+                  Google Authenticator, 1Password or similar.
+                </p>
+                <div className="flex justify-center">
+                  <QrCode value={enrolment.uri} label="Authenticator setup code" />
+                </div>
+                <FieldHint>
+                  Or enter this key by hand: <code className="break-all font-mono text-ink">{enrolment.secret}</code>
+                </FieldHint>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label htmlFor="code">{step === 'enrol' ? 'The six digits it shows' : 'Authenticator code'}</Label>
+              <Input
+                id="code"
+                name="code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                autoFocus
+                required
+                maxLength={11}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+              <FieldHint>
+                {step === 'enrol'
+                  ? 'Signing in finishes the setup.'
+                  : `Signing in as ${email}. A recovery code works here too.`}
+              </FieldHint>
+            </div>
+            <button
+              type="button"
+              className="text-xs text-ink-muted hover:text-ink hover:underline"
+              onClick={() => { setStep('password'); setCode(''); setError(null); }}
+            >
+              Use a different account
+            </button>
+          </div>
+        )}
 
         {error ? (
           <p
@@ -237,7 +331,7 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
 
         <Button type="submit" variant={ssoConfigured ? 'secondary' : 'primary'} className="w-full" disabled={pending}>
           {pending ? <Loader2 aria-hidden className="animate-spin" /> : null}
-          Sign in
+          {step === 'password' ? 'Sign in' : 'Verify and sign in'}
         </Button>
       </form>
     </div>

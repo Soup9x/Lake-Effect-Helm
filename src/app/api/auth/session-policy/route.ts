@@ -27,7 +27,8 @@ export const PUT = tenantRoute(
     await tx`
       SELECT helm.set_session_policy(
         ${body.idleMinutes}::integer, ${body.absoluteHours}::integer, ${body.stepUpMinutes}::integer,
-        ${body.lockoutThreshold}::integer, ${body.lockoutMaxMinutes}::integer)
+        ${body.lockoutThreshold}::integer, ${body.lockoutMaxMinutes}::integer,
+        ${body.requireLocalTotp}::boolean)
     `;
     return { policy: await readSessionPolicy(tx) };
   },

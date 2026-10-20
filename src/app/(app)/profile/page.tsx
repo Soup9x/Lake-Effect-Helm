@@ -4,6 +4,9 @@ import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChangePasswordCard } from '@/components/change-password-card';
+import { TwoStepCard } from '@/components/two-step-card';
+import { totpStatus } from '@/lib/auth/local-totp';
+import { db } from '@/lib/db/client';
 import { ProfileForm } from '@/components/profile-form';
 import { readMyPreferences } from '@/lib/ui/account-queries';
 
@@ -48,17 +51,31 @@ export default async function ProfilePage() {
   });
 
   const preferences = await readMyPreferences(identity);
+  // On helm_auth, where the seed lives (0960); the page learns only yes/no and a count.
+  const [totp, [policy]] = await Promise.all([
+    totpStatus(identity.actorId),
+    db('auth')<{ require_local_totp: boolean }[]>`
+      SELECT require_local_totp FROM helm.session_policy_for_user(${identity.actorId}::uuid)
+    `,
+  ]);
 
   return (
     <>
       <PageHeader
         title="Profile & password"
-        description="Your name, time zone and theme, and your local password."
+        description="Your name, time zone and theme, your local password and two-step sign-in."
       />
       <PageBody>
         <ChangePasswordCard
           mustChange={credential?.must_change ?? false}
           passwordChangedAt={credential ? credential.password_changed_at.toISOString() : null}
+        />
+
+        <TwoStepCard
+          hasLocalPassword={credential !== null}
+          enrolled={totp.enrolled}
+          recoveryRemaining={totp.recoveryRemaining}
+          required={policy?.require_local_totp ?? false}
         />
 
         <Card>

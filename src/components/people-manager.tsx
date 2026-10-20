@@ -46,6 +46,8 @@ interface Member {
   editable: boolean;
   /** The caller's own row. A different question from `editable`. */
   isSelf: boolean;
+  /** Has an authenticator for local sign-in (0960). */
+  hasTotp: boolean;
 }
 
 interface Role {
@@ -102,6 +104,14 @@ export function PeopleManager({
       method: 'PATCH',
       json: { roleKey, ...scope },
     });
+    setBusyRow(null);
+  }
+
+  async function resetTotp(userId: string, email: string) {
+    if (!window.confirm(`Reset ${email}'s authenticator? Their app and recovery codes stop working; they set up a new one at their next local sign-in if one is required.`))
+      return;
+    setBusyRow(userId);
+    await call(`/api/users/${userId}/totp`, { method: 'DELETE' });
     setBusyRow(null);
   }
 
@@ -196,6 +206,7 @@ export function PeopleManager({
                   </TableCell>
                   <TableCell>
                     <Badge tone={m.status === 'active' ? 'ok' : 'danger'}>{m.status}</Badge>
+                    {m.hasTotp && <Badge tone="neutral" className="ml-1">2-step</Badge>}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
@@ -209,6 +220,17 @@ export function PeopleManager({
                         <KeyRound />
                         Permissions
                       </Button>
+                      {canWrite && m.hasTotp && !m.isSelf && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={busyRow === m.userId}
+                          onClick={() => resetTotp(m.userId, m.email)}
+                          title="For a lost phone: their authenticator and recovery codes stop working"
+                        >
+                          Reset 2-step
+                        </Button>
+                      )}
                       {canWrite && m.editable && m.status === 'active' && (
                         <Button
                           variant="ghost"

@@ -122,6 +122,8 @@ export const sessionPolicy = pgTable('session_policy', {
   stepUpMinutes: integer('step_up_minutes').notNull().default(15),
   lockoutThreshold: integer('lockout_threshold').notNull().default(5),
   lockoutMaxMinutes: integer('lockout_max_minutes').notNull().default(15),
+  /** Every local sign-in needs an authenticator code (0960). */
+  requireLocalTotp: boolean('require_local_totp').notNull().default(false),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
   updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
 });
@@ -424,3 +426,31 @@ export const oidcProvider = pgTable('oidc_provider', {
 });
 
 export type OidcProvider = typeof oidcProvider.$inferSelect;
+
+/**
+ * A person's authenticator-app seed for local sign-in (0960), enveloped by the
+ * KEK like the RADIUS secret. helm_auth only; helm_app cannot read it.
+ * `confirmedAt` null is an enrolment not yet proven with a code; `lastStep` is
+ * the time step of the last code accepted, so none is accepted twice.
+ */
+export const localTotp = pgTable('local_totp', {
+  userId: uuid('user_id').primaryKey().references(() => appUser.id, { onDelete: 'cascade' }),
+  wrapProvider: text('wrap_provider').notNull(),
+  kekId: text('kek_id').notNull(),
+  wrappedDek: bytea('wrapped_dek').notNull(),
+  seedCiphertext: bytea('seed_ciphertext').notNull(),
+  seedNonce: bytea('seed_nonce').notNull(),
+  seedTag: bytea('seed_tag').notNull(),
+  seedAad: text('seed_aad').notNull(),
+  confirmedAt: tstz('confirmed_at'),
+  lastStep: bigint('last_step', { mode: 'number' }),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+});
+
+/** Single-use recovery codes, as SHA-256 (0960). */
+export const localTotpRecovery = pgTable('local_totp_recovery', {
+  userId: uuid('user_id').notNull().references(() => appUser.id, { onDelete: 'cascade' }),
+  codeHash: bytea('code_hash').notNull(),
+  usedAt: tstz('used_at'),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.userId, t.codeHash] })]);
