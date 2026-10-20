@@ -98,14 +98,14 @@ export function TotpSeedControl({ nodeId, hasTotp }: { nodeId: string; hasTotp: 
       {stepUp.dialog}
       {!editing ? (
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="secondary" size="sm" onClick={() => setEditing(true)}>
+          <Button type="button" variant={hasTotp ? 'ghost' : 'secondary'} size="sm" onClick={() => setEditing(true)}>
             <KeyRound />
-            {hasTotp ? 'Replace the one-time code seed' : 'Add a one-time code'}
+            {hasTotp ? 'Replace one-time code' : 'Add a one-time code'}
           </Button>
           {hasTotp && (
             <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={remove}>
               {busy && <Loader2 className="animate-spin" />}
-              Remove it
+              Remove one-time code
             </Button>
           )}
         </div>

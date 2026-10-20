@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { isUuid } from '@/lib/ids';
-import { Network } from 'lucide-react';
+import { ExternalLink, Network } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
@@ -17,6 +17,7 @@ import { RevealButton } from '@/components/reveal-button';
 import { TotpPanel } from '@/components/totp-panel';
 import { TotpSeedControl } from '@/components/totp-seed-control';
 import { CopyValueButton } from '@/components/copy-value-button';
+import { FieldLine, FieldList, FieldRow, iconActionClass } from '@/components/field-row';
 import { formatDate, formatDateTime, humanise } from '@/lib/ui/format';
 import { recordView } from '@/lib/workspace/queries';
 import { NotesCard } from '@/components/notes-card';
@@ -592,28 +593,30 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     </Card>
   );
 
-  const credentialFacts = isCredential && Object.keys(detail).length > 0 ? (
-    <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
-      {Object.entries(detail).map(([key, value]) => (
-        <div key={key} className="contents">
-          <dt className="truncate text-ink-muted">{detailLabel(key)}</dt>
-          <dd className="flex min-w-0 items-start gap-1 break-words text-ink">
-            <span className="min-w-0 break-words">{detailValue(key, value)}</span>
-            {key === 'username' && typeof value === 'string' && value !== '' && (
-              <CopyValueButton value={value} label="Copy username" />
-            )}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  ) : null;
-
+  /*
+   * A password entry reads like a login: one row per thing you came to copy,
+   * the value on the left and its actions — copy, show, open — on the same
+   * line at the right. The type is a badge on the card, not a row; anything
+   * else the entry records follows the login rows.
+   */
+  const LOGIN_KEYS = new Set(['username', 'url', 'credential_type']);
+  const username = isCredential && typeof detail.username === 'string' ? detail.username : null;
+  const website = isCredential && typeof detail.url === 'string' ? detail.url : null;
+  const credentialType = isCredential && typeof detail.credential_type === 'string'
+    ? humanise(detail.credential_type)
+    : null;
+  const otherFacts = isCredential ? Object.entries(detail).filter(([key]) => !LOGIN_KEYS.has(key)) : [];
+  const totpSubject = totp ? [totp.totp_issuer, totp.totp_account].filter(Boolean).join(' · ') : '';
   const showSeedControl = isCredential && canWrite && canManageSeed;
+  const hasLoginRows = isCredential || secrets.length > 0 || totp !== null;
 
   const credentialsCard = (
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-2">
-        <CardTitle>Credentials</CardTitle>
+        <div className="flex items-center gap-2">
+          <CardTitle>Credentials</CardTitle>
+          {credentialType && <Badge tone="neutral">{credentialType}</Badge>}
+        </div>
         {/* A password entry has no Details card: its username, URL and the
             rest of its fields are edited and shown here, beside the secret. */}
         {isCredential && canWrite && detailFields.length > 0 && (
@@ -625,57 +628,79 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           />
         )}
       </CardHeader>
-      <CardContent className={secrets.length === 0 && !totp && !credentialFacts && !showSeedControl ? 'p-0' : 'space-y-5'}>
-        {credentialFacts}
-        {secrets.length === 0 && !totp ? (
-          <EmptyState title={isCredential ? 'No password stored' : 'No credentials attached to this asset'} />
+      <CardContent className={hasLoginRows ? 'space-y-4' : 'p-0'}>
+        {!hasLoginRows ? (
+          <EmptyState title="No credentials attached to this asset" />
         ) : (
-          secrets.map((secret) => (
-            <div key={secret.id} className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium text-ink">{secret.label}</span>
-                <Badge tone="neutral">{humanise(secret.kind)}</Badge>
-                <Badge
-                  tone={
-                    secret.sensitivity === 'critical'
-                      ? 'critical'
-                      : secret.sensitivity === 'elevated'
-                        ? 'warning'
-                        : 'neutral'
+          <FieldList>
+            {username !== null && (
+              <FieldRow label="Username">
+                <FieldLine actions={<CopyValueButton value={username} label="Copy username" size="md" />}>
+                  {username}
+                </FieldLine>
+              </FieldRow>
+            )}
+            {isCredential && secrets.length === 0 && (
+              <FieldRow label="Password">
+                <FieldLine>
+                  <span className="text-ink-faint">No password stored</span>
+                </FieldLine>
+              </FieldRow>
+            )}
+            {secrets.map((secret) => (
+              <FieldRow
+                key={secret.id}
+                label={isCredential && secrets.length === 1 ? 'Password' : secret.label}
+                meta={<SecretBadges secret={secret} />}
+                hint={rotationHint(secret)}
+              >
+                <RevealButton
+                  secretId={secret.id}
+                  label={secret.label}
+                  requiresReason={secret.requires_reason}
+                  requiresStepUp={secret.requires_step_up}
+                />
+              </FieldRow>
+            ))}
+            {totp && (
+              <FieldRow label="Verification code (TOTP)" hint={totpSubject || undefined}>
+                <TotpPanel nodeId={node.id} canReveal={canReveal} />
+              </FieldRow>
+            )}
+            {website !== null && (
+              <FieldRow label="Website">
+                <FieldLine
+                  actions={
+                    <>
+                      {openableUrl(website) && (
+                        <a
+                          href={openableUrl(website)!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={iconActionClass}
+                          title="Open in a new tab"
+                          aria-label="Open website"
+                        >
+                          <ExternalLink aria-hidden />
+                        </a>
+                      )}
+                      <CopyValueButton value={website} label="Copy website" size="md" />
+                    </>
                   }
                 >
-                  {secret.sensitivity}
-                </Badge>
-                {secret.requires_step_up && <Badge tone="warning">Step-up required</Badge>}
-                {isWeakStrength(secret.strength_score) && (
-                  <Badge tone="warning">{strengthLabel(secret.strength_score)}</Badge>
-                )}
-              </div>
-              <p className="text-xs text-ink-faint">
-                Last rotated {formatDate(secret.last_rotated_at)}
-                {secret.rotation_due_at && ` · due ${formatDate(secret.rotation_due_at)}`}
-              </p>
-              <RevealButton
-                secretId={secret.id}
-                label={secret.label}
-                requiresReason={secret.requires_reason}
-                requiresStepUp={secret.requires_step_up}
-              />
-            </div>
-          ))
-        )}
-        {totp && (
-          <TotpPanel
-            nodeId={node.id}
-            issuer={totp.totp_issuer}
-            account={totp.totp_account}
-            canReveal={canReveal}
-          />
+                  {website}
+                </FieldLine>
+              </FieldRow>
+            )}
+            {otherFacts.map(([key, value]) => (
+              <FieldRow key={key} label={detailLabel(key)}>
+                <FieldLine>{detailValue(key, value)}</FieldLine>
+              </FieldRow>
+            ))}
+          </FieldList>
         )}
         {/* A one-time code can be added to an entry long after it was made. */}
-        {showSeedControl && (
-          <TotpSeedControl nodeId={node.id} hasTotp={totp !== null} />
-        )}
+        {showSeedControl && <TotpSeedControl nodeId={node.id} hasTotp={totp !== null} />}
       </CardContent>
     </Card>
   );
@@ -1118,7 +1143,7 @@ async function detailFor(
     Object.entries(row).filter(
       ([key, value]) =>
         value !== null && value !== '' && !isDefault(value)
-        && !key.endsWith('_secret_id') && !isPersonId(key) && !isRelationship(key) && !HIDDEN.has(key),
+        && key !== 'secret_id' && !key.endsWith('_secret_id') && !isPersonId(key) && !isRelationship(key) && !HIDDEN.has(key),
     ),
   );
   return { shown, raw: row };
@@ -1130,4 +1155,43 @@ function renderValue(value: unknown): string {
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
+}
+
+/**
+ * The badges worth a glance beside a secret's label. "Standard" and the
+ * generic kinds say nothing, so they are not shown.
+ */
+function SecretBadges({ secret }: { secret: SecretRow }) {
+  return (
+    <>
+      {!['password', 'generic'].includes(secret.kind) && <Badge tone="neutral">{humanise(secret.kind)}</Badge>}
+      {secret.sensitivity !== 'standard' && (
+        <Badge tone={secret.sensitivity === 'critical' ? 'critical' : 'warning'}>{secret.sensitivity}</Badge>
+      )}
+      {secret.requires_step_up && <Badge tone="warning">Step-up required</Badge>}
+      {isWeakStrength(secret.strength_score) && (
+        <Badge tone="warning">{strengthLabel(secret.strength_score)}</Badge>
+      )}
+    </>
+  );
+}
+
+/** When it was rotated and when it is due, or nothing when neither is known. */
+function rotationHint(secret: SecretRow): string | undefined {
+  const parts = [
+    secret.last_rotated_at && `Rotated ${formatDate(secret.last_rotated_at)}`,
+    secret.rotation_due_at && `due ${formatDate(secret.rotation_due_at)}`,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+
+/**
+ * Where the Website row's open button goes. A bare host ("portal.office.com")
+ * opens over https, the way people type it; any scheme but http(s) — ssh://,
+ * rdp://, javascript: — gets no button, only the copy.
+ */
+function openableUrl(value: string): string | null {
+  if (/^https?:\/\//i.test(value)) return value;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return null;
+  return /^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(value) ? `https://${value}` : null;
 }

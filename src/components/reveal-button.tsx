@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Copy, Eye, EyeOff, Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Check, Copy, Eye, EyeOff, Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 import { useStepUp } from './step-up-dialog';
+import { FieldLine, iconActionClass } from './field-row';
 import { STEP_UP_CODE, withStepUp } from '@/lib/ui/step-up';
 import { apiFetch } from '@/lib/ui/api';
 import { copyAudited, copyFailureMessage, type CopyOutcome } from '@/lib/ui/clipboard';
@@ -204,10 +205,65 @@ export function RevealButton({
   const copyFailure = copyOutcome ? copyFailureMessage(copyOutcome) : null;
   const blocked = state.status === 'loading' || (Boolean(needsReason) && reason.trim().length < 10);
 
+  const shown = state.status === 'shown';
+  const copied = copyOutcome === 'copied';
+
   return (
-    <div className="space-y-2" data-secret>
+    <div className="space-y-1.5" data-secret>
       {stepUp.dialog}
-      {needsReason && state.status !== 'shown' && (
+      <FieldLine
+        mono
+        actions={
+          <>
+            <button
+              type="button"
+              className={iconActionClass}
+              onClick={shown ? hide : reveal}
+              disabled={!shown && blocked}
+              title={shown ? 'Hide' : requiresStepUp ? 'Reveal (asks you to confirm it is you)' : 'Reveal'}
+              aria-label={`${shown ? 'Hide' : 'Reveal'} ${label}`}
+            >
+              {state.status === 'loading' && lastAttempt.current === 'view' ? (
+                <Loader2 className="animate-spin" aria-hidden />
+              ) : shown ? (
+                <EyeOff aria-hidden />
+              ) : (
+                <Eye aria-hidden />
+              )}
+            </button>
+            <button
+              type="button"
+              className={iconActionClass}
+              // On screen, copy what is shown and record it; hidden, reveal
+              // for copying and never show it.
+              onClick={shown ? copy : quickCopy}
+              disabled={!shown && blocked}
+              title={shown ? 'Copy (recorded)' : 'Copy without showing it (recorded)'}
+              aria-label={`Copy ${label}`}
+            >
+              {state.status === 'loading' && lastAttempt.current === 'copy' ? (
+                <Loader2 className="animate-spin" aria-hidden />
+              ) : copied ? (
+                <Check className="text-ok" aria-hidden />
+              ) : (
+                <Copy aria-hidden />
+              )}
+            </button>
+          </>
+        }
+      >
+        {shown ? (
+          <span className="select-all">{state.value}</span>
+        ) : (
+          // A fixed run of dots, so the mask says nothing about the length.
+          <>
+            <span className="tracking-[0.2em] text-ink-muted" aria-hidden>••••••••••••</span>
+            <span className="sr-only">Hidden</span>
+          </>
+        )}
+      </FieldLine>
+
+      {needsReason && !shown && (
         <div className="space-y-1">
           <Label htmlFor={`reason-${secretId}`}>Reason (recorded in the audit log)</Label>
           <Input
@@ -220,71 +276,16 @@ export function RevealButton({
         </div>
       )}
 
-      {state.status === 'shown' ? (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-sm">
-              {state.value}
-            </code>
-            <Button size="icon" variant="secondary" onClick={copy} title="Copy (audited separately)">
-              <Copy aria-hidden />
-              <span className="sr-only">Copy {label}</span>
-            </Button>
-            <Button size="icon" variant="ghost" onClick={hide} title="Hide">
-              <EyeOff aria-hidden />
-              <span className="sr-only">Hide {label}</span>
-            </Button>
-          </div>
-          <p className="text-xs text-ink-faint">
-            Hides automatically in {AUTO_HIDE_MS / 1000}s.
-            {copyOutcome === 'copied' && (
-              <span className="ml-2 text-ok">Copied — recorded as a copy event.</span>
-            )}
-            {copyFailure && <span className="ml-2 text-danger">{copyFailure}</span>}
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Button
-              variant={requiresStepUp ? 'danger' : 'secondary'}
-              size="sm"
-              onClick={reveal}
-              disabled={blocked}
-            >
-              {state.status === 'loading' ? (
-                <Loader2 className="animate-spin" aria-hidden />
-              ) : (
-                <Eye aria-hidden />
-              )}
-              Reveal
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={quickCopy}
-              disabled={blocked}
-              title="Copy without showing it (recorded as a copy)"
-            >
-              <Copy aria-hidden />
-              Copy
-              <span className="sr-only"> {label}</span>
-            </Button>
-          </div>
-          {copyOutcome === 'copied' && (
-            <p className="text-xs text-ok">Copied — recorded as a copy event.</p>
-          )}
-          {copyFailure && <p className="text-xs text-danger">{copyFailure}</p>}
-        </div>
+      {(shown || copied || copyFailure) && (
+        <p className="text-xs text-ink-faint">
+          {shown && `Hides automatically in ${AUTO_HIDE_MS / 1000}s.`}
+          {copied && <span className={cn('text-ok', shown && 'ml-2')}>Copied — recorded as a copy event.</span>}
+          {copyFailure && <span className={cn('text-danger', shown && 'ml-2')}>{copyFailure}</span>}
+        </p>
       )}
 
       {(state.status === 'denied' || state.status === 'error') && (
-        <div
-          className={cn(
-            'flex items-start gap-2 rounded-md border px-3 py-2 text-xs',
-            'border-danger/30 bg-danger/5 text-ink',
-          )}
-        >
+        <div className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-ink">
           <ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-danger" aria-hidden />
           <div>
             <p>{state.message}</p>
