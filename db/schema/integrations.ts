@@ -101,6 +101,25 @@ export const ninjaOrganization = pgTable('ninja_organization', {
 ]);
 
 /**
+ * A Microsoft 365 user and the contact it became (0990). Contacts are not
+ * asset nodes, so this is external_identity's idea for them.
+ */
+export const m365ContactLink = pgTable('m365_contact_link', {
+  tenantId: uuid('tenant_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  connectionId: uuid('connection_id').notNull(),
+  graphUserId: text('graph_user_id').notNull(),
+  contactId: uuid('contact_id').notNull(),
+  payloadSha256: bytea('payload_sha256'),
+  applied: jsonb('applied').notNull().default({}),
+  lastSyncedAt: tstz('last_synced_at').notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.connectionId, t.graphUserId] }),
+  uniqueIndex('m365_contact_link_contact_uk').on(t.connectionId, t.contactId),
+  index('m365_contact_link_contact_idx').on(t.contactId),
+]);
+
+/**
  * Outbound notification destinations (db/sql/0110, reshaped by 0420).
  *
  * Declared here so the drift check can see it, NOT so request-path code can
