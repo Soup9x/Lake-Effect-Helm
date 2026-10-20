@@ -630,6 +630,10 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
       }),
   },
   {
+    name: 'the password generator',
+    load: async () => (await import('../../src/app/(app)/global/password-generator/page')).default(),
+  },
+  {
     name: 'the flexible-asset grid',
     load: async () =>
       (await import('../../src/app/(app)/organizations/[organizationId]/flexible/[typeId]/page'))

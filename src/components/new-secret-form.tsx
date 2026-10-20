@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { PasswordGenerator } from './password-generator';
 import { useRouter } from 'next/navigation';
 import { KeyRound, Loader2, Plus } from 'lucide-react';
 import { Button } from './ui/button';
@@ -287,15 +288,18 @@ export function NewSecretForm({
                 className="font-mono"
               />
             ) : (
-              <Input
-                id="secret-value"
-                type="password"
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                required
-                spellCheck={false}
-                autoComplete="new-password"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="secret-value"
+                  type="password"
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  required
+                  spellCheck={false}
+                  autoComplete="new-password"
+                />
+                <PasswordGenerator onUse={setValue} />
+              </div>
             )}
             <FieldHint>
               Encrypted before it is stored, and never shown again without an audited reveal.

@@ -34,6 +34,7 @@
  * offending box is the whole reason the API returns field pointers.
  */
 import { useMemo, useState } from 'react';
+import { PasswordGenerator } from './password-generator';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { Modal, ModalTrigger } from './ui/modal';
@@ -421,18 +422,24 @@ function RecordField({
                 </option>
               ))}
             </Select>
+          ) : field.kind === 'secret' ? (
+            <div className="flex gap-2">
+              <Input
+                {...shared}
+                type={inputType(field)}
+                value={text}
+                onChange={(e) => onChange(e.target.value)}
+                autoComplete="new-password"
+                placeholder={secretHeld ? 'Unchanged' : ''}
+              />
+              <PasswordGenerator onUse={onChange} />
+            </div>
           ) : (
             <Input
               {...shared}
               type={inputType(field)}
               value={text}
               onChange={(e) => onChange(e.target.value)}
-              {...(field.kind === 'secret'
-                ? {
-                    autoComplete: 'new-password',
-                    placeholder: secretHeld ? 'Unchanged' : '',
-                  }
-                : {})}
               {...(field.kind === 'number' || field.kind === 'integer'
                 ? {
                     step: field.kind === 'integer' ? 1 : 'any',
@@ -440,9 +447,7 @@ function RecordField({
                     ...(field.max === undefined ? {} : { max: field.max }),
                   }
                 : {})}
-              {...(field.maxLength === undefined || field.kind === 'secret'
-                ? {}
-                : { maxLength: field.maxLength })}
+              {...(field.maxLength === undefined ? {} : { maxLength: field.maxLength })}
             />
           )}
         </>

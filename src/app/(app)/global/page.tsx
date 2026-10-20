@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
-  Activity, Boxes, CalendarClock, FileDown, Grid3x3, Layers, Search, Server, Settings, Users,
+  Activity, Boxes, CalendarClock, FileDown, Grid3x3, Layers, Search, Server, Settings, Users, Wand2,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -113,6 +113,13 @@ export default async function GlobalPage() {
             icon={Server}
             title="Configurations"
             detail="Every client’s servers, network gear and endpoints, filtered the same way."
+          />
+
+          <Tile
+            href="/global/password-generator"
+            icon={Wand2}
+            title="Password generator"
+            detail="A strong password for something Helm does not hold. Made in your browser."
           />
 
           <Tile

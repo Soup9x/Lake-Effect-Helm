@@ -33,6 +33,7 @@
  * one. Editing a credential should not require seeing it.
  */
 import { useState } from 'react';
+import { PasswordGenerator } from './password-generator';
 import { useRouter } from 'next/navigation';
 import { KeyRound, Loader2, Pencil, RotateCw } from 'lucide-react';
 import { Button } from './ui/button';
@@ -449,13 +450,16 @@ export function CredentialEditForm({
             <div className="space-y-3">
               <div>
                 <Label htmlFor="cred-value">New value</Label>
-                <Input
-                  id="cred-value"
-                  type="password"
-                  value={newValue}
-                  autoComplete="new-password"
-                  onChange={(e) => setNewValue(e.target.value)}
-                />
+                <div className="flex gap-2">
+                  <Input
+                    id="cred-value"
+                    type="password"
+                    value={newValue}
+                    autoComplete="new-password"
+                    onChange={(e) => setNewValue(e.target.value)}
+                  />
+                  <PasswordGenerator onUse={setNewValue} />
+                </div>
                 <FieldHint>
                   Stored as a new version. The old one is superseded, not deleted, so an export
                   taken yesterday still makes sense.
