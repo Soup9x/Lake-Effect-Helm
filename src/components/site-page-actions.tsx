@@ -1,15 +1,14 @@
 'use client';
 
 /**
- * The location page's header buttons: Edit, and Remove.
+ * The location page's header buttons: Edit, and Archive or Restore.
  *
  * Edit is the same dialog the Locations list opens, so a correction made from
- * either place goes through one form. Remove is the list's Remove too; the only
- * difference is where it leaves you — a removed location has no page, so this
- * one goes back to the client's Locations.
+ * either place goes through one form. Delete is not here: it is offered from
+ * the archive, in the list, after archiving — the order contacts use (0940).
  */
 import { useState } from 'react';
-import { Pencil, Trash2 } from 'lucide-react';
+import { ArchiveRestore, Pencil, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { SiteForm } from './site-form';
 import { RowRemoveDialog } from './shell/row-remove-dialog';
@@ -19,21 +18,24 @@ export function SitePageActions({
   siteId,
   organizationId,
   values,
+  archived,
 }: {
   siteId: string;
   organizationId: string;
   values: SiteValues;
+  archived: boolean;
 }) {
   const [editing, setEditing] = useState(false);
-  const [removing, setRemoving] = useState(false);
+  const [archiving, setArchiving] = useState(false);
 
   return (
     <>
       <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
         <Pencil aria-hidden /> Edit
       </Button>
-      <Button variant="ghost" size="sm" onClick={() => setRemoving(true)}>
-        <Trash2 aria-hidden /> Remove
+      <Button variant="ghost" size="sm" onClick={() => setArchiving(true)}>
+        {archived ? <ArchiveRestore aria-hidden /> : <Trash2 aria-hidden />}
+        {archived ? 'Restore' : 'Archive'}
       </Button>
 
       <SiteForm
@@ -42,14 +44,14 @@ export function SitePageActions({
         open={editing}
         onOpenChange={setEditing}
       />
-      {removing && (
+      {archiving && (
         <RowRemoveDialog
           rowId={siteId}
           rowLabel={values.name}
           kind="site"
+          mode={archived ? 'restore' : 'remove'}
           open
-          onOpenChange={(next) => { if (!next) setRemoving(false); }}
-          afterHref={`/organizations/${organizationId}/locations`}
+          onOpenChange={(next) => { if (!next) setArchiving(false); }}
         />
       )}
     </>

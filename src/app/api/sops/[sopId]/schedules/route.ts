@@ -57,7 +57,7 @@ export const POST = tenantRoute(
     if (body.siteId) {
       const [site] = await tx<{ ok: boolean }[]>`
         SELECT true AS ok FROM site st JOIN asset_node n ON n.organization_id = st.organization_id
-        WHERE st.id = ${body.siteId}::uuid AND n.id = ${sopId.data}::uuid AND st.deleted_at IS NULL
+        WHERE st.id = ${body.siteId}::uuid AND n.id = ${sopId.data}::uuid AND st.deleted_at IS NULL AND st.archived_at IS NULL
       `;
       if (!site) throw ApiError.invalid('that site is not one of this client’s');
     }

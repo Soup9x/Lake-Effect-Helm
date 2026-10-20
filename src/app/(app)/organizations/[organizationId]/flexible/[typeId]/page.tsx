@@ -64,7 +64,7 @@ export default async function FlexibleAssetPage({
     // offer sites this actor may already see.
     const sites = await tx<{ id: string; name: string }[]>`
       SELECT id, name FROM site
-      WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+      WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL AND archived_at IS NULL
       ORDER BY name
     `;
 

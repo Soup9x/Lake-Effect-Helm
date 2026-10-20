@@ -18,6 +18,7 @@ export const dynamic = 'force-dynamic';
 
 type SiteRow = Parameters<typeof siteValuesFrom>[0] & {
   id: string; organization_id: string; organization_name: string; updated_at: Date;
+  archived_at: Date | null;
 };
 
 interface AssetHere { id: string; name: string; node_type: string; status: string }
@@ -33,7 +34,8 @@ const ORDER = new Map<string, number>(ORG_CATEGORIES.map((c, i) => [c.source, i]
  * This is the read view the list now links to; Edit opens that same dialog.
  *
  * UNDER RLS like every read: a site this actor cannot see is a 404, the same
- * answer as one that does not exist or was removed. What is listed as being
+ * answer as one that does not exist or was deleted. An archived location is
+ * shown, marked, with Restore — the archive view links here too. What is listed as being
  * here is read under RLS too, so a restricted entry is simply not counted.
  */
 export default async function LocationPage({ params }: { params: Promise<{ siteId: string }> }) {
@@ -47,7 +49,7 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
              s.name, s.code, s.is_primary, s.address_line1, s.address_line2, s.city, s.region,
              s.postal_code, s.country, s.timezone, s.main_phone, s.after_hours_phone,
              ARRAY(SELECT abbrev(ip) FROM unnest(s.public_ips) AS ip) AS public_ips,
-             s.access_notes, s.physical_security, s.notes, s.updated_at
+             s.access_notes, s.physical_security, s.notes, s.updated_at, s.archived_at
       FROM site s
       JOIN organization o ON o.id = s.organization_id
       WHERE s.id = ${siteId}::uuid AND s.deleted_at IS NULL
@@ -109,13 +111,15 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
           { label: 'Locations', href: `/organizations/${row.organization_id}/locations` },
         ]}
         actions={canWrite ? (
-          <SitePageActions siteId={row.id} organizationId={row.organization_id} values={values} />
+          <SitePageActions siteId={row.id} organizationId={row.organization_id} values={values}
+            archived={row.archived_at !== null} />
         ) : undefined}
       />
       <PageBody>
-        {row.is_primary && (
+        {(row.is_primary || row.archived_at) && (
           <div className="flex flex-wrap items-center gap-1.5">
-            <Badge tone="brand">Primary location</Badge>
+            {row.archived_at && <Badge tone="warning">Archived {formatDateTime(row.archived_at.toISOString())}</Badge>}
+            {row.is_primary && <Badge tone="brand">Primary location</Badge>}
           </div>
         )}
 

@@ -50,7 +50,8 @@ export async function loadOrgNav(tx: HelmTx, organizationId: string): Promise<Or
           WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
             AND archived_at IS NULL) AS contacts,
         (SELECT count(*)::text FROM site
-          WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL) AS locations,
+          WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+            AND archived_at IS NULL) AS locations,
         (SELECT count(*)::text FROM network_diagram
           WHERE organization_id = ${organizationId}::uuid AND archived_at IS NULL) AS diagrams,
         -- Uploaded files AND written documents, live ones only: the same

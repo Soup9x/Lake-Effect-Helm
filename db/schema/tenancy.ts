@@ -96,6 +96,8 @@ export const site = pgTable('site', {
   notes: text('notes'),
   /** Static WAN addresses or blocks the location is reached on (0840). */
   publicIps: inetArray('public_ips').notNull().default(sql`'{}'`),
+  /** Archived: off the list and out of search, restorable (0940). */
+  archivedAt: tstz('archived_at'),
   ...auditColumns,
   ...softDelete,
 }, (t) => [

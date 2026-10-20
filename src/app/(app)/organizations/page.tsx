@@ -85,7 +85,7 @@ export default async function OrganizationsPage({
         -- client this reader cannot see contributes nothing here either.
         EXISTS (SELECT 1 FROM organization_logo l WHERE l.organization_id = o.id) AS has_logo,
         (SELECT count(*) FROM site s
-          WHERE s.organization_id = o.id AND s.deleted_at IS NULL) AS site_count,
+          WHERE s.organization_id = o.id AND s.deleted_at IS NULL AND s.archived_at IS NULL) AS site_count,
         (SELECT count(*) FROM asset_node n
           WHERE n.organization_id = o.id AND n.archived_at IS NULL) AS asset_count,
         (SELECT count(*) FROM v_secret_metadata m

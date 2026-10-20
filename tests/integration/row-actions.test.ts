@@ -17,7 +17,7 @@ import { POST as createCredential } from '../../src/app/api/secrets/route';
 import { POST as createContact } from '../../src/app/api/contacts/route';
 import { DELETE as deleteContact } from '../../src/app/api/contacts/[contactId]/route';
 import { POST as createSite } from '../../src/app/api/sites/route';
-import { DELETE as deleteSite } from '../../src/app/api/sites/[siteId]/route';
+import { DELETE as deleteSite, PATCH as patchSite } from '../../src/app/api/sites/[siteId]/route';
 import { POST as bulkArchive } from '../../src/app/api/bulk/archive/route';
 import { PATCH as patchSecret } from '../../src/app/api/secrets/[secretId]/route';
 import { PATCH as patchAsset } from '../../src/app/api/assets/[nodeId]/route';
@@ -153,8 +153,32 @@ describe('removing a contact', () => {
 });
 
 // ---------------------------------------------------------------------------
-describe('removing a site', () => {
-  it('soft-deletes it and reports what it orphaned', async () => {
+describe('archiving and removing a site (0940)', () => {
+  it('archives a site, restores it, and refuses to delete one that is live', async () => {
+    const created = await createSite(req('POST', {
+      organizationId: IDS.orgAcme, name: 'Refit Branch', isPrimary: true,
+    }));
+    const siteId = ((await body(created)) as { site: { id: string } }).site.id;
+    const params = { params: Promise.resolve({ siteId }) };
+
+    expect((await deleteSite(req('DELETE'), params)).status).toBe(409);
+
+    expect((await patchSite(req('PATCH', { archived: true }), params)).status).toBe(200);
+    expect(await scalar(
+      `SELECT archived_at IS NOT NULL AND NOT is_primary AS ok FROM site WHERE id='${siteId}'`),
+      'archiving also gives up the head-office flag').toBe(true);
+    expect(await scalar(
+      `SELECT count(*)::text FROM search_document WHERE entity_id='${siteId}'`),
+      'and leaves search').toBe('0');
+
+    expect((await patchSite(req('PATCH', { archived: false }), params)).status).toBe(200);
+    expect(await scalar(`SELECT archived_at IS NULL AS live FROM site WHERE id='${siteId}'`)).toBe(true);
+    expect(await scalar(
+      `SELECT count(*)::text FROM search_document WHERE entity_id='${siteId}'`),
+      'and comes back on restore').toBe('1');
+  });
+
+  it('soft-deletes an archived site and reports what it orphaned', async () => {
     const created = await createSite(req('POST', {
       organizationId: IDS.orgAcme, name: 'Closing Branch',
     }));
@@ -164,6 +188,7 @@ describe('removing a site', () => {
     const { credentialId } = await makeCredential('At the branch');
     await patchAsset(req('PATCH', { siteId }), { params: Promise.resolve({ nodeId: credentialId }) });
 
+    await patchSite(req('PATCH', { archived: true }), { params: Promise.resolve({ siteId }) });
     const response = await deleteSite(req('DELETE'), { params: Promise.resolve({ siteId }) });
     expect(response.status).toBe(200);
     const payload = await body(response);

@@ -51,7 +51,7 @@ export default async function DiagramPage({ params }: { params: Promise<{ diagra
       ? await Promise.all([
           tx<{ id: string; name: string }[]>`
             SELECT id, name FROM site
-            WHERE organization_id = ${row.organization_id}::uuid AND deleted_at IS NULL
+            WHERE organization_id = ${row.organization_id}::uuid AND deleted_at IS NULL AND archived_at IS NULL
             ORDER BY name
           `,
           tx<{ id: string; name: string }[]>`

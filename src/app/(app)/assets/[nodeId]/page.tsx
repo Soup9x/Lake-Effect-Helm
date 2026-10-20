@@ -183,7 +183,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     // so it can only ever offer sites this actor may already see.
     const sites = await tx<{ id: string; name: string }[]>`
       SELECT id, name FROM site
-      WHERE organization_id = ${node.organization_id}::uuid AND deleted_at IS NULL
+      WHERE organization_id = ${node.organization_id}::uuid AND deleted_at IS NULL AND archived_at IS NULL
       ORDER BY name
     `;
 

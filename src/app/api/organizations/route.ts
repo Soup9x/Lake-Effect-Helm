@@ -28,7 +28,7 @@ export const GET = tenantRoute(
         o.id, o.slug, o.name, o.status::text AS status,
         o.relationship::text AS relationship, o.is_msp_internal,
         (SELECT count(*)::text FROM site s
-          WHERE s.organization_id = o.id AND s.deleted_at IS NULL) AS site_count,
+          WHERE s.organization_id = o.id AND s.deleted_at IS NULL AND s.archived_at IS NULL) AS site_count,
         (SELECT count(*)::text FROM asset_node n
           WHERE n.organization_id = o.id AND n.archived_at IS NULL) AS asset_count
       FROM organization o

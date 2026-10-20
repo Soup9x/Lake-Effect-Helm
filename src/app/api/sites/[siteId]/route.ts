@@ -23,6 +23,8 @@ const patchSchema = z
     physicalSecurity: z.string().trim().max(4000).nullable().optional(),
     /** The whole list; an empty one clears it (0840). */
     publicIps: publicIpsSchema.nullable().optional(),
+    /** Archive (true) or restore (false), as a contact is (0940). */
+    archived: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
 
@@ -67,7 +69,11 @@ export const PATCH = tenantRoute(
       UPDATE site SET
         name              = COALESCE(${body.name ?? null}, name),
         code              = ${body.code === undefined ? tx`code` : body.code},
-        is_primary        = COALESCE(${body.isPrimary ?? null}, is_primary),
+        -- An archived location is nobody's head office: archiving clears the
+        -- flag, so the client can name another without a conflict.
+        is_primary        = ${body.archived === true
+          ? false
+          : tx`COALESCE(${body.isPrimary ?? null}, is_primary)`},
         address_line1     = ${body.addressLine1 === undefined ? tx`address_line1` : body.addressLine1},
         address_line2     = ${body.addressLine2 === undefined ? tx`address_line2` : body.addressLine2},
         city              = ${body.city === undefined ? tx`city` : body.city},
@@ -81,6 +87,9 @@ export const PATCH = tenantRoute(
         access_notes      = ${body.accessNotes === undefined ? tx`access_notes` : body.accessNotes},
         physical_security = ${body.physicalSecurity === undefined ? tx`physical_security` : body.physicalSecurity},
         public_ips        = ${body.publicIps === undefined ? tx`public_ips` : tx`${body.publicIps ?? []}::inet[]`},
+        archived_at       = ${body.archived === undefined
+          ? tx`archived_at`
+          : body.archived ? tx`coalesce(archived_at, now())` : tx`NULL`},
         updated_at        = now(),
         updated_by        = ${identity.actorId}::uuid
       WHERE id = ${siteId.data}::uuid AND deleted_at IS NULL
@@ -97,9 +106,9 @@ export const PATCH = tenantRoute(
 /**
  * DELETE /api/sites/:id — this location is closed.
  *
- * A SOFT DELETE, like contacts and for the same reason: `site` carries
- * deleted_at, there is no archive view for sites and no restore path, so the row
- * stays and nothing shows it again.
+ * A SOFT DELETE, like contacts and for the same reason: the row stays and
+ * nothing shows it again. Offered only once the location is archived (0940);
+ * archiving is the reversible step, this is the one that is not.
  *
  * WHAT HAPPENS TO WHAT WAS AT THIS SITE. Nothing is deleted with it. Every
  * reference to `site` is ON DELETE SET NULL, and a soft delete does not even
@@ -123,6 +132,15 @@ export const DELETE = tenantRoute(
         (SELECT count(*)::text FROM contact
           WHERE site_id = ${siteId.data}::uuid AND deleted_at IS NULL) AS contacts
     `;
+
+    // Archive first, then delete (0940) — the order contacts and documents
+    // use, so a location is never removed by one click from the live list.
+    const [current] = await tx<{ archived: boolean }[]>`
+      SELECT archived_at IS NOT NULL AS archived FROM site
+      WHERE id = ${siteId.data}::uuid AND deleted_at IS NULL
+    `;
+    if (!current) throw ApiError.notFound('no such site');
+    if (!current.archived) throw ApiError.conflict('archive the location before deleting it');
 
     const [row] = await tx<{ id: string; name: string }[]>`
       UPDATE site

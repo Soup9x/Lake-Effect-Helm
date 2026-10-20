@@ -282,14 +282,16 @@ export default async function CategoryPage({
 
     if (category.source === 'site') {
       const rows = await tx<(Parameters<typeof siteValuesFrom>[0] & {
-        id: string; updated_at: Date;
+        id: string; updated_at: Date; archived: boolean;
       })[]>`
         SELECT id, name, code, is_primary, address_line1, address_line2, city, region, postal_code,
                country, timezone, main_phone, after_hours_phone,
                ARRAY(SELECT abbrev(ip) FROM unnest(public_ips) AS ip) AS public_ips,
-               access_notes, physical_security, notes, updated_at
+               access_notes, physical_security, notes, updated_at,
+               archived_at IS NOT NULL AS archived
         FROM site
         WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+          ${includeArchived ? tx`` : tx`AND archived_at IS NULL`}
         ORDER BY is_primary DESC, name
       `;
       return {
@@ -305,6 +307,7 @@ export default async function CategoryPage({
           flagged: r.is_primary,
           updatedAt: r.updated_at.toISOString(),
           removeKind: 'site',
+          archived: r.archived,
           // The name opens the location's page; Edit opens the location dialog.
           href: `/locations/${r.id}`,
           editSite: { organizationId, values: siteValuesFrom(r) },
@@ -472,7 +475,7 @@ export default async function CategoryPage({
     ? await withTenant(actorOf(identity), (tx) =>
         tx<{ id: string; name: string }[]>`
           SELECT id, name FROM site
-          WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+          WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL AND archived_at IS NULL
           ORDER BY name
         `)
     : [];

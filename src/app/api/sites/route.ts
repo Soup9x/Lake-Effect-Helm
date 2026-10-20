@@ -46,7 +46,7 @@ export const GET = tenantRoute(
     const rows = await tx<SiteRow[]>`
       SELECT id, name, code, is_primary, city, region
       FROM site
-      WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+      WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL AND archived_at IS NULL
       ORDER BY is_primary DESC, name
     `;
 

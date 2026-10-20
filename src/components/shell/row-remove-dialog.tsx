@@ -12,8 +12,7 @@
  *
  *   A contact ARCHIVES too, since 0850, and is deleted from the archive.
  *
- *   A site is REMOVED. It carries deleted_at and has no archive view and no
- *   restore path, so from the interface this is one way.
+ *   A site is ARCHIVED, like a contact (0940), and deleted from the archive.
  *
  *   A folder is DELETED, and only when it is empty: both foreign keys into the
  *   tree are ON DELETE RESTRICT, so the database refuses anything else.
@@ -66,9 +65,9 @@ const COPY: Record<RemoveKind, { verb: string; body: string; reversible: boolean
     reversible: true,
   },
   site: {
-    verb: 'Remove',
-    body: 'The location stops appearing anywhere in Helm. Anything recorded there — assets, contacts, documents — keeps its record and simply shows no site. Sites have no archive view, so this cannot be undone from the interface.',
-    reversible: false,
+    verb: 'Archive',
+    body: 'The location leaves the list, search and the location pickers. Everything recorded there keeps pointing at it, and it can be restored — tick "Include archived" to find it. Deleting it permanently is done from there.',
+    reversible: true,
   },
 };
 
@@ -83,7 +82,7 @@ function requestFor(kind: RemoveKind, mode: RemoveMode, id: string): [string, Ap
       case 'page': return [`/api/document-pages/${id}`, { method: 'PATCH', json: { archived: true } }];
       case 'folder': return [`/api/document-folders/${id}`, { method: 'DELETE' }];
       case 'contact': return [`/api/contacts/${id}`, { method: 'PATCH', json: { archived: true } }];
-      case 'site': return [`/api/sites/${id}`, { method: 'DELETE' }];
+      case 'site': return [`/api/sites/${id}`, { method: 'PATCH', json: { archived: true } }];
       case 'diagram': return [`/api/diagrams/${id}`, { method: 'PATCH', json: { archived: true } }];
     }
   }
@@ -94,6 +93,7 @@ function requestFor(kind: RemoveKind, mode: RemoveMode, id: string): [string, Ap
       case 'page': return [`/api/document-pages/${id}`, { method: 'PATCH', json: { archived: false } }];
       case 'contact': return [`/api/contacts/${id}`, { method: 'PATCH', json: { archived: false } }];
       case 'diagram': return [`/api/diagrams/${id}`, { method: 'PATCH', json: { archived: false } }];
+      case 'site': return [`/api/sites/${id}`, { method: 'PATCH', json: { archived: false } }];
       default: return null;
     }
   }
@@ -102,6 +102,7 @@ function requestFor(kind: RemoveKind, mode: RemoveMode, id: string): [string, Ap
     case 'page': return [`/api/document-pages/${id}`, { method: 'DELETE' }];
     case 'contact': return [`/api/contacts/${id}`, { method: 'DELETE' }];
     case 'diagram': return [`/api/diagrams/${id}`, { method: 'DELETE' }];
+    case 'site': return [`/api/sites/${id}`, { method: 'DELETE' }];
     default: return null;
   }
 }
@@ -119,7 +120,6 @@ export function RowRemoveDialog({
   blockedReason,
   open,
   onOpenChange,
-  afterHref,
 }: {
   rowId: string;
   rowLabel: string;
@@ -129,8 +129,6 @@ export function RowRemoveDialog({
   blockedReason?: string | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Where to go once it is gone, when the page showing it no longer exists. */
-  afterHref?: string | undefined;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -148,6 +146,8 @@ export function RowRemoveDialog({
                 ? 'This person is removed from Helm for good, and cannot be restored.'
                 : kind === 'diagram'
                 ? 'The diagram and every box and line on it are destroyed.'
+                : kind === 'site'
+                ? 'The location stops appearing anywhere in Helm, for good. What was recorded there keeps its record and shows no location.'
                 : 'The file is destroyed. Anything that linked to it will show it as gone.',
             reversible: false,
           }
@@ -165,8 +165,7 @@ export function RowRemoveDialog({
         return;
       }
       onOpenChange(false);
-      if (afterHref) router.push(afterHref);
-      else router.refresh();
+      router.refresh();
     } finally {
       setBusy(false);
     }
