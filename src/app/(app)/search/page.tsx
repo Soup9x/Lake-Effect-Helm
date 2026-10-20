@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Building2, FileText, KeyRound, MapPin, Network, Search, Users } from 'lucide-react';
+import { Building2, FileText, KeyRound, MapPin, Network, Search, Users, Workflow } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
@@ -18,6 +18,7 @@ const ICONS: Record<ResultKind, typeof Search> = {
   document: FileText,
   asset: Network,
   contact: Users,
+  diagram: Workflow,
 };
 
 /**

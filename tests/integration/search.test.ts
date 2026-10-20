@@ -345,3 +345,89 @@ describe('the index keeps up with the data', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+describe('network diagrams (0950)', () => {
+  const DIAGRAM = '1e920000-0000-0000-0000-000000000001';
+  const su = async (fn: (sql: ReturnType<typeof superuserSql>) => Promise<unknown>) => {
+    const sql = superuserSql();
+    try { await fn(sql); } finally { await sql.end({ timeout: 5 }); }
+  };
+
+  beforeAll(async () => {
+    // Written as the application would, so the triggers under test are the
+    // ones that index it.
+    await withTenant({ tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' }, async (tx) => {
+      await tx`
+        INSERT INTO network_diagram (id, tenant_id, organization_id, name, description)
+        VALUES (${DIAGRAM}::uuid, ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid,
+                'Riverside office', 'Second floor comms room and the warehouse link')
+      `;
+      await tx`
+        INSERT INTO topology_node (tenant_id, diagram_id, asset_node_id, label, ip_address) VALUES
+          (${IDS.tenant1}::uuid, ${DIAGRAM}::uuid, NULL, 'Patch panel B2', '10.20.0.5'),
+          (${IDS.tenant1}::uuid, ${DIAGRAM}::uuid, ${IDS.firewall}::uuid, 'acme-fw-01', NULL),
+          (${IDS.tenant1}::uuid, ${DIAGRAM}::uuid, ${IDS.domainController}::uuid, 'ACME-DC01', NULL)
+      `;
+    });
+  });
+
+  afterAll(async () => {
+    await su((sql) => sql`DELETE FROM network_diagram WHERE id = ${DIAGRAM}::uuid`);
+  });
+
+  const diagramHit = (r: SearchResponse) => r.hits.find((h) => h.entityId === DIAGRAM);
+
+  it('finds a diagram by its name and description, and opens its page', async () => {
+    const hit = diagramHit(await find('Riverside office'));
+    expect(hit?.kind).toBe('diagram');
+    expect(hit?.href).toBe(`/diagrams/${DIAGRAM}`);
+    expect(diagramHit(await find('warehouse link'))).toBeDefined();
+  });
+
+  it('finds it by what is drawn on it: a box’s label, its address, a configuration’s name', async () => {
+    expect(diagramHit(await find('Patch panel B2'))).toBeDefined();
+    expect(diagramHit(await find('10.20.0.5'))).toBeDefined();
+    expect(diagramHit(await find('ACME-DC01'))).toBeDefined();
+  });
+
+  it('follows a box’s configuration when it is renamed', async () => {
+    await su((sql) => sql`UPDATE asset_node SET name = 'ACME-DC-RIVERSIDE' WHERE id = ${IDS.domainController}::uuid`);
+    try {
+      expect(diagramHit(await find('ACME-DC-RIVERSIDE'))).toBeDefined();
+    } finally {
+      await su((sql) => sql`UPDATE asset_node SET name = 'ACME-DC01' WHERE id = ${IDS.domainController}::uuid`);
+    }
+  });
+
+  it('does not say the name of a restricted entry drawn on it', async () => {
+    // The WITHHOLDS test above already made the firewall internal-only; said
+    // again here so this test does not lean on the order of the file.
+    await su((sql) => sql`UPDATE asset_node SET is_internal_only = true WHERE id = ${IDS.firewall}::uuid`);
+    expect(diagramHit(await find('acme-fw-01')), 'not even to the MSP: the index holds no restricted labels')
+      .toBeUndefined();
+
+    // And the moment an entry becomes restricted, its name leaves.
+    await su((sql) => sql`UPDATE asset_node SET is_internal_only = true WHERE id = ${IDS.domainController}::uuid`);
+    try {
+      expect(diagramHit(await find('ACME-DC01'))).toBeUndefined();
+    } finally {
+      await su((sql) => sql`UPDATE asset_node SET is_internal_only = false WHERE id = ${IDS.domainController}::uuid`);
+    }
+    expect(diagramHit(await find('ACME-DC01'))).toBeDefined();
+  });
+
+  it('leaves search when archived, and hides an internal-only diagram from the client', async () => {
+    expect(diagramHit(await find('Riverside office', IDS.acmeViewer))).toBeDefined();
+    await su((sql) => sql`UPDATE network_diagram SET is_internal_only = true WHERE id = ${DIAGRAM}::uuid`);
+    expect(diagramHit(await find('Riverside office', IDS.acmeViewer))).toBeUndefined();
+    expect(diagramHit(await find('Riverside office'))).toBeDefined();
+
+    await su((sql) => sql`UPDATE network_diagram SET is_internal_only = false, archived_at = now() WHERE id = ${DIAGRAM}::uuid`);
+    try {
+      expect(diagramHit(await find('Riverside office'))).toBeUndefined();
+    } finally {
+      await su((sql) => sql`UPDATE network_diagram SET archived_at = NULL WHERE id = ${DIAGRAM}::uuid`);
+    }
+  });
+});

@@ -40,6 +40,7 @@ export const RESULT_KINDS = [
   'document',
   'asset',
   'contact',
+  'diagram',
 ] as const;
 
 export type ResultKind = (typeof RESULT_KINDS)[number];
@@ -51,6 +52,7 @@ export const KIND_LABELS: Record<ResultKind, { singular: string; plural: string 
   document: { singular: 'Document', plural: 'Documents' },
   asset: { singular: 'Asset', plural: 'Assets' },
   contact: { singular: 'Contact', plural: 'Contacts' },
+  diagram: { singular: 'Diagram', plural: 'Diagrams' },
 };
 
 export function isResultKind(value: string): value is ResultKind {
@@ -211,6 +213,9 @@ function hrefFor(row: RawHit): string {
       return `/contacts/${row.entity_id}`;
     case 'site':
       return `/locations/${row.entity_id}`;
+    case 'diagram':
+      // A network diagram has a page of its own since 0880.
+      return `/diagrams/${row.entity_id}`;
     default:
       return `/organizations/${row.organization_id}`;
   }
