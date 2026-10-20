@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import {
-  AlertTriangle, Building2, CalendarClock, FileDown, KeyRound, ListChecks,
+  AlertTriangle, Building2, CalendarClock, FileDown, KeyRound, Layers, ListChecks,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -15,6 +15,7 @@ import {
 } from '@/components/widgets';
 import { QuickActionsWidget } from '@/components/widgets/quick-actions';
 import { isClientRole } from '@/lib/ui/roles';
+import { GLOBAL_ASSET_NODE_TYPES } from '@/lib/global/lists';
 import { getLayout, listFavorites, listRecent } from '@/lib/workspace/queries';
 import { countMyOpenTasks } from '@/lib/sops/queries';
 import type { WidgetKey } from '@/lib/workspace/widgets';
@@ -91,8 +92,13 @@ export default async function DashboardPage() {
     const [countRow] = await tx<Counts[]>`
       SELECT
         (SELECT count(*) FROM organization WHERE deleted_at IS NULL) AS organizations,
-        (SELECT count(*) FROM asset_node WHERE archived_at IS NULL) AS assets,
-        (SELECT count(*) FROM v_secret_metadata) AS secrets,
+        -- The same rows the Global lists these tiles open will show: assets
+        -- without credentials, and credentials as entries rather than every
+        -- vault secret (which would count TOTP seeds and integration keys).
+        (SELECT count(*) FROM asset_node
+          WHERE archived_at IS NULL AND node_type = ANY (${GLOBAL_ASSET_NODE_TYPES as string[]}::node_type[])) AS assets,
+        (SELECT count(*) FROM asset_node
+          WHERE archived_at IS NULL AND node_type = 'credential') AS secrets,
         (SELECT count(*) FROM v_expiration_dashboard
           WHERE days_remaining BETWEEN 0 AND 30) AS expiring_30,
         (SELECT count(*) FROM v_expiration_dashboard WHERE days_remaining < 0) AS expired,
@@ -143,8 +149,10 @@ export default async function DashboardPage() {
         ? tx<UsageRow[]>`
             SELECT
               (SELECT count(*) FROM organization WHERE deleted_at IS NULL) AS organizations,
-              (SELECT count(*) FROM v_secret_metadata) AS secrets,
-              (SELECT count(*) FROM asset_node WHERE archived_at IS NULL) AS assets,
+              (SELECT count(*) FROM asset_node
+                WHERE archived_at IS NULL AND node_type = 'credential') AS secrets,
+              (SELECT count(*) FROM asset_node
+                WHERE archived_at IS NULL AND node_type = ANY (${GLOBAL_ASSET_NODE_TYPES as string[]}::node_type[])) AS assets,
               (SELECT count(*) FROM site WHERE deleted_at IS NULL AND archived_at IS NULL) AS sites,
               (SELECT count(*) FROM contact) AS contacts,
               (SELECT count(*) FROM attachment WHERE deleted_at IS NULL) AS attachments
@@ -302,8 +310,8 @@ export default async function DashboardPage() {
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <Stat icon={Building2} label="Clients" value={counts?.organizations} href="/organizations" />
-          <Stat icon={KeyRound} label="Assets" value={counts?.assets} />
-          <Stat icon={KeyRound} label="Credentials" value={counts?.secrets} />
+          <Stat icon={Layers} label="Assets" value={counts?.assets} href="/global/assets" />
+          <Stat icon={KeyRound} label="Credentials" value={counts?.secrets} href="/global/credentials" />
           <Stat
             icon={CalendarClock}
             label="Expiring in 30 days"

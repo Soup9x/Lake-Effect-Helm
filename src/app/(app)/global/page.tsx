@@ -1,15 +1,13 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
-  CalendarClock, FileDown, Grid3x3, Layers, Search, Server, Settings, Wand2,
+  CalendarClock, FileDown, Grid3x3, KeyRound, Layers, Search, Server, Wand2,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
-import { isClientRole } from '@/lib/ui/roles';
-import { ADMIN_SECTIONS } from '@/lib/settings/sections';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,27 +25,18 @@ export const dynamic = 'force-dynamic';
  * worse menu than the sidebar, because it costs a page load to learn nothing.
  *
  * AND THE NUMBERS COME THROUGH RLS, so a client-side role that somehow reached
- * this page sees its own organisation's figures rather than the tenant's. The
- * administrative cards are hidden from it as well — not because the pages are
- * unprotected (they check their own permissions) but because a card offering a
- * count of "0 people" to somebody who cannot open the People page is a control
- * that exists to say no.
+ * this page sees its own organisation's figures rather than the tenant's.
  *
- * NO CROSS-CLIENT ASSET LIST. The plan's wording mentioned "an assets view"
- * and there is no such page — /assets/[nodeId] is a single record. A filterable
- * table over every asset in the tenant is a group of its own, not assembly, and
- * inventing a half of one here would be the kind of placeholder the plan has
- * spent eleven groups refusing. The Documentation coverage card is the thing
- * that answers "what do we have", which is what that wording was reaching for.
+ * NOTHING ADMINISTRATIVE. People, the audit log and settings are the
+ * Administration tab now, a scope of their own.
  */
 export default async function GlobalPage() {
   const identity = await getServerIdentity();
-  const isClient = isClientRole(identity.roleKey);
 
   const counts = await withTenant(actorOf(identity), async (tx) => {
     const [row] = await tx<{
       expiring: number; critical: number; exports: number;
-      clients: number; documented: number; people: number; events: number;
+      clients: number; documented: number;
     }[]>`
       SELECT
         -- The dashboard's own view, so this number and that one cannot
@@ -75,15 +64,10 @@ export default async function GlobalPage() {
           WHERE o.deleted_at IS NULL AND o.archived_at IS NULL
             AND EXISTS (SELECT 1 FROM asset_node n
                          WHERE n.organization_id = o.id
-                           AND n.archived_at IS NULL)) AS documented,
-        (SELECT count(*)::int FROM membership
-          WHERE status = 'active'
-            AND (expires_at IS NULL OR expires_at > now())) AS people,
-        (SELECT count(*)::int FROM audit_log
-          WHERE occurred_at > now() - interval '24 hours') AS events
+                           AND n.archived_at IS NULL)) AS documented
     `;
     return row ?? {
-      expiring: 0, critical: 0, exports: 0, clients: 0, documented: 0, people: 0, events: 0,
+      expiring: 0, critical: 0, exports: 0, clients: 0, documented: 0,
     };
   });
 
@@ -114,6 +98,13 @@ export default async function GlobalPage() {
             icon={Server}
             title="Configurations"
             detail="Every client’s servers, network gear and endpoints, filtered the same way."
+          />
+
+          <Tile
+            href="/global/credentials"
+            icon={KeyRound}
+            title="Credentials"
+            detail="Every client’s logins by name, username and where they are used. Values stay behind reveal."
           />
 
           <Tile
@@ -157,32 +148,6 @@ export default async function GlobalPage() {
 
         </div>
 
-        {/*
-          Administration is one card, not four tiles among the everyday ones:
-          the scope's page is for work that spans clients, and the settings
-          that govern the MSP are a different kind of visit (Administration has
-          its own index at /settings).
-        */}
-        {!isClient && (
-          <Card>
-            <CardContent className="space-y-3 p-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Settings className="size-4 text-ink-faint" aria-hidden />
-                <Link href="/settings" className="font-medium text-ink hover:underline">Administration</Link>
-                <span className="text-xs text-ink-faint">
-                  {counts.people} active {counts.people === 1 ? 'membership' : 'memberships'} · {counts.events} audit events in the last 24 hours
-                </span>
-              </div>
-              <ul className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2 lg:grid-cols-3">
-                {ADMIN_SECTIONS.map((section) => (
-                  <li key={section.href}>
-                    <Link href={section.href} className="text-brand hover:underline">{section.title}</Link>
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
-        )}
       </PageBody>
     </>
   );

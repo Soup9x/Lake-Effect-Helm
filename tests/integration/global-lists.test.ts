@@ -1,16 +1,18 @@
 /**
- * The Global tab's Assets and Configurations lists: every client's entries in
- * one grid, narrowed by filters read from the URL.
+ * The Global tab's Assets, Configurations and Credentials lists: every client's
+ * entries in one grid, narrowed by filters read from the URL.
  *
  * What is worth asserting is that each filter narrows what it names and no
  * more, that a filter value the list does not know is dropped rather than
- * trusted, that credentials are not listed, and that RLS — not the page —
- * decides whose entries anybody sees.
+ * trusted, that credentials stay out of Assets and in a list of their own that
+ * carries no secret material, and that RLS — not the page — decides whose
+ * entries anybody sees.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withTenant } from '../../src/lib/db/client';
 import {
-  listGlobalAssets, listGlobalConfigurations, readAssetFilters, readConfigurationFilters,
+  listGlobalAssets, listGlobalConfigurations, listGlobalCredentials,
+  readAssetFilters, readConfigurationFilters, readCredentialFilters,
 } from '../../src/lib/global/lists';
 import { connectPools, disconnectPools, IDS, resetDatabase } from './harness';
 
@@ -22,6 +24,8 @@ const assets = (search: Record<string, string>, actor = asAdmin) =>
   withTenant(actor, (tx) => listGlobalAssets(tx, readAssetFilters(search)));
 const configurations = (search: Record<string, string>, actor = asAdmin) =>
   withTenant(actor, (tx) => listGlobalConfigurations(tx, readConfigurationFilters(search)));
+const credentials = (search: Record<string, string>, actor = asAdmin) =>
+  withTenant(actor, (tx) => listGlobalCredentials(tx, readCredentialFilters(search)));
 const names = (rows: { name: string }[]) => rows.map((r) => r.name);
 
 beforeAll(async () => {
@@ -33,7 +37,22 @@ beforeAll(async () => {
       VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'credential', 'Acme domain admin')
       RETURNING id
     `;
-    await tx`INSERT INTO credential (id, tenant_id, username) VALUES (${cred!.id}::uuid, ${IDS.tenant1}::uuid, 'administrator')`;
+    await tx`INSERT INTO credential (id, tenant_id, username, url, credential_type)
+             VALUES (${cred!.id}::uuid, ${IDS.tenant1}::uuid, 'administrator', 'https://acme-dc01.acme.test', 'domain_admin')`;
+    const [globex] = await tx<{ id: string }[]>`
+      INSERT INTO asset_node (tenant_id, organization_id, node_type, name)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.orgGlobex}::uuid, 'credential', 'Globex app server local admin')
+      RETURNING id
+    `;
+    await tx`INSERT INTO credential (id, tenant_id, username, credential_type)
+             VALUES (${globex!.id}::uuid, ${IDS.tenant1}::uuid, 'localadmin', 'local_admin')`;
+    const [hidden] = await tx<{ id: string }[]>`
+      INSERT INTO asset_node (tenant_id, organization_id, node_type, name, is_internal_only)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'credential', 'Acme MSP break-glass', true)
+      RETURNING id
+    `;
+    await tx`INSERT INTO credential (id, tenant_id, username, credential_type)
+             VALUES (${hidden!.id}::uuid, ${IDS.tenant1}::uuid, 'msp-breakglass', 'local_admin')`;
     await tx`UPDATE asset_node SET status = 'retired' WHERE id = ${IDS.domainController}::uuid`;
     await tx`UPDATE asset_node SET is_internal_only = true WHERE id = ${IDS.crmApp}::uuid`;
   });
@@ -92,5 +111,45 @@ describe('the Configurations list', () => {
 
   it('ignores a location without a client, which could name anybody’s', async () => {
     expect(readConfigurationFilters({ site: IDS.orgAcme }).site).toBeNull();
+  });
+});
+
+describe('the Credentials list', () => {
+  it('lists every client’s credentials, by name, username and where they are used', async () => {
+    const rows = await credentials({});
+    expect(names(rows)).toEqual(expect.arrayContaining([
+      'Acme domain admin', 'Acme MSP break-glass', 'Globex app server local admin',
+    ]));
+    expect(rows.every((r) => r.organization_id !== IDS.orgContoso)).toBe(true);
+    const dc = rows.find((r) => r.name === 'Acme domain admin')!;
+    expect(dc).toMatchObject({
+      username: 'administrator', url: 'https://acme-dc01.acme.test', credential_type: 'domain_admin',
+      organization_name: 'Acme Manufacturing',
+    });
+  });
+
+  it('carries no secret material, only the vault entry’s label and policy', async () => {
+    const [row] = await credentials({});
+    expect(Object.keys(row!).sort()).toEqual([
+      'archived', 'credential_type', 'has_totp', 'id', 'is_internal_only', 'min_role_rank', 'name',
+      'organization_id', 'organization_name', 'requires_reason', 'requires_step_up', 'secret_id',
+      'secret_label', 'sensitivity', 'site_name', 'status', 'updated_at', 'updated_by_name', 'url', 'username',
+    ]);
+  });
+
+  it('narrows by type and by client', async () => {
+    expect(names(await credentials({ type: 'domain_admin' }))).toEqual(['Acme domain admin']);
+    expect(names(await credentials({ type: 'local_admin', client: IDS.orgGlobex }))).toEqual(['Globex app server local admin']);
+    expect(names(await credentials({ view: 'internal' }))).toEqual(['Acme MSP break-glass']);
+  });
+
+  it('drops a type it does not know', async () => {
+    expect((await credentials({ type: 'device' })).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('shows a client user their own client’s shared credentials only', async () => {
+    const seen = names(await credentials({}, asAcmeViewer));
+    expect(seen).not.toContain('Globex app server local admin');
+    expect(seen).not.toContain('Acme MSP break-glass');
   });
 });

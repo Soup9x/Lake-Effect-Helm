@@ -274,8 +274,8 @@ export interface UsageTotals {
 export function UsageSummaryWidget({ totals }: { totals: UsageTotals }) {
   const tiles = [
     { icon: Building2, label: 'Clients', value: totals.organizations, href: '/organizations' },
-    { icon: KeyRound, label: 'Credentials', value: totals.secrets },
-    { icon: Gauge, label: 'Assets', value: totals.assets },
+    { icon: KeyRound, label: 'Credentials', value: totals.secrets, href: '/global/credentials' },
+    { icon: Gauge, label: 'Assets', value: totals.assets, href: '/global/assets' },
     { icon: MapPin, label: 'Sites', value: totals.sites },
     { icon: Users, label: 'Contacts', value: totals.contacts },
     { icon: ScrollText, label: 'Attachments', value: totals.attachments },

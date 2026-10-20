@@ -3,17 +3,18 @@
 /**
  * The global bar.
  *
- * FOUR SCOPES, NOT EIGHT DESTINATIONS. The old shell listed every page in one
+ * SCOPES, NOT EIGHT DESTINATIONS. The old shell listed every page in one
  * flat sidebar — Dashboard, Clients, Expirations, Search, Exports, Audit,
  * People, Settings — which meant the thing a technician looks at all day
  * (one client's records) sat at the same level as the thing they open twice a
- * month (an export). These four tabs are SCOPES: whose data am I looking at.
+ * month (an export). These tabs are SCOPES: whose data am I looking at.
  *
  *   Dashboard      my queue, across every client
  *   Organizations  one client at a time; the drawer is that client's records
  *   Personal       my own account, my recently viewed
- *   Global         everything that spans clients — search, expirations,
- *                  exports, audit, people, settings
+ *   Global         everything that spans clients — search, assets,
+ *                  configurations, credentials, expirations, exports
+ *   Administration the settings that govern the MSP, people, the audit log
  *
  * The active tab is a solid white card, which is the one high-contrast element
  * on an otherwise near-black bar and is therefore unambiguous at a glance.
@@ -31,6 +32,8 @@ export interface TopNavTab {
   label: string;
   /** Every route prefix that should light this tab up. */
   owns: readonly string[];
+  /** Hidden from client-side roles. */
+  adminOnly?: boolean;
 }
 
 const TOP_NAV_TABS: readonly TopNavTab[] = [
@@ -52,11 +55,15 @@ const TOP_NAV_TABS: readonly TopNavTab[] = [
   {
     href: '/global',
     label: 'Global',
-    owns: [
-      '/global', '/search', '/coverage', '/expirations', '/exports', '/audit',
-      '/people', '/settings', '/runs',
-    ],
+    owns: ['/global', '/search', '/coverage', '/expirations', '/exports', '/runs'],
   },
+  /*
+   * ADMINISTRATION IS ITS OWN SCOPE. It sat inside Global as a card, but the
+   * settings that govern the whole MSP are a different visit from the work
+   * that spans clients, and People and the audit log belong with them. Not
+   * offered to client-side roles, whose pages there would all refuse them.
+   */
+  { href: '/settings', label: 'Administration', owns: ['/settings', '/people', '/audit'], adminOnly: true },
 ];
 
 function activeTab(pathname: string): TopNavTab | undefined {
@@ -76,15 +83,19 @@ function activeTab(pathname: string): TopNavTab | undefined {
 }
 
 export function TopNav({
-  tabs = TOP_NAV_TABS,
+  tabs: allTabs = TOP_NAV_TABS,
+  isClient = false,
   utilities,
 }: {
   tabs?: readonly TopNavTab[];
+  /** A client-side role: the administrative tab is not offered. */
+  isClient?: boolean;
   /** The account menu and anything else that needs server-resolved identity. */
   utilities?: React.ReactNode;
 }) {
   const pathname = usePathname() ?? '';
   const current = activeTab(pathname);
+  const tabs = isClient ? allTabs.filter((t) => !t.adminOnly) : allTabs;
   const { sidebarCollapsed, toggleSidebar } = useShell();
   /*
    * Is there a drawer to collapse? True inside one organization — two segments

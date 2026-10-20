@@ -7,9 +7,12 @@
  * only, which is the same list their client page already shows. Nothing here
  * widens what anybody can read — it puts what they can read side by side.
  *
- * CREDENTIALS ARE NOT "ASSETS" HERE. A cross-client list of logins is a target
- * list, and the Passwords tab of each client, with its per-entry access policy,
- * is where they are meant to be read. Search still finds them.
+ * CREDENTIALS ARE THEIR OWN LIST, not "assets". It carries exactly what each
+ * client's Credentials tab carries — name, username, where it is used, whether
+ * a code can be generated, the vault entry's label and access policy — and
+ * never a value: those stay behind reveal, with its reason, step-up and audit
+ * row, whichever list somebody started from. RLS and the internal-only policy
+ * decide which rows appear, exactly as on the client's tab.
  */
 import type { HelmTx } from '../db/client';
 import { isUuid } from '../ids';
@@ -26,6 +29,23 @@ export const GLOBAL_ASSET_TYPES: readonly { value: string; label: string }[] = [
 ];
 
 const ASSET_TYPE_SET = new Set(GLOBAL_ASSET_TYPES.map((t) => t.value));
+
+/** What the Credentials list filters by: the credential's own type. */
+export const GLOBAL_CREDENTIAL_TYPES: readonly { value: string; label: string }[] = [
+  { value: 'standard_user', label: 'Standard user' },
+  { value: 'local_admin', label: 'Local admin' },
+  { value: 'domain_admin', label: 'Domain admin' },
+  { value: 'service_account', label: 'Service account' },
+  { value: 'api', label: 'API' },
+  { value: 'database', label: 'Database' },
+  { value: 'wifi', label: 'Wi-Fi' },
+  { value: 'vpn', label: 'VPN' },
+  { value: 'root', label: 'Root' },
+  { value: 'recovery', label: 'Recovery' },
+  { value: 'shared_mailbox', label: 'Shared mailbox' },
+  { value: 'other', label: 'Other' },
+];
+const CREDENTIAL_TYPE_SET = new Set(GLOBAL_CREDENTIAL_TYPES.map((t) => t.value));
 const STATUS_SET = new Set<string>(NODE_STATUSES);
 const DEVICE_TYPE_SET = new Set<string>(DEVICE_TYPES);
 
@@ -69,6 +89,7 @@ export function readGlobalFilters(search: Search, types: ReadonlySet<string>): G
 
 export const readAssetFilters = (search: Search) => readGlobalFilters(search, ASSET_TYPE_SET);
 export const readConfigurationFilters = (search: Search) => readGlobalFilters(search, DEVICE_TYPE_SET);
+export const readCredentialFilters = (search: Search) => readGlobalFilters(search, CREDENTIAL_TYPE_SET);
 
 export interface GlobalRow {
   id: string;
@@ -96,6 +117,22 @@ export interface GlobalConfigurationRow extends GlobalRow {
   serial_number: string | null;
   warranty_expires_at: Date | null;
 }
+
+export interface GlobalCredentialRow extends GlobalRow {
+  credential_type: string;
+  username: string | null;
+  url: string | null;
+  has_totp: boolean;
+  secret_label: string | null;
+  secret_id: string | null;
+  sensitivity: string | null;
+  requires_step_up: boolean | null;
+  requires_reason: boolean | null;
+  min_role_rank: number | null;
+}
+
+/** The node types the dashboard's Assets count and the Assets list share. */
+export const GLOBAL_ASSET_NODE_TYPES: readonly string[] = [...ASSET_TYPE_SET];
 
 function common(tx: HelmTx, f: GlobalFilters) {
   return tx`
@@ -142,6 +179,36 @@ export async function listGlobalConfigurations(
     LEFT JOIN app_user u ON u.id = n.updated_by
     WHERE n.node_type = 'device'
       ${f.type ? tx`AND d.device_type = ${f.type}::device_type` : tx``}
+      ${common(tx, f)}
+    ORDER BY lower(o.name), lower(n.name)
+    LIMIT ${GLOBAL_LIST_LIMIT}
+  `;
+}
+
+/**
+ * Every client's credentials, as the client's Credentials tab lists them: the
+ * same columns, the same v_secret_metadata join for the access policy, and no
+ * secret material.
+ */
+export async function listGlobalCredentials(
+  tx: HelmTx, f: GlobalFilters,
+): Promise<GlobalCredentialRow[]> {
+  return tx<GlobalCredentialRow[]>`
+    SELECT n.id, n.name, n.organization_id, o.name AS organization_name, s.name AS site_name,
+           n.status::text, n.is_internal_only, n.archived_at IS NOT NULL AS archived,
+           n.updated_at, u.name AS updated_by_name,
+           c.credential_type::text, c.username, c.url,
+           c.totp_secret_id IS NOT NULL AS has_totp,
+           m.label AS secret_label, m.id::text AS secret_id, m.sensitivity::text,
+           m.requires_step_up, m.requires_reason, m.min_role_rank
+    FROM asset_node n
+    JOIN credential c ON c.id = n.id
+    JOIN organization o ON o.id = n.organization_id
+    LEFT JOIN site s ON s.id = n.site_id AND s.deleted_at IS NULL
+    LEFT JOIN app_user u ON u.id = n.updated_by
+    LEFT JOIN v_secret_metadata m ON m.id = c.secret_id
+    WHERE n.node_type = 'credential'
+      ${f.type ? tx`AND c.credential_type = ${f.type}::credential_type` : tx``}
       ${common(tx, f)}
     ORDER BY lower(o.name), lower(n.name)
     LIMIT ${GLOBAL_LIST_LIMIT}
