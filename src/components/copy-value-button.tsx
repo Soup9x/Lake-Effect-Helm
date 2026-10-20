@@ -14,8 +14,18 @@
 import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import { copyUnaudited } from '@/lib/ui/clipboard';
+import { iconActionClass } from './field-row';
 
-export function CopyValueButton({ value, label }: { value: string; label: string }) {
+export function CopyValueButton({
+  value,
+  label,
+  size = 'sm',
+}: {
+  value: string;
+  label: string;
+  /** `sm` sits inside a list row; `md` matches the other actions on a login row. */
+  size?: 'sm' | 'md';
+}) {
   const [done, setDone] = useState(false);
   return (
     <button
@@ -28,9 +38,13 @@ export function CopyValueButton({ value, label }: { value: string; label: string
         setDone(true);
         setTimeout(() => setDone(false), 1500);
       }}
-      className="inline-flex size-6 shrink-0 items-center justify-center rounded text-ink-faint transition-colors hover:bg-surface-sunken hover:text-ink"
+      className={
+        size === 'md'
+          ? iconActionClass
+          : 'inline-flex size-6 shrink-0 items-center justify-center rounded text-ink-faint transition-colors hover:bg-surface-sunken hover:text-ink [&_svg]:size-3.5'
+      }
     >
-      {done ? <Check className="size-3.5 text-ok" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
+      {done ? <Check className="text-ok" aria-hidden /> : <Copy aria-hidden />}
     </button>
   );
 }

@@ -1673,6 +1673,22 @@ describe('how each kind of entry lays out its cards', () => {
     expect(propsOf(page, 'TotpSeedControl')).toEqual({ nodeId: credentialId, hasTotp: false });
   });
 
+  it('lays a password entry out as login rows, with no raw secret id among them', async () => {
+    const labels: unknown[] = [];
+    const walk = (value: unknown): void => {
+      if (Array.isArray(value)) { value.forEach(walk); return; }
+      if (!value || typeof value !== 'object') return;
+      const element = value as { type?: unknown; props?: Record<string, unknown> };
+      if (typeof element.type === 'function' && element.type.name === 'FieldRow') labels.push(element.props?.label);
+      if (element.props) Object.values(element.props).forEach(walk);
+    };
+    walk(await assetPage(credentialId));
+    expect(labels.slice(0, 2)).toEqual(['Username', 'Password']);
+    expect(labels).toContain('Website');
+    expect(labels).not.toContain('Secret id');
+    expect(labels).not.toContain('Type');
+  });
+
   it('shows no Credentials card on a configuration that holds no secret', async () => {
     expect(cardTitles(await assetPage(IDS.globexServer))).not.toContain('Credentials');
   });

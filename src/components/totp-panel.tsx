@@ -21,12 +21,14 @@
  * without a new code showing has to stop claiming the old one is current.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyRound, Loader2, ShieldAlert, Timer } from 'lucide-react';
+import { Check, Copy, Eye, EyeOff, Loader2, ShieldAlert } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 import { useStepUp } from './step-up-dialog';
+import { FieldLine, iconActionClass } from './field-row';
 import { STEP_UP_CODE, withStepUp } from '@/lib/ui/step-up';
 import { apiFetch } from '@/lib/ui/api';
+import { copyUnaudited } from '@/lib/ui/clipboard';
 import { cn } from '@/lib/ui/cn';
 
 interface CodeOk {
@@ -65,19 +67,16 @@ function groupDigits(code: string): string {
 
 export function TotpPanel({
   nodeId,
-  issuer,
-  account,
   canReveal,
 }: {
   nodeId: string;
-  issuer: string | null;
-  account: string | null;
   /** False for somebody without secret:reveal: the panel explains, not offers. */
   canReveal: boolean;
 }) {
   const stepUp = useStepUp();
   const [state, setState] = useState<PanelState>({ status: 'idle' });
   const [reason, setReason] = useState('');
+  const [copied, setCopied] = useState(false);
   /** Ticks the countdown between fetches, without asking the server. */
   const [elapsed, setElapsed] = useState(0);
 
@@ -119,8 +118,8 @@ export function TotpPanel({
     [nodeId, reason],
   );
 
-  const load = useCallback(async () => {
-    if (inFlight.current) return;
+  const load = useCallback(async (): Promise<string | null> => {
+    if (inFlight.current) return null;
     inFlight.current = true;
     setState((prev) => (prev.status === 'shown' ? prev : { status: 'loading' }));
     try {
@@ -136,7 +135,7 @@ export function TotpPanel({
           needsReason: result.code === 'reason_required',
           needsStepUp: result.code === STEP_UP_CODE,
         });
-        return;
+        return null;
       }
 
       setElapsed(0);
@@ -147,10 +146,12 @@ export function TotpPanel({
         periodSeconds: result.value.periodSeconds,
         ...(result.value.auditEventUid ? { auditEventUid: result.value.auditEventUid } : {}),
       });
+      return result.value.code;
     } catch {
       clearTick();
       startedAt.current = null;
       setState({ status: 'error', message: 'The request failed. Check your connection and retry.' });
+      return null;
     } finally {
       inFlight.current = false;
     }
@@ -158,7 +159,23 @@ export function TotpPanel({
 
   const show = async () => {
     startedAt.current = Date.now();
-    await load();
+    return load();
+  };
+
+  /**
+   * Copy the code on screen, or fetch one and copy it.
+   *
+   * Unaudited on purpose: fetching the code is the audited access — one row per
+   * window, as above — and the six digits are worthless thirty seconds later.
+   * A second row for moving them to the clipboard would record nothing new.
+   */
+  const copyCode = async () => {
+    const code = state.status === 'shown' ? state.code : await show();
+    if (!code) return;
+    const outcome = await copyUnaudited(code);
+    if (outcome !== 'copied') return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   };
 
   /*
@@ -193,73 +210,61 @@ export function TotpPanel({
     void load();
   }, [remaining, state.status, load, stop]);
 
-  const subject = [issuer, account].filter(Boolean).join(' · ');
+  if (!canReveal) {
+    return (
+      <p className="text-sm text-ink-muted">
+        Generating a code needs the permission to reveal credentials.
+      </p>
+    );
+  }
+
+  const shown = state.status === 'shown';
+  const loading = state.status === 'loading';
 
   return (
-    <div className="space-y-2 rounded-md border border-border bg-surface-raised p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <KeyRound className="size-4 text-ink-faint" aria-hidden />
-        <span className="text-sm font-medium text-ink">One-time code</span>
-        {subject && <span className="text-xs text-ink-faint">{subject}</span>}
-      </div>
+    <div className="space-y-1.5">
+      {stepUp.dialog}
+      <FieldLine
+        mono
+        actions={
+          <>
+            {shown && <Countdown remaining={remaining} period={state.periodSeconds} />}
+            <button
+              type="button"
+              className={iconActionClass}
+              onClick={shown ? stop : () => void show()}
+              disabled={loading}
+              title={shown ? 'Hide code' : 'Show code'}
+              aria-label={shown ? 'Hide one-time code' : 'Show one-time code'}
+            >
+              {loading ? <Loader2 className="animate-spin" aria-hidden /> : shown ? <EyeOff aria-hidden /> : <Eye aria-hidden />}
+            </button>
+            <button
+              type="button"
+              className={iconActionClass}
+              onClick={() => void copyCode()}
+              disabled={loading}
+              title="Copy code"
+              aria-label="Copy one-time code"
+            >
+              {copied ? <Check className="text-ok" aria-hidden /> : <Copy aria-hidden />}
+            </button>
+          </>
+        }
+      >
+        {shown ? (
+          <span className="text-base tabular-nums tracking-widest" aria-live="polite">
+            {groupDigits(state.code)}
+          </span>
+        ) : (
+          <>
+            <span className="tracking-[0.2em] text-ink-muted" aria-hidden>••• •••</span>
+            <span className="sr-only">Hidden</span>
+          </>
+        )}
+      </FieldLine>
 
-      {!canReveal ? (
-        <p className="text-xs text-ink-muted">
-          This credential has a second factor. Generating a code needs the
-          permission to reveal credentials.
-        </p>
-      ) : state.status === 'shown' ? (
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-3">
-            <span
-              className="font-mono text-2xl tabular-nums tracking-widest text-ink"
-              aria-live="polite"
-            >
-              {groupDigits(state.code)}
-            </span>
-            <span
-              className={cn(
-                'flex items-center gap-1 text-xs tabular-nums',
-                remaining <= 5 ? 'text-warning' : 'text-ink-muted',
-              )}
-            >
-              <Timer className="size-3.5" aria-hidden />
-              {remaining > 0 ? `${remaining}s` : 'rotating…'}
-            </span>
-            <Button size="sm" variant="ghost" onClick={stop}>
-              Hide
-            </Button>
-          </div>
-          {/*
-            The window as a bar rather than only a number: a technician typing a
-            code needs to know at a glance whether to use this one or wait for
-            the next, and "3" is a number you have to think about.
-          */}
-          <div
-            className="h-1 w-full overflow-hidden rounded-full bg-surface-sunken"
-            role="progressbar"
-            aria-valuenow={Math.max(remaining, 0)}
-            aria-valuemin={0}
-            aria-valuemax={state.periodSeconds}
-            aria-label="Seconds until this code rotates"
-          >
-            <div
-              className={cn(
-                'h-full transition-[width] duration-1000 ease-linear',
-                remaining <= 5 ? 'bg-warning' : 'bg-brand',
-              )}
-              style={{
-                width: `${Math.max(0, Math.min(100, (remaining / state.periodSeconds) * 100))}%`,
-              }}
-            />
-          </div>
-          {state.auditEventUid && (
-            <p className="font-mono text-[10px] text-ink-faint">
-              audit {state.auditEventUid}
-            </p>
-          )}
-        </div>
-      ) : state.status === 'denied' ? (
+      {state.status === 'denied' && (
         <div className="space-y-2">
           <p className="flex items-start gap-2 text-xs text-warning">
             <ShieldAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -283,28 +288,47 @@ export function TotpPanel({
             Try again
           </Button>
         </div>
-      ) : state.status === 'error' ? (
-        <div className="space-y-2">
-          <p className="text-xs text-critical">{state.message}</p>
-          <Button size="sm" variant="secondary" onClick={() => void show()}>
-            Retry
-          </Button>
-        </div>
-      ) : (
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => void show()}
-          disabled={state.status === 'loading'}
-        >
-          {state.status === 'loading' ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <KeyRound className="size-4" />
-          )}
-          Show code
-        </Button>
       )}
+      {state.status === 'error' && <p className="text-xs text-critical">{state.message}</p>}
     </div>
+  );
+}
+
+/**
+ * The window as a ring with the seconds inside: a technician typing a code
+ * needs to know at a glance whether to use this one or wait for the next.
+ */
+function Countdown({ remaining, period }: { remaining: number; period: number }) {
+  const radius = 12;
+  const circumference = 2 * Math.PI * radius;
+  const fraction = Math.max(0, Math.min(1, remaining / period));
+  const low = remaining <= 5;
+  return (
+    <span
+      className="relative inline-flex size-8 shrink-0 items-center justify-center"
+      role="progressbar"
+      aria-valuenow={Math.max(remaining, 0)}
+      aria-valuemin={0}
+      aria-valuemax={period}
+      aria-label="Seconds until this code rotates"
+    >
+      <svg viewBox="0 0 32 32" className="absolute inset-0 -rotate-90" aria-hidden>
+        <circle cx="16" cy="16" r={radius} fill="none" strokeWidth="2.5" className="stroke-border" />
+        <circle
+          cx="16"
+          cy="16"
+          r={radius}
+          fill="none"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - fraction)}
+          className={cn('transition-[stroke-dashoffset] duration-1000 ease-linear', low ? 'stroke-warning' : 'stroke-brand')}
+        />
+      </svg>
+      <span className={cn('text-[11px] tabular-nums', low ? 'text-warning' : 'text-ink-muted')}>
+        {remaining > 0 ? remaining : '…'}
+      </span>
+    </span>
   );
 }
