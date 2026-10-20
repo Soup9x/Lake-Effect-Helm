@@ -469,8 +469,9 @@ describe('the drawer itself', () => {
  * that decides what somebody is invited to try.
  */
 describe('the settings card', () => {
+  // The default sidebar lives in Administration → General.
   const renderSettings = async (): Promise<unknown> =>
-    (await import('../../src/app/(app)/settings/page')).default();
+    (await import('../../src/app/(app)/settings/general/page')).default();
 
   /** Every element of a named component in the tree, with its props. */
   function allProps(node: unknown, name: string): Record<string, unknown>[] {

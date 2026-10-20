@@ -3,6 +3,7 @@ import { ScrollText, ShieldCheck } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
+import { AdminNav } from '@/components/admin-nav';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -90,6 +91,7 @@ export default async function AuditPage({
         description="Every secret read, export, key operation and integration run, in a tamper-evident chain."
       />
       <PageBody>
+        <AdminNav />
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

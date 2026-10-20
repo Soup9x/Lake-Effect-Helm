@@ -169,7 +169,7 @@ export class EmailBatch {
       // setting rather than the address, because the address is in the row.
       throw new EmailTransportError(
         'that address is outside the domains this tenant allows notifications to '
-        + 'be sent to. An administrator can widen them under Settings.',
+        + 'be sent to. An administrator can widen them under Administration → Email & notifications.',
         'misconfigured',
       );
     }

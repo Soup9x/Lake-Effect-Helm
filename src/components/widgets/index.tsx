@@ -355,8 +355,8 @@ export function SyncStatusWidget({ mappings }: { mappings: SyncMappingRow[] }) {
         {mappings.length === 0 ? (
           <p className="text-ink-faint">
             No UniFi controllers are configured.{' '}
-            <Link href="/settings" className="text-brand hover:underline">
-              Settings
+            <Link href="/settings/integrations" className="text-brand hover:underline">
+              Administration → Integrations
             </Link>{' '}
             adds one.
           </p>

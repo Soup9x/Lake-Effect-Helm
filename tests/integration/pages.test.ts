@@ -518,8 +518,34 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
       (await import('../../src/app/(app)/search/page')).default({ searchParams: p({}) }),
   },
   {
-    name: 'settings',
+    name: 'administration',
     load: async () => (await import('../../src/app/(app)/settings/page')).default(),
+  },
+  // Each section of Administration reads only what it shows, so each is its
+  // own page to render.
+  {
+    name: 'administration, general',
+    load: async () => (await import('../../src/app/(app)/settings/general/page')).default(),
+  },
+  {
+    name: 'administration, sign-in and security',
+    load: async () => (await import('../../src/app/(app)/settings/security/page')).default(),
+  },
+  {
+    name: 'administration, email and notifications',
+    load: async () => (await import('../../src/app/(app)/settings/notifications/page')).default(),
+  },
+  {
+    name: 'administration, integrations',
+    load: async () => (await import('../../src/app/(app)/settings/integrations/page')).default(),
+  },
+  {
+    name: 'administration, backups',
+    load: async () => (await import('../../src/app/(app)/settings/backups/page')).default(),
+  },
+  {
+    name: 'administration, automation',
+    load: async () => (await import('../../src/app/(app)/settings/automation/page')).default(),
   },
   {
     // The type authoring screen. Worth running here specifically because it
@@ -1321,8 +1347,9 @@ describe('the mail relay on the settings page, and the toggles on the account pa
    * told that mail is off — and those are the two things that matter about K's
    * settings surface.
    */
+  // The relay and the destinations live in Administration → Email & notifications.
   const settingsPage = async () =>
-    (await import('../../src/app/(app)/settings/page')).default();
+    (await import('../../src/app/(app)/settings/notifications/page')).default();
   const accountPage = async () =>
     (await import('../../src/app/(app)/account/page')).default();
 

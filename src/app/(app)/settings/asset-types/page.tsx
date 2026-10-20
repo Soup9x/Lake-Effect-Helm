@@ -2,6 +2,7 @@ import { Boxes, Plus } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
+import { AdminNav } from '@/components/admin-nav';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -92,7 +93,7 @@ export default async function AssetTypesPage() {
     <>
       <PageHeader
         title="Asset types"
-        trail={[{ label: 'Settings', href: '/settings' }]}
+        trail={[{ label: 'Administration', href: '/settings' }]}
         description="The documentation types this tenant defines for itself, beyond Helm's built-in ones. Each publishes an immutable schema version that records are validated against."
         actions={
           canManage ? (
@@ -107,6 +108,7 @@ export default async function AssetTypesPage() {
         }
       />
       <PageBody>
+        <AdminNav />
         <Card>
           <CardContent className="p-0">
             {types.length === 0 ? (
