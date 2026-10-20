@@ -9,7 +9,7 @@
  * The table is RANGE-partitioned by month; Drizzle models it as an ordinary
  * table, which is correct for querying through the parent.
  */
-import { bigint, index, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, index, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { bytea, inet, tstz } from './_types';
 import { actorType, auditOutcome } from './enums';
 import { tenant } from './tenancy';
@@ -73,6 +73,28 @@ export type AuditLog = typeof auditLog.$inferSelect;
 export type AuditChainHead = typeof auditChainHead.$inferSelect;
 
 /** Action strings written by the SQL layer. Extend as call sites are added. */
+/**
+ * What changed on an asset, contact or location, by whom and when (0970).
+ * Written by trigger only; read under RLS like the entry itself.
+ * `changes` is { column: [before, after] }.
+ */
+export const entityChange = pgTable('entity_change', {
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+  tenantId: uuid('tenant_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  entityType: text('entity_type').notNull(),
+  entityId: uuid('entity_id').notNull(),
+  isInternalOnly: boolean('is_internal_only').notNull().default(false),
+  kind: text('kind').notNull(),
+  changes: jsonb('changes').notNull().default({}),
+  actorId: uuid('actor_id'),
+  actorType: text('actor_type'),
+  changedAt: tstz('changed_at').notNull().defaultNow(),
+}, (t) => [
+  index('entity_change_entity_idx').on(t.entityId, t.changedAt),
+  index('entity_change_org_idx').on(t.tenantId, t.organizationId, t.changedAt),
+]);
+
 export const AUDIT_ACTIONS = {
   secretRevealed: 'secret.revealed',
   secretRevealDenied: 'secret.reveal_denied',

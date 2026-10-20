@@ -18,6 +18,8 @@ import { TotpPanel } from '@/components/totp-panel';
 import { formatDate, formatDateTime, humanise } from '@/lib/ui/format';
 import { recordView } from '@/lib/workspace/queries';
 import { NotesCard } from '@/components/notes-card';
+import { HistoryCard } from '@/components/history-card';
+import { listHistory } from '@/lib/history/queries';
 import { FlexibleRecordForm } from '@/components/flexible-record-form';
 import { pointerFor, schemaToFields, type FieldDef } from '@/lib/flexible/fields';
 import { listAssignableUsers, listRunsForSop, readTemplate } from '@/lib/sops/queries';
@@ -323,6 +325,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       assignable,
       checkSetting,
       checkRow,
+      history: await listHistory(tx, 'asset', node.id),
     };
   });
 
@@ -330,7 +333,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
   const {
     node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams, totp, canReveal,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
-    attachments, canDeleteAttachments, device,
+    attachments, canDeleteAttachments, device, history,
   } = data;
 
   /*
@@ -863,6 +866,8 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             maxBytes={maxUploadBytes()}
           />
         )}
+
+        <HistoryCard entries={history} />
       </PageBody>
     </>
   );

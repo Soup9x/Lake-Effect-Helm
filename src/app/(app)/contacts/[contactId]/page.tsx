@@ -8,6 +8,8 @@ import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { NotesCard } from '@/components/notes-card';
+import { HistoryCard } from '@/components/history-card';
+import { listHistory } from '@/lib/history/queries';
 import { ContactPageActions } from '@/components/contact-page-actions';
 import { ContactForCard } from '@/components/contact-for-card';
 import { readChannels } from '@/lib/contacts/channels';
@@ -62,11 +64,14 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
       WHERE n.organization_id = ${row.organization_id}::uuid AND n.archived_at IS NULL
       ORDER BY lower(n.name)
     `;
-    return { row, channels: await readChannels(tx, contactId), configurations };
+    return {
+      row, channels: await readChannels(tx, contactId), configurations,
+      history: await listHistory(tx, 'contact', contactId),
+    };
   });
   if (!data) notFound();
 
-  const { row, channels, configurations } = data;
+  const { row, channels, configurations, history } = data;
   const name = `${row.first_name} ${row.last_name}`.trim();
   const tags = contactTags(row);
   const canWrite = !isClientRole(identity.roleKey);
@@ -179,6 +184,8 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
             .map((c) => ({ id: c.id, name: c.name, currentContact: c.contact_name }))}
           canEdit={canWrite}
         />
+
+        <HistoryCard entries={history} />
       </PageBody>
     </>
   );
