@@ -128,7 +128,7 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
   }, { role: 'worker' });
   if (!connection?.tenant || !connection.client_id || !connection.client_secret_id) {
     throw new GraphError('the connection has no tenant, client id or secret', 'unauthorized',
-      'Set them under Settings → Microsoft 365.');
+      'Set them under Administration → Integrations → Microsoft 365.');
   }
 
   const revealed = await getSecretService().reveal(actor, connection.client_secret_id, {

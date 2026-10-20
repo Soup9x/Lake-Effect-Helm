@@ -299,7 +299,7 @@ export function FlexibleRecordForm({
 
           {type.fields.length === 0 ? (
             <p className="text-sm text-ink-faint">
-              This template has no fields yet. Add some in Settings → Asset types.
+              This template has no fields yet. Add some in Administration → Documentation types.
             </p>
           ) : (
             <div className="space-y-4">

@@ -2,6 +2,7 @@ import { Users } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
+import { AdminNav } from '@/components/admin-nav';
 import { Card, CardContent } from '@/components/ui/card';
 import { PeopleManager } from '@/components/people-manager';
 import { RolesManager } from '@/components/roles-manager';
@@ -87,6 +88,7 @@ export default async function PeoplePage() {
         description="Who can reach this tenant, and what they can do once they are in."
       />
       <PageBody>
+        <AdminNav />
         {data.members.length === 0 ? (
           <Card>
             <CardContent className="p-0">

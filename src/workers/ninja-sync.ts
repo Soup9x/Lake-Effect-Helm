@@ -151,7 +151,7 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
     { role: 'worker' },
   );
   if (!connection?.client_id || !connection.client_secret_id) {
-    throw new NinjaError('the connection has no client id or secret', 'unauthorized', 'Save them under Settings → NinjaOne.');
+    throw new NinjaError('the connection has no client id or secret', 'unauthorized', 'Save them under Administration → Integrations → NinjaOne.');
   }
 
   const revealed = await getSecretService().reveal(actor, connection.client_secret_id, {

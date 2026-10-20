@@ -64,7 +64,7 @@ function ssoMessage(code: string): string {
       return (
         'An account already exists with that email address, and this identity ' +
         'provider is not permitted to attach to it. An administrator can allow ' +
-        'linking by email address in Settings.'
+        'linking by email address in Administration → Sign-in & security.'
       );
     case 'AccessDenied':
       return (

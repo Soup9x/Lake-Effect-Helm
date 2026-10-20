@@ -89,7 +89,7 @@ export function NotificationPreferencesCard({ initial }: { initial: Notification
         <p className="max-w-3xl rounded-md border border-border bg-surface-sunken p-2.5 text-xs text-ink-muted">
           Your MSP has not set up a mail relay yet, so nothing will arrive whatever you
           choose here. Your choice is kept and takes effect the moment one is configured —
-          an administrator does that under Settings.
+          an administrator does that under Administration → Email & notifications.
         </p>
       )}
 

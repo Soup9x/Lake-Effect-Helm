@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
-  Activity, Boxes, CalendarClock, FileDown, Grid3x3, Layers, Search, Server, Settings, Users, Wand2,
+  CalendarClock, FileDown, Grid3x3, Layers, Search, Server, Settings, Wand2,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -9,6 +9,7 @@ import { PageBody, PageHeader } from '@/components/app-shell';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { isClientRole } from '@/lib/ui/roles';
+import { ADMIN_SECTIONS } from '@/lib/settings/sections';
 
 export const dynamic = 'force-dynamic';
 
@@ -154,42 +155,34 @@ export default async function GlobalPage() {
             note={counts.exports > 0 ? 'live now' : undefined}
           />
 
-          {!isClient && (
-            <>
-              <Tile
-                href="/audit"
-                icon={Activity}
-                title="Audit log"
-                detail="Append-only and hash-chained. Who revealed, exported, changed or was refused."
-                count={counts.events}
-                note="in the last 24 hours"
-              />
-
-              <Tile
-                href="/people"
-                icon={Users}
-                title="People"
-                detail="Who has a seat in this MSP, which role, and which clients they can see."
-                count={counts.people}
-                note="active memberships"
-              />
-
-              <Tile
-                href="/settings"
-                icon={Settings}
-                title="Settings"
-                detail="Sign-in, key custody, the mail relay, notification destinations and integration health."
-              />
-
-              <Tile
-                href="/settings/asset-types"
-                icon={Boxes}
-                title="Documentation types"
-                detail="The custom record types this MSP has defined, and the fields on each."
-              />
-            </>
-          )}
         </div>
+
+        {/*
+          Administration is one card, not four tiles among the everyday ones:
+          the scope's page is for work that spans clients, and the settings
+          that govern the MSP are a different kind of visit (Administration has
+          its own index at /settings).
+        */}
+        {!isClient && (
+          <Card>
+            <CardContent className="space-y-3 p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Settings className="size-4 text-ink-faint" aria-hidden />
+                <Link href="/settings" className="font-medium text-ink hover:underline">Administration</Link>
+                <span className="text-xs text-ink-faint">
+                  {counts.people} active {counts.people === 1 ? 'membership' : 'memberships'} · {counts.events} audit events in the last 24 hours
+                </span>
+              </div>
+              <ul className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                {ADMIN_SECTIONS.map((section) => (
+                  <li key={section.href}>
+                    <Link href={section.href} className="text-brand hover:underline">{section.title}</Link>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        )}
       </PageBody>
     </>
   );

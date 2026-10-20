@@ -145,7 +145,7 @@ export function notificationBody(message: NotificationMessage): string {
   lines.push(
     '',
     'Sent by Lake Effect Helm because this event is subscribed on an email',
-    'destination. An administrator can change that under Settings.',
+    'destination. An administrator can change that under Administration → Email & notifications.',
   );
   return lines.join('\n');
 }

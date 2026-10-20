@@ -86,7 +86,7 @@ export function ExternalCheckNote({ state }: { state: ExternalCheckState }) {
             <CircleHelp className="mt-0.5 size-4 shrink-0 text-ink-faint" aria-hidden />
             <span>
               Automatic checking is off for this tenant, so {state.recordedLabel.toLowerCase()} is
-              whatever somebody recorded. An administrator can turn it on under Settings.
+              whatever somebody recorded. An administrator can turn it on under Administration → Integrations.
             </span>
           </p>
         ) : state.status === null ? (

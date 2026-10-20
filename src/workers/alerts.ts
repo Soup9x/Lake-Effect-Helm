@@ -188,7 +188,7 @@ async function deliverExpiryAlerts(ctx: JobContext): Promise<JobResult> {
       if (tenantUnrouted > 0) {
         log.info('expiry warnings had nowhere to go', {
           unrouted: tenantUnrouted,
-          hint: 'subscribe a destination to "Expiring soon" under Settings',
+          hint: 'subscribe a destination to "Expiring soon" under Administration → Email & notifications',
         });
       }
     } catch (error) {
