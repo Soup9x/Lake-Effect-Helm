@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 import { grantableRoles } from '@/lib/roles/catalogue';
+import { checkPasswordPolicy, hashPassword } from '@/lib/auth/password';
 
 interface MemberRow {
   user_id: string;
@@ -96,10 +97,26 @@ const inviteSchema = z
     orgScope: z.array(z.guid()).max(200).default([]),
     requireStepUp: z.boolean().default(true),
     expiresAt: z.iso.datetime({ offset: true }).nullable().optional(),
+    /**
+     * How they will sign in (1000).
+     *   sso         their identity provider; `notify` emails them that they
+     *               have access
+     *   email_link  a local account, with a link emailed to choose a password
+     *   password    a local account with a password set here, handed over by
+     *               the administrator; `mustChange` makes them replace it
+     */
+    signIn: z.enum(['sso', 'email_link', 'password']).default('sso'),
+    notify: z.boolean().default(true),
+    password: z.string().max(256).optional(),
+    mustChange: z.boolean().default(true),
   })
   .refine((v) => v.orgScopeAll !== (v.orgScope.length > 0), {
     message: 'give either tenant-wide scope or at least one organisation, not both and not neither',
     path: ['orgScope'],
+  })
+  .refine((v) => v.signIn !== 'password' || (v.password ?? '') !== '', {
+    message: 'a password is needed to create a local account with one',
+    path: ['password'],
   });
 
 /**
@@ -165,11 +182,30 @@ export const POST = tenantRoute(
         RETURNING id
       `;
       if (!membership) throw ApiError.conflict('the membership could not be created');
-
-      return { userId: person.id, membershipId: membership.id, email };
     } catch (error) {
       throw translate(error);
     }
+
+    // How they get in. In this transaction, so a refusal — a password the
+    // policy rejects, an account that belongs to another MSP — leaves no
+    // half-made member behind.
+    let emailQueued: 'access_granted' | 'password_setup' | null = null;
+    if (body.signIn === 'password') {
+      const policy = checkPasswordPolicy(body.password ?? '', { email, name: body.name ?? '' });
+      if (!policy.ok) {
+        throw ApiError.invalid(`the password ${policy.problems.join('; ')}`, { problems: policy.problems });
+      }
+      const phc = await hashPassword(body.password ?? '');
+      await tx`SELECT helm.admin_set_local_password(${person.id}::uuid, ${phc}, ${body.mustChange})`;
+    } else if (body.signIn === 'email_link') {
+      await tx`SELECT helm.queue_account_email(${person.id}::uuid, 'password_setup')`;
+      emailQueued = 'password_setup';
+    } else if (body.notify) {
+      await tx`SELECT helm.queue_account_email(${person.id}::uuid, 'access_granted')`;
+      emailQueued = 'access_granted';
+    }
+
+    return { userId: person.id, email, signIn: body.signIn, emailQueued };
   },
   { permissions: ['user:write'] },
 );

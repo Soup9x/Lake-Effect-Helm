@@ -334,6 +334,27 @@ export const passwordReset = pgTable('password_reset', {
   index('password_reset_live_idx').on(t.expiresAt),
 ]);
 
+/**
+ * An email about somebody's account, queued for the worker (db/sql/1000).
+ * Holds no link: the worker mints the token as it sends.
+ */
+export const accountEmail = pgTable('account_email', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenant.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => appUser.id, { onDelete: 'cascade' }),
+  kind: text('kind').notNull(),
+  requestedBy: uuid('requested_by').notNull().references(() => appUser.id, { onDelete: 'cascade' }),
+  status: text('status').notNull().default('pending'),
+  attempts: smallint('attempts').notNull().default(0),
+  nextAttemptAt: tstz('next_attempt_at').notNull().defaultNow(),
+  lastError: text('last_error'),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  sentAt: tstz('sent_at'),
+}, (t) => [
+  index('account_email_due_idx').on(t.nextAttemptAt),
+  index('account_email_user_idx').on(t.tenantId, t.userId, t.createdAt),
+]);
+
 export type LocalCredential = typeof localCredential.$inferSelect;
 export type AuthAttempt = typeof authAttempt.$inferSelect;
 export type PasswordReset = typeof passwordReset.$inferSelect;

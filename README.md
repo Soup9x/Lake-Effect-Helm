@@ -63,6 +63,10 @@ enforced by PostgreSQL itself rather than by application code.
   made in Helm are kept; nothing is written back.
 - **Sign-in.** Local passwords (the break-glass path), Microsoft Entra ID, any
   OpenID Connect provider, and RADIUS. All produce the same revocable session.
+  Administrators add people from the People page with a local password they
+  set, an emailed link to choose one, or single sign-on — invitations and
+  password links go out through the mail relay, and each person's row shows
+  whether theirs was sent.
 - **API tokens.** Personal tokens from the account page, scoped to a subset of
   what the person holds; service accounts from Settings for automation that
   outlives a person, with a role, a scope and an optional IP allow-list. Both

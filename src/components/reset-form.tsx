@@ -16,7 +16,8 @@ import { Input, Label, FieldHint } from './ui/field';
 import { apiFetch } from '@/lib/ui/api';
 import { policyProblems } from '@/lib/ui/password-problems';
 
-export function ResetForm({ token }: { token: string }) {
+/** `setup`: a first password, from an account an administrator created (1000). */
+export function ResetForm({ token, setup = false }: { token: string; setup?: boolean }) {
   const router = useRouter();
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -51,10 +52,11 @@ export function ResetForm({ token }: { token: string }) {
   if (done) {
     return (
       <div className="w-full max-w-sm text-center">
-        <h1 className="text-lg font-semibold tracking-tight text-ink">Password changed</h1>
+        <h1 className="text-lg font-semibold tracking-tight text-ink">{setup ? 'Password set' : 'Password changed'}</h1>
         <p className="mt-2 text-sm text-ink-muted">
-          Every session on this account has been signed out, including any the
-          previous password was holding open.
+          {setup
+            ? 'Your account is ready. Sign in with your email address and the password you just chose.'
+            : 'Every session on this account has been signed out, including any the previous password was holding open.'}
         </p>
         <Button variant="primary" className="mt-5 w-full" onClick={() => router.push('/sign-in')}>
           Sign in
@@ -65,7 +67,7 @@ export function ResetForm({ token }: { token: string }) {
 
   return (
     <div className="w-full max-w-sm">
-      <h1 className="text-lg font-semibold tracking-tight text-ink">Choose a new password</h1>
+      <h1 className="text-lg font-semibold tracking-tight text-ink">{setup ? 'Choose your password' : 'Choose a new password'}</h1>
       <p className="mt-1 text-sm text-ink-muted">
         At least 12 characters. A passphrase of several unrelated words is both
         stronger and easier to type than a short one with symbols in it.

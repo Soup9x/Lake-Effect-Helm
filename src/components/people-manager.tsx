@@ -10,6 +10,8 @@ import { Badge } from './ui/badge';
 import { FieldHint, Input, Label, Select } from './ui/field';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { apiFetch, type ApiRequest } from '@/lib/ui/api';
+import { SignInDialog, lastEmailLine, type MemberSignIn } from './sign-in-dialog';
+import { PasswordGenerator } from './password-generator';
 
 /**
  * Who has access to this tenant.
@@ -48,6 +50,8 @@ interface Member {
   isSelf: boolean;
   /** Has an authenticator for local sign-in (0960). */
   hasTotp: boolean;
+  /** Local password or not, and the last account email (1000). */
+  signIn: MemberSignIn;
 }
 
 interface Role {
@@ -76,6 +80,8 @@ export function PeopleManager({
   const router = useRouter();
   const [inviting, setInviting] = useState(false);
   const [permissionsFor, setPermissionsFor] = useState<Member | null>(null);
+  const [signInFor, setSignInFor] = useState<Member | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busyRow, setBusyRow] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -130,7 +136,7 @@ export function PeopleManager({
       {canWrite && !inviting && (
         <Button variant="primary" onClick={() => setInviting(true)} className="gap-2">
           <UserPlus />
-          Invite somebody
+          Add a person
         </Button>
       )}
 
@@ -138,8 +144,9 @@ export function PeopleManager({
         <InviteForm
           grantableRoles={grantableRoles}
           organizations={organizations}
-          onDone={() => {
+          onDone={(message) => {
             setInviting(false);
+            setNotice(message);
             router.refresh();
           }}
           onCancel={() => setInviting(false)}
@@ -151,6 +158,7 @@ export function PeopleManager({
           {error}
         </p>
       )}
+      {notice && <p className="text-sm text-ok">{notice}</p>}
 
       <Card>
         <CardContent className="p-0">
@@ -170,6 +178,15 @@ export function PeopleManager({
                   <TableCell>
                     <div className="text-ink">{m.name ?? m.email}</div>
                     {m.name && <div className="text-xs text-ink-faint">{m.email}</div>}
+                    {(() => {
+                      const line = lastEmailLine(m.signIn);
+                      return line && (
+                        <div className={line.tone === 'danger' ? 'text-xs text-danger'
+                          : line.tone === 'ok' ? 'text-xs text-ink-muted' : 'text-xs text-ink-faint'}>
+                          {line.text}
+                        </div>
+                      );
+                    })()}
                   </TableCell>
                   <TableCell>
                     {canWrite && m.editable ? (
@@ -206,6 +223,11 @@ export function PeopleManager({
                   </TableCell>
                   <TableCell>
                     <Badge tone={m.status === 'active' ? 'ok' : 'danger'}>{m.status}</Badge>
+                    {m.signIn.hasLocalPassword && (
+                      <Badge tone="neutral" className="ml-1" title={m.signIn.mustChange ? 'Must change it at next sign-in' : undefined}>
+                        Local password{m.signIn.mustChange ? ' (temporary)' : ''}
+                      </Badge>
+                    )}
                     {m.hasTotp && <Badge tone="neutral" className="ml-1">2-step</Badge>}
                   </TableCell>
                   <TableCell className="text-right">
@@ -220,6 +242,16 @@ export function PeopleManager({
                         <KeyRound />
                         Permissions
                       </Button>
+                      {canWrite && m.editable && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSignInFor(m)}
+                          title="Email a password link, set a password, or make a one-time link"
+                        >
+                          Sign-in
+                        </Button>
+                      )}
                       {canWrite && m.hasTotp && !m.isSelf && (
                         <Button
                           variant="ghost"
@@ -256,6 +288,19 @@ export function PeopleManager({
         </CardContent>
       </Card>
 
+      {signInFor && (
+        <SignInDialog
+          userId={signInFor.userId}
+          email={signInFor.email}
+          label={signInFor.name ?? signInFor.email}
+          signIn={signInFor.signIn}
+          open
+          onOpenChange={(next) => {
+            if (!next) setSignInFor(null);
+          }}
+        />
+      )}
+
       {permissionsFor && (
         <MemberPermissionsDialog
           userId={permissionsFor.userId}
@@ -282,9 +327,13 @@ function InviteForm({
 }: {
   grantableRoles: Role[];
   organizations: Organization[];
-  onDone: () => void;
+  onDone: (message: string) => void;
   onCancel: () => void;
 }) {
+  const [signIn, setSignIn] = useState<'sso' | 'email_link' | 'password'>('email_link');
+  const [notify, setNotify] = useState(true);
+  const [password, setPassword] = useState('');
+  const [mustChange, setMustChange] = useState(true);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [roleKey, setRoleKey] = useState(grantableRoles[0]?.key ?? '');
@@ -306,13 +355,23 @@ function InviteForm({
           roleKey,
           ...(name.trim() ? { name: name.trim() } : {}),
           ...(needsPinning ? { orgScopeAll: false, orgScope: [orgId] } : { orgScopeAll: true }),
+          signIn,
+          notify,
+          ...(signIn === 'password' ? { password, mustChange } : {}),
         },
       });
       if (!result.ok) {
         setError(result.message);
         return;
       }
-      onDone();
+      const who = name.trim() || email.trim();
+      onDone(signIn === 'email_link'
+        ? `Added ${who}. A link to choose their password is on its way; whether it went shows on their row.`
+        : signIn === 'password'
+          ? `Added ${who} with the password you set. Give it to them directly${mustChange ? '; they choose their own at first sign-in' : ''}.`
+          : notify
+            ? `Added ${who}. An email telling them they have access is on its way.`
+            : `Added ${who}. They can sign in with single sign-on.`);
     } finally {
       setBusy(false);
     }
@@ -325,7 +384,7 @@ function InviteForm({
           <div className="flex items-center justify-between">
             <h2 className="flex items-center gap-2 text-sm font-medium text-ink">
               <Plus className="size-4" />
-              Invite somebody
+              Add a person
             </h2>
             <Button type="button" variant="ghost" size="icon" onClick={onCancel} aria-label="Cancel">
               <X />
@@ -393,6 +452,51 @@ function InviteForm({
             )}
           </div>
 
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium text-ink">How they sign in</legend>
+            {([
+              ['email_link', 'Local account — email them a link to choose a password',
+                'The link works once, for a day. Needs the mail relay set up under Settings.'],
+              ['password', 'Local account — set a password now',
+                'You give it to them directly. Useful when email is not set up yet.'],
+              ['sso', 'Single sign-on',
+                'They sign in with Microsoft or your identity provider using this address.'],
+            ] as const).map(([value, label, hint]) => (
+              <label key={value} className="flex items-start gap-2 text-sm text-ink">
+                <input type="radio" name="invite-sign-in" value={value} checked={signIn === value}
+                  onChange={() => setSignIn(value)} className="mt-0.5 size-4" />
+                <span>
+                  {label}
+                  <span className="block text-xs text-ink-muted">{hint}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+
+          {signIn === 'password' && (
+            <div className="space-y-2">
+              <Label htmlFor="invite-password">Password</Label>
+              <div className="flex items-end gap-2">
+                <Input id="invite-password" type="text" autoComplete="off" spellCheck={false} minLength={12}
+                  required value={password} onChange={(e) => setPassword(e.target.value)}
+                  placeholder="At least 12 characters" className="flex-1" />
+                <PasswordGenerator onUse={setPassword} />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-ink">
+                <input type="checkbox" checked={mustChange} onChange={(e) => setMustChange(e.target.checked)}
+                  className="size-4 rounded border-border-strong" />
+                They must choose their own at their first sign-in
+              </label>
+            </div>
+          )}
+          {signIn === 'sso' && (
+            <label className="flex items-center gap-2 text-sm text-ink">
+              <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)}
+                className="size-4 rounded border-border-strong" />
+              Email them that they have access
+            </label>
+          )}
+
           {error && (
             <p role="alert" className="text-sm text-danger">
               {error}
@@ -402,10 +506,11 @@ function InviteForm({
           <Button
             type="submit"
             variant="primary"
-            disabled={busy || !email.trim() || !roleKey || (needsPinning && !orgId)}
+            disabled={busy || !email.trim() || !roleKey || (needsPinning && !orgId)
+              || (signIn === 'password' && password.length < 12)}
           >
             {busy && <Loader2 className="animate-spin" />}
-            {busy ? 'Inviting…' : 'Send invitation'}
+            {busy ? 'Adding…' : signIn === 'email_link' || (signIn === 'sso' && notify) ? 'Add and send email' : 'Add person'}
           </Button>
         </form>
       </CardContent>
