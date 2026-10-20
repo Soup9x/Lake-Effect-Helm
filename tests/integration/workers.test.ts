@@ -187,12 +187,15 @@ describe('background workers', () => {
         {
           organizationId: IDS.orgAcme,
           kind: 'api_key',
-          label: 'NinjaOne API key',
+          label: 'Datto RMM API key',
           sensitivity: 'standard',
         },
-        'ninja-api-key-value',
+        'rmm-api-key-value',
       );
 
+      // Not ninja_one: since 0980 a NinjaOne connection is tenant-wide and its
+      // key must live in the MSP's own organisation. This test is about the
+      // generic reveal path, so a per-client connection of another provider.
       await withTenant(ADMIN, async (tx) => {
         await tx`
           INSERT INTO integration_connection (
@@ -200,8 +203,8 @@ describe('background workers', () => {
             credential_secret_ids, sync_enabled, config
           )
           VALUES (
-            ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'ninja_one', 'Acme NinjaOne',
-            'https://eu.ninjarmm.com',
+            ${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'datto_rmm', 'Acme Datto RMM',
+            'https://merlot-api.centrastage.net',
             ${tx.json({ api_key: credential.secretId })}::jsonb, true,
             ${tx.json({ path: '/v2/devices' })}::jsonb
           )
@@ -213,7 +216,7 @@ describe('background workers', () => {
         credential.secretId,
         { purpose: 'integration', role: 'worker' },
       );
-      expect(revealed.value.expose()).toBe('ninja-api-key-value');
+      expect(revealed.value.expose()).toBe('rmm-api-key-value');
       revealed.value.dispose();
     });
   });
