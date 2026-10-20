@@ -1,0 +1,347 @@
+'use client';
+
+/**
+ * NinjaOne (0980): the connection, which client each NinjaOne organisation
+ * imports to, and how the last few runs went.
+ *
+ * Three steps, in the order they have to happen: save the API app's details
+ * (tried against NinjaOne before anything is stored, which also fetches the
+ * organisation list), choose a client for each organisation, then sync.
+ */
+import { useState, type FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
+import { Loader2, RefreshCw, Server } from 'lucide-react';
+import { Button } from './ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { FieldHint, Input, Label, Select } from './ui/field';
+import { Badge, type BadgeTone } from './ui/badge';
+import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from './ui/table';
+import { formatDateTime } from '@/lib/ui/format';
+import { apiFetch, type Feedback } from '@/lib/ui/api';
+import { NINJA_REGIONS } from '@/lib/ninja/client';
+import type { NinjaSettings } from '@/lib/ninja/queries';
+
+interface OrganizationOption {
+  id: string;
+  name: string;
+}
+
+const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
+  configured: { label: 'Waiting for first sync', tone: 'neutral' },
+  active: { label: 'Syncing', tone: 'ok' },
+  degraded: { label: 'Failing', tone: 'warning' },
+  error: { label: 'Failing repeatedly', tone: 'danger' },
+  disabled: { label: 'Off', tone: 'neutral' },
+};
+
+const RUN_TONE: Record<string, BadgeTone> = {
+  success: 'ok', partial: 'warning', failed: 'danger', running: 'brand', queued: 'neutral', cancelled: 'neutral',
+};
+
+export function NinjaSettingsCard({
+  initial, organizations, canManage,
+}: {
+  initial: NinjaSettings;
+  organizations: OrganizationOption[];
+  canManage: boolean;
+}) {
+  const router = useRouter();
+  const [settings, setSettings] = useState(initial);
+  const connection = settings.connection;
+
+  const [baseUrl, setBaseUrl] = useState<string>(connection?.baseUrl ?? NINJA_REGIONS[0].url);
+  const [clientId, setClientId] = useState(connection?.clientId ?? '');
+  const [clientSecret, setClientSecret] = useState('');
+  const [syncEnabled, setSyncEnabled] = useState(connection?.syncEnabled ?? true);
+  const [interval, setIntervalMinutes] = useState(String(connection?.intervalMinutes ?? 60));
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback>(null);
+  const [remedy, setRemedy] = useState<string | null>(null);
+
+  const mappingOf = (s: NinjaSettings) =>
+    Object.fromEntries(s.organizations.map((o) => [o.ninjaOrgId, o.organizationId ?? '']));
+  const [mapping, setMapping] = useState<Record<string, string>>(mappingOf(initial));
+  const [mappingBusy, setMappingBusy] = useState(false);
+  const [mappingFeedback, setMappingFeedback] = useState<Feedback>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+
+  const savedMapping = mappingOf(settings);
+  const mappingDirty = Object.keys(mapping).some((k) => mapping[k] !== savedMapping[k]);
+
+  function adopt(next: NinjaSettings) {
+    setSettings(next);
+    setMapping(mappingOf(next));
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setFeedback(null);
+    setRemedy(null);
+    try {
+      const result = await apiFetch<NinjaSettings & { tested?: { organizations: number } }>('/api/integrations/ninja', {
+        method: 'PUT',
+        json: {
+          baseUrl,
+          clientId: clientId.trim(),
+          ...(clientSecret.trim() ? { clientSecret: clientSecret.trim() } : {}),
+          syncEnabled,
+          intervalMinutes: Number(interval),
+        },
+      });
+      if (!result.ok) {
+        setFeedback({ ok: false, message: result.message });
+        const hint = result.details?.remedy;
+        setRemedy(typeof hint === 'string' ? hint : null);
+        return;
+      }
+      adopt(result.value);
+      setClientSecret('');
+      const tested = result.value.tested;
+      setFeedback({
+        ok: true,
+        message: tested
+          ? `Saved. NinjaOne answered and listed ${tested.organizations} ${tested.organizations === 1 ? 'organisation' : 'organisations'} — choose a client for each below.`
+          : 'Saved.',
+      });
+      router.refresh();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveMapping() {
+    setMappingBusy(true);
+    setMappingFeedback(null);
+    try {
+      const changed = Object.keys(mapping)
+        .filter((k) => mapping[k] !== savedMapping[k])
+        .map((k) => ({ ninjaOrgId: k, organizationId: mapping[k] || null }));
+      const result = await apiFetch<NinjaSettings>('/api/integrations/ninja/organizations', {
+        method: 'PUT',
+        json: { mappings: changed },
+      });
+      if (!result.ok) {
+        setMappingFeedback({ ok: false, message: result.message });
+        return;
+      }
+      adopt(result.value);
+      setMappingFeedback({ ok: true, message: 'Saved. Devices import on the next sync.' });
+    } finally {
+      setMappingBusy(false);
+    }
+  }
+
+  async function syncNow() {
+    setSyncBusy(true);
+    setMappingFeedback(null);
+    try {
+      const result = await apiFetch('/api/integrations/ninja/sync', { method: 'POST' });
+      setMappingFeedback(result.ok
+        ? { ok: true, message: 'Queued. The sync starts within a minute; refresh to see it here.' }
+        : { ok: false, message: result.message });
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
+  const status = connection ? STATUS[connection.status] ?? { label: connection.status, tone: 'neutral' as BadgeTone } : null;
+  const mappedCount = settings.organizations.filter((o) => o.organizationId).length;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Server className="size-4 text-ink-faint" aria-hidden /> NinjaOne
+          {status && <Badge tone={status.tone}>{status.label}</Badge>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="max-w-3xl space-y-1 text-sm">
+          <p className="text-ink-muted">
+            Imports the devices NinjaOne manages as configurations of the client you choose for each
+            NinjaOne organisation, and keeps their hostname, operating system, hardware, address and
+            last check-in current. Names, notes, status, location and contact are yours, and so is any
+            field somebody edits by hand — the sync leaves those alone. Nothing is written to NinjaOne,
+            and a device removed there stays documented here.
+          </p>
+          {connection && (
+            <p className="text-ink-faint">
+              {connection.deviceCount} {connection.deviceCount === 1 ? 'device' : 'devices'} linked
+              {connection.lastSuccessAt ? ` · last synced ${formatDateTime(connection.lastSuccessAt)}` : ' · not synced yet'}
+              {connection.syncEnabled ? ` · every ${connection.intervalMinutes} minutes` : ''}
+            </p>
+          )}
+        </div>
+
+        {connection?.lastError && (
+          <p role="alert" className="max-w-3xl rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">
+            {connection.lastError}
+            {connection.consecutiveFailures > 1 && (
+              <span className="block text-xs">
+                {connection.consecutiveFailures} failures in a row, so retries are backing off.
+              </span>
+            )}
+          </p>
+        )}
+
+        {canManage ? (
+          <form onSubmit={save} className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="ninja-region">Region</Label>
+                <Select id="ninja-region" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}>
+                  {NINJA_REGIONS.map((r) => <option key={r.url} value={r.url}>{r.label}</option>)}
+                </Select>
+                <FieldHint>The address you sign in to NinjaOne at.</FieldHint>
+              </div>
+              <div>
+                <Label htmlFor="ninja-interval">Sync every (minutes)</Label>
+                <Input id="ninja-interval" type="number" inputMode="numeric" min={15} max={1440} required
+                  value={interval} onChange={(e) => setIntervalMinutes(e.target.value)} />
+                <FieldHint>15 to 1440.</FieldHint>
+              </div>
+              <div>
+                <Label htmlFor="ninja-client-id">Client ID</Label>
+                <Input id="ninja-client-id" autoComplete="off" required value={clientId}
+                  onChange={(e) => setClientId(e.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="ninja-client-secret">Client secret</Label>
+                <Input id="ninja-client-secret" type="password" autoComplete="new-password"
+                  required={!connection?.secretSet}
+                  placeholder={connection?.secretSet ? 'Stored — leave blank to keep it' : undefined}
+                  value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} />
+                <FieldHint>Kept in the vault like any credential, in your own organisation.</FieldHint>
+              </div>
+            </div>
+            <FieldHint className="max-w-3xl">
+              In NinjaOne, under Administration → Apps → API, add a client app for an API Services
+              (machine-to-machine) platform, with the Monitoring scope and the Client Credentials grant.
+            </FieldHint>
+            <label className="flex items-center gap-2 text-sm text-ink">
+              <input type="checkbox" checked={syncEnabled} onChange={(e) => setSyncEnabled(e.target.checked)}
+                className="size-4 rounded border-border-strong" />
+              Sync on a schedule
+            </label>
+
+            {feedback && (
+              <p role={feedback.ok ? undefined : 'alert'} className={feedback.ok ? 'text-sm text-ok' : 'text-sm text-danger'}>
+                {feedback.message}
+                {remedy && <span className="block text-xs text-ink-muted">{remedy}</span>}
+              </p>
+            )}
+
+            <Button type="submit" variant="primary" size="sm" disabled={saving}>
+              {saving && <Loader2 className="size-4 animate-spin" aria-hidden />}
+              {clientSecret.trim() ? 'Save and test' : 'Save'}
+            </Button>
+          </form>
+        ) : (
+          <p className="text-xs text-ink-faint">Changing this requires RMM integration access.</p>
+        )}
+
+        {connection && (
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-medium text-ink">
+                Organisations
+                <span className="ml-2 text-xs font-normal text-ink-faint">
+                  {mappedCount} of {settings.organizations.length} imported
+                </span>
+              </h3>
+              {canManage && (
+                <div className="flex items-center gap-2">
+                  {mappingDirty && (
+                    <Button variant="primary" size="sm" onClick={saveMapping} disabled={mappingBusy}>
+                      {mappingBusy && <Loader2 className="size-4 animate-spin" aria-hidden />}
+                      Save clients
+                    </Button>
+                  )}
+                  <Button variant="secondary" size="sm" onClick={syncNow}
+                    disabled={syncBusy || !connection.syncEnabled || mappingDirty}>
+                    {syncBusy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <RefreshCw className="size-4" aria-hidden />}
+                    Sync now
+                  </Button>
+                </div>
+              )}
+            </div>
+            {mappingFeedback && (
+              <p role={mappingFeedback.ok ? undefined : 'alert'} className={mappingFeedback.ok ? 'text-sm text-ok' : 'text-sm text-danger'}>
+                {mappingFeedback.message}
+              </p>
+            )}
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>NinjaOne organisation</TableHead>
+                  <TableHead className="text-right">Devices</TableHead>
+                  <TableHead>Imports to</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {settings.organizations.length === 0 && (
+                  <TableEmpty colSpan={3}>None yet. They are listed when the connection is saved and on every sync.</TableEmpty>
+                )}
+                {settings.organizations.map((org) => (
+                  <TableRow key={org.ninjaOrgId}>
+                    <TableCell className="font-medium">{org.name}</TableCell>
+                    <TableCell className="text-right tabular-nums text-ink-muted">{org.deviceCount ?? '—'}</TableCell>
+                    <TableCell>
+                      {canManage ? (
+                        <Select aria-label={`Client for ${org.name}`} value={mapping[org.ninjaOrgId] ?? ''}
+                          onChange={(e) => setMapping((m) => ({ ...m, [org.ninjaOrgId]: e.target.value }))}>
+                          <option value="">Don&rsquo;t import</option>
+                          {organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                        </Select>
+                      ) : (
+                        <span className={org.organizationName ? 'text-ink' : 'text-ink-faint'}>
+                          {org.organizationName ?? 'Not imported'}
+                        </span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </section>
+        )}
+
+        {settings.runs.length > 0 && (
+          <section className="space-y-2">
+            <h3 className="text-sm font-medium text-ink">Recent runs</h3>
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Started</TableHead>
+                  <TableHead>Result</TableHead>
+                  <TableHead className="text-right">Seen</TableHead>
+                  <TableHead className="text-right">New</TableHead>
+                  <TableHead className="text-right">Updated</TableHead>
+                  <TableHead className="text-right">Not imported</TableHead>
+                  <TableHead className="text-right">Failed</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {settings.runs.map((run) => (
+                  <TableRow key={run.id}>
+                    <TableCell className="text-ink-muted">{run.startedAt ? formatDateTime(run.startedAt) : '—'}</TableCell>
+                    <TableCell>
+                      <Badge tone={RUN_TONE[run.status] ?? 'neutral'}>{run.status}</Badge>
+                      {run.error && <span className="mt-1 block max-w-md text-xs text-ink-muted">{run.error}</span>}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{run.seen}</TableCell>
+                    <TableCell className="text-right tabular-nums">{run.created}</TableCell>
+                    <TableCell className="text-right tabular-nums">{run.updated}</TableCell>
+                    <TableCell className="text-right tabular-nums">{run.skipped}</TableCell>
+                    <TableCell className="text-right tabular-nums">{run.failed}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </section>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

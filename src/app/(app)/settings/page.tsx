@@ -27,6 +27,8 @@ import { readSessionPolicy } from '@/lib/auth/session-policy-settings';
 import { OidcSettingsCard } from '@/components/oidc-settings';
 import { NotificationSettingsCard } from '@/components/notification-settings';
 import { UnifiSettingsCard } from '@/components/unifi-settings';
+import { NinjaSettingsCard } from '@/components/ninja-settings';
+import { readNinjaSettings } from '@/lib/ninja/queries';
 import { listKeyCustody, listSystemWorkers, readTenantSummary } from '@/lib/tenant/queries';
 import { readOidcSettings, readRadiusSettings } from '@/lib/auth/sign-in-settings';
 import {
@@ -73,7 +75,7 @@ export default async function SettingsPage() {
     unifi, organizations, canManageNetwork, flexibleTypeCount,
     sidebarDefault, sidebarDefaultSet, externalChecks, healthWindow, smtp,
     expiryAlerts, canManageAlerts, serviceAccounts, grantableRoles, canReadUsers, canManageUsers, backups,
-    sessionPolicy,
+    sessionPolicy, ninja, canManageRmm,
   } = await withTenant(actorOf(identity), async (tx, session) => {
     const canReadUsers = session.permissions.includes('user:read');
     const [keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
@@ -130,6 +132,10 @@ export default async function SettingsPage() {
         : null,
       // 0890: offered only to somebody who may change it, like the sign-in cards.
       sessionPolicy: session.permissions.includes('tenant:write') ? await readSessionPolicy(tx) : null,
+      // 0980: readable by any tenant-wide role; the controls only for
+      // somebody the routes and functions would let through.
+      ninja: await readNinjaSettings(tx),
+      canManageRmm: session.permissions.includes('integration:rmm:manage'),
       keys, workers, tenant, radius, oidc, destinations, deliveries, unifi, organizations,
       canManageNetwork: networkRows[0]?.permitted ?? false,
       flexibleTypeCount: flexibleTypeRows[0]?.n ?? 0,
@@ -216,6 +222,8 @@ export default async function SettingsPage() {
           // reach Helm on is the request, and a stored copy would drift.
           callbackBase={origin}
         />
+
+        <NinjaSettingsCard initial={ninja} organizations={organizations} canManage={canManageRmm} />
 
         {sessionPolicy && <SessionPolicyCard initial={sessionPolicy} />}
 

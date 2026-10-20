@@ -6,7 +6,7 @@
  * helm.reveal_secret() so machine access to a client's RMM key is audited
  * exactly like a technician's.
  */
-import { bigint, boolean, index, integer, jsonb, pgTable, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, index, integer, jsonb, pgTable, primaryKey, smallint, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { bytea, citext, textArray, tstz } from './_types';
 import {
   integrationProvider, integrationStatus, syncDirection,
@@ -76,9 +76,28 @@ export const externalIdentity = pgTable('external_identity', {
   lastSyncedAt: tstz('last_synced_at').notNull().defaultNow(),
   /** The external system owns this record; local edits will be overwritten. */
   isAuthoritative: boolean('is_authoritative').notNull().default(false),
+  /** Field -> what the sync last wrote (0980); a field that differs was edited by a person. */
+  applied: jsonb('applied').notNull().default({}),
 }, (t) => [
   uniqueIndex('external_identity_external_uk').on(t.connectionId, t.externalType, t.externalId),
   uniqueIndex('external_identity_node_uk').on(t.connectionId, t.nodeId, t.externalType),
+]);
+
+/**
+ * NinjaOne's organisations and the client each imports to (0980). A null
+ * organization is listed and not imported.
+ */
+export const ninjaOrganization = pgTable('ninja_organization', {
+  tenantId: uuid('tenant_id').notNull(),
+  connectionId: uuid('connection_id').notNull(),
+  ninjaOrgId: text('ninja_org_id').notNull(),
+  name: text('name').notNull(),
+  organizationId: uuid('organization_id'),
+  deviceCount: integer('device_count'),
+  seenAt: tstz('seen_at').notNull().defaultNow(),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.connectionId, t.ninjaOrgId] }),
 ]);
 
 /**
