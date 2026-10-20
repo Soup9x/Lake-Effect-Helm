@@ -53,6 +53,7 @@ export function AppChrome({
     <ShellProvider>
       <div className="flex min-h-screen flex-col bg-canvas">
         <TopNav
+          isClient={isClient}
           utilities={
             <>
               {/*

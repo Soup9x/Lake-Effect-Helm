@@ -656,6 +656,18 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
       }),
   },
   {
+    name: 'the Global Credentials list',
+    load: async () =>
+      (await import('../../src/app/(app)/global/credentials/page')).default({ searchParams: p({}) }),
+  },
+  {
+    name: 'the Global Credentials list, filtered',
+    load: async () =>
+      (await import('../../src/app/(app)/global/credentials/page')).default({
+        searchParams: p({ client: IDS.orgAcme, type: 'domain_admin', view: 'internal' }),
+      }),
+  },
+  {
     name: 'the password generator',
     load: async () => (await import('../../src/app/(app)/global/password-generator/page')).default(),
   },
