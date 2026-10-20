@@ -83,7 +83,7 @@ export async function listRecentlyUpdated(
       UNION ALL
       SELECT s.id, s.name, 'site', s.updated_at, s.updated_by
       FROM site s
-      WHERE s.organization_id = ${organizationId}::uuid AND s.deleted_at IS NULL
+      WHERE s.organization_id = ${organizationId}::uuid AND s.deleted_at IS NULL AND s.archived_at IS NULL
       UNION ALL
       -- concat_ws, not ||. contact.last_name is NOT NULL today, so the two are
       -- equivalent right now; the difference is what happens if that ever

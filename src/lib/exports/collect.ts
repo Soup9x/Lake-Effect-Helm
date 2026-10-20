@@ -196,7 +196,7 @@ export async function collectExport(
   const sites = await tx<SiteRecord[]>`
     SELECT id, name, code, is_primary, address_line1, city, region, postal_code,
            country, main_phone, after_hours_phone, access_notes
-    FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+    FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL AND archived_at IS NULL
     ORDER BY is_primary DESC, name
   `;
 

@@ -100,7 +100,7 @@ export function listSites(tx: HelmTx, organizationId: string): Promise<SiteRow[]
                country, timezone, main_phone, after_hours_phone,
                ARRAY(SELECT abbrev(ip) FROM unnest(public_ips) AS ip) AS public_ips,
                access_notes, physical_security, notes
-        FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+        FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL AND archived_at IS NULL
         ORDER BY is_primary DESC, name
       `;
 }

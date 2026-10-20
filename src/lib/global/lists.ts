@@ -157,7 +157,7 @@ export async function globalFilterOptions(tx: HelmTx, client: string | null) {
     client
       ? tx<{ id: string; name: string }[]>`
           SELECT id, name FROM site
-          WHERE organization_id = ${client}::uuid AND deleted_at IS NULL
+          WHERE organization_id = ${client}::uuid AND deleted_at IS NULL AND archived_at IS NULL
           ORDER BY lower(name)
         `
       : Promise.resolve([]),

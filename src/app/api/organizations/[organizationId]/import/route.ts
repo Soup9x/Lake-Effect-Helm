@@ -173,7 +173,7 @@ export const POST = tenantRoute(
     if (spec.fields.some((f) => f.key === 'site')) {
       const sites = await tx<{ id: string; name: string }[]>`
         SELECT id, name FROM site
-        WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+        WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL AND archived_at IS NULL
       `;
       for (const s of sites) siteByName.set(s.name.toLowerCase(), s.id);
     }

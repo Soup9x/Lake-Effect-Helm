@@ -145,7 +145,7 @@ export default async function DashboardPage() {
               (SELECT count(*) FROM organization WHERE deleted_at IS NULL) AS organizations,
               (SELECT count(*) FROM v_secret_metadata) AS secrets,
               (SELECT count(*) FROM asset_node WHERE archived_at IS NULL) AS assets,
-              (SELECT count(*) FROM site WHERE deleted_at IS NULL) AS sites,
+              (SELECT count(*) FROM site WHERE deleted_at IS NULL AND archived_at IS NULL) AS sites,
               (SELECT count(*) FROM contact) AS contacts,
               (SELECT count(*) FROM attachment WHERE deleted_at IS NULL) AS attachments
           `
