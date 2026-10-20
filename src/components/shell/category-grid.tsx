@@ -18,7 +18,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  ArchiveRestore, Check, Copy, ExternalLink, EyeOff, KeyRound, Lock, Pencil, Trash2,
+  ArchiveRestore, ExternalLink, EyeOff, KeyRound, Lock, Pencil, Trash2,
 } from 'lucide-react';
 import { FilterToolbar } from './filter-toolbar';
 import { ColumnMenu, useHiddenColumns, type ColumnChoice } from './column-menu';
@@ -31,7 +31,7 @@ import type { SiteValues } from '@/lib/sites/values';
 import { RowPermissionsDialog, type RowPermissions } from './row-permissions-dialog';
 import { Badge } from '../ui/badge';
 import { formatDate } from '@/lib/ui/format';
-import { copyUnaudited } from '@/lib/ui/clipboard';
+import { CopyValueButton } from '../copy-value-button';
 
 export interface CategoryRecord {
   id: string;
@@ -80,39 +80,6 @@ export interface ExtraColumn {
 
 interface Row extends GridRow {
   record: CategoryRecord;
-}
-
-/**
- * Copy-to-clipboard, through the product's single clipboard door.
- *
- * `copyUnaudited` rather than reaching for the browser API directly, and that is
- * enforced rather than remembered: tests/unit/clipboard.test.ts scans src/ for
- * any direct write and fails on it, which is exactly how this component was
- * caught the first time it was written. (That scan is a text match, so even
- * naming the API in a comment trips it — as this comment originally did.)
- * Unaudited is the right half of the door here — the
- * value is a username already rendered on screen, not secret material, and
- * recording a copy of something anyone with the page open can read would put
- * noise in the trail that matters.
- */
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const [done, setDone] = useState(false);
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      onClick={async () => {
-        const outcome = await copyUnaudited(value);
-        if (outcome !== 'copied') return;
-        setDone(true);
-        setTimeout(() => setDone(false), 1500);
-      }}
-      className="flex size-6 items-center justify-center rounded text-ink-faint transition-colors hover:bg-surface-sunken hover:text-ink"
-    >
-      {done ? <Check className="size-3.5 text-ok" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
-    </button>
-  );
 }
 
 /**
@@ -273,7 +240,7 @@ export function CategoryGrid({
               can copy from it, and hiding the copy button until the pointer
               arrives makes the list look like it has none.
             */}
-            {r.record.secondary && <CopyButton value={r.record.secondary} label="Copy username" />}
+            {r.record.secondary && <CopyValueButton value={r.record.secondary} label="Copy username" />}
             {r.record.hasTotp && (
               <Link
                 href={r.record.href ?? '#'}
