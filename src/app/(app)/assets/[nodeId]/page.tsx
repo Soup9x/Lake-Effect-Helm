@@ -1018,6 +1018,9 @@ const DETAIL_TABLES: ReadonlyMap<string, string> = new Map([
   ['license', 'license'],
   ['isp_circuit', 'isp_circuit'],
   ['vendor', 'vendor'],
+  // A credential's username, URL and type: shown and edited in its
+  // Credentials card, beside the secret.
+  ['credential', 'credential'],
   /*
    * Added in F1. `sop` has been an asset_node subtype since 0090 and was
    * missing here for the same reason flexible_asset was: nothing in the
@@ -1066,7 +1069,7 @@ async function detailFor(
    * badly.
    */
   const HIDDEN = new Set([
-    'totp_algorithm', 'totp_digits', 'totp_period_seconds', 'totp_issuer', 'totp_account',
+    'totp_algorithm', 'totp_digits', 'totp_period_seconds', 'totp_issuer', 'totp_account', 'totp_secret_kind',
     'next_check_at', 'last_checked_at', 'last_check_status', 'last_check_error',
     'registry_expires_at', 'observed_not_after', 'observed_fingerprint_sha256',
   ]);

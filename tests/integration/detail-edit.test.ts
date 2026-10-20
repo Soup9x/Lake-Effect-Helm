@@ -155,6 +155,30 @@ describe('the boundary', () => {
     expect(new Date(row!.warranty_expires_at).toISOString().slice(0, 10)).toBe('2027-03-31');
   });
 
+  it('sets and changes a credential’s username, URL and type, and never its secret', async () => {
+    currentUser = ADMIN;
+    const [cred] = await su((sql) => sql<{ id: string }[]>`
+      WITH n AS (
+        INSERT INTO asset_node (tenant_id, organization_id, node_type, name)
+        VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'credential', 'Acme root login')
+        RETURNING id, tenant_id
+      )
+      INSERT INTO credential (id, tenant_id) SELECT id, tenant_id FROM n RETURNING id
+    `);
+    const set = await patch(cred!.id, { username: 'root', url: 'ssh://acme-helm01', credential_type: 'root' });
+    expect(set.status, await set.text()).toBe(200);
+    const changed = await patch(cred!.id, { username: 'helmadmin' });
+    expect(changed.status).toBe(200);
+    const [row] = await su((sql) => sql<{ username: string; url: string; credential_type: string }[]>`
+      SELECT username, url, credential_type::text FROM credential WHERE id = ${cred!.id}::uuid
+    `);
+    expect(row).toEqual({ username: 'helmadmin', url: 'ssh://acme-helm01', credential_type: 'root' });
+
+    expect((await read(await patch(cred!.id, { secret_id: IDS.firewall }))).message).toMatch(/not a field/);
+    expect((await read(await patch(cred!.id, { totp_secret_id: IDS.firewall }))).message).toMatch(/not a field/);
+    expect((await read(await patch(cred!.id, { credential_type: 'superuser' }))).status).toBe(400);
+  });
+
   it('is asset:write', async () => {
     currentUser = VIEWER;
     const { status, message } = await read(await patch(IDS.firewall, { serial_number: 'nope' }));
