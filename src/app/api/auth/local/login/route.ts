@@ -25,6 +25,8 @@ import { setSessionCookie } from '@/lib/auth/session-cookie';
 interface LoginBody {
   email?: unknown;
   password?: unknown;
+  /** The second step (0960), when the first answer asked for one. */
+  code?: unknown;
 }
 
 const INVALID = 'Those credentials are not valid.';
@@ -42,11 +44,40 @@ export const POST = publicRoute(async (request) => {
   const result = await attemptLocalLogin({
     email: body.email,
     password: body.password,
+    code: typeof body.code === 'string' ? body.code : undefined,
     ip: clientIp(request),
     userAgent: request.headers.get('user-agent') ?? undefined,
   });
 
   if (!result.ok) {
+    // The password was right; a second step is due (0960). Saying so tells the
+    // caller the password was right, which every two-step sign-in does: the
+    // code is the secret that stands between them and a session.
+    if (result.outcome === 'totp_required') {
+      return NextResponse.json(
+        { error: { code: 'totp_required', message: 'Enter the code from your authenticator app, or a recovery code.' } },
+        { status: 401 },
+      );
+    }
+    if (result.outcome === 'totp_enrolment_required') {
+      return NextResponse.json(
+        {
+          error: {
+            code: 'totp_enrolment_required',
+            message: 'This account needs an authenticator app before it can sign in. Scan the code, then enter the six digits it shows.',
+            details: result.enrolment ? { secret: result.enrolment.secret, uri: result.enrolment.uri } : {},
+          },
+        },
+        { status: 401 },
+      );
+    }
+    if (result.outcome === 'bad_totp') {
+      return NextResponse.json(
+        { error: { code: 'totp_invalid', message: 'That code is not right. Check the time on your phone and try the next one.' } },
+        { status: 401 },
+      );
+    }
+
     if (result.outcome === 'rate_limited') {
       return NextResponse.json(
         {
@@ -89,6 +120,8 @@ export const POST = publicRoute(async (request) => {
     ok: true,
     mustChange: result.mustChange,
     expires: result.expires.toISOString(),
+    // Only when this sign-in just set up an authenticator: shown once.
+    ...(result.recoveryCodes ? { recoveryCodes: result.recoveryCodes } : {}),
   });
 
   setSessionCookie(response, result.sessionToken, { expires: result.expires });

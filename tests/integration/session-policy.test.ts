@@ -31,7 +31,10 @@ const request = (method: string, payload?: unknown) =>
 const noParams = { params: Promise.resolve({}) };
 const body = async (r: Response) => (await r.json()) as Record<string, unknown>;
 
-const DEFAULTS = { idleMinutes: 480, absoluteHours: null, stepUpMinutes: 15, lockoutThreshold: 5, lockoutMaxMinutes: 15 };
+const DEFAULTS = {
+  idleMinutes: 480, absoluteHours: null, stepUpMinutes: 15, lockoutThreshold: 5, lockoutMaxMinutes: 15,
+  requireLocalTotp: false,
+};
 
 let su: ReturnType<typeof superuserSql>;
 
@@ -72,7 +75,10 @@ describe('setting it', () => {
     asUser(IDS.admin1, 'admin@northwind.test');
     expect((await body(await getPolicy(request('GET'), noParams))).policy).toMatchObject(DEFAULTS);
 
-    const saved = { idleMinutes: 30, absoluteHours: 12, stepUpMinutes: 10, lockoutThreshold: 4, lockoutMaxMinutes: 60 };
+    const saved = {
+      idleMinutes: 30, absoluteHours: 12, stepUpMinutes: 10, lockoutThreshold: 4, lockoutMaxMinutes: 60,
+      requireLocalTotp: true,
+    };
     const put = await putPolicy(request('PUT', saved), noParams);
     expect(put.status).toBe(200);
     expect((await body(put)).policy).toMatchObject(saved);

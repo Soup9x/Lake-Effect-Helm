@@ -4095,7 +4095,7 @@ SELECT helm_test.check('an unsaved policy reads as the defaults',
           AND lockout_threshold = 5 AND lockout_max_minutes = 15 AND updated_at IS NULL
      FROM helm.session_policy()));
 
-SELECT helm.set_session_policy(30, 12, 10, 4, 60);
+SELECT helm.set_session_policy(30, 12, 10, 4, 60, false);
 SELECT helm_test.check('the administrator saves it, and it reads back',
   (SELECT idle_minutes = 30 AND absolute_hours = 12 AND step_up_minutes = 10
           AND lockout_threshold = 4 AND lockout_max_minutes = 60
@@ -4106,13 +4106,13 @@ SELECT helm_test.check('...and is the administrator''s own effective idle timeou
   (SELECT idle_minutes = 30 FROM helm.my_session_policy()));
 
 SELECT helm_test.check_raises('an idle timeout under five minutes is refused',
-  $$SELECT helm.set_session_policy(1, NULL, 15, 5, 15)$$);
+  $$SELECT helm.set_session_policy(1, NULL, 15, 5, 15, false)$$);
 SELECT helm_test.check_raises('...as is a lockout threshold of one',
-  $$SELECT helm.set_session_policy(30, NULL, 15, 1, 15)$$);
+  $$SELECT helm.set_session_policy(30, NULL, 15, 1, 15, false)$$);
 
 SELECT helm_test.ctx(:t1, :u_tech1);
 SELECT helm_test.check_raises('a technician cannot change it',
-  $$SELECT helm.set_session_policy(1440, NULL, 60, 20, 1)$$);
+  $$SELECT helm.set_session_policy(1440, NULL, 60, 20, 1, false)$$);
 SELECT helm_test.check_raises('...nor sign everybody out',
   $$SELECT helm.end_tenant_sessions()$$);
 SELECT helm_test.check('...but is held to it',
@@ -4121,6 +4121,26 @@ SELECT helm_test.check('...but is held to it',
 SELECT helm_test.ctx(:t2, :u_admin2);
 SELECT helm_test.check('another tenant''s policy is its own',
   (SELECT idle_minutes = 480 FROM helm.session_policy()));
+ROLLBACK;
+
+\echo ''
+\echo '== 53. An authenticator seed is helm_auth''s, and only an administrator resets one (0960) =='
+BEGIN;
+SELECT helm_test.ctx(:t1, :u_admin1);
+SELECT helm_test.check_raises('helm_app cannot read a seed',
+  $$SELECT * FROM local_totp$$);
+SELECT helm_test.check_raises('...nor a recovery code',
+  $$SELECT * FROM local_totp_recovery$$);
+SELECT helm_test.check('an administrator may reset a member''s; with none set up, there is nothing to reset',
+  NOT helm.reset_local_totp(:u_tech1));
+SELECT helm_test.check_raises('...but not somebody outside this tenant',
+  format($$SELECT helm.reset_local_totp(%L)$$, :u_admin2));
+SELECT helm_test.check('the People page learns who has one, and nothing more',
+  (SELECT count(*) FROM helm.members_with_totp()) = 0);
+
+SELECT helm_test.ctx(:t1, :u_tech1);
+SELECT helm_test.check_raises('a technician cannot reset anybody''s',
+  format($$SELECT helm.reset_local_totp(%L)$$, :u_admin1));
 ROLLBACK;
 
 \echo '== All security assertions passed =='

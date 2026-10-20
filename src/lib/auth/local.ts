@@ -22,6 +22,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { db } from '../db/client';
 import { authenticate as radiusAuthenticate } from './radius';
 import { radiusForEmail } from './radius-config';
+import { confirmEnrolment, startEnrolment, verifySecondFactor, type Enrolment } from './local-totp';
 import {
   checkPasswordPolicy,
   hashPassword,
@@ -45,7 +46,9 @@ export type LoginOutcome =
    * attempt carries on to the local password, so the caller's story is
    * unchanged and an operator can still see the directory went away.
    */
-  | 'radius_unavailable';
+  | 'radius_unavailable'
+  /** A wrong authenticator code (0960). Counts and locks as a wrong password does. */
+  | 'bad_totp';
 
 export interface LoginRequest {
   email: string;
@@ -62,6 +65,11 @@ export interface LoginRequest {
    * page started showing people where they are signed in.
    */
   establishSession?: boolean | undefined;
+  /**
+   * The second step (0960): a code from the authenticator app, or a recovery
+   * code. Asked for only when the account has one, or policy requires one.
+   */
+  code?: string | undefined;
 }
 
 export type LoginResult =
@@ -74,10 +82,24 @@ export type LoginResult =
       mustChange: boolean;
       /** Which door this went through. Recorded on the session. */
       method: 'password' | 'radius';
+      /** Set when this sign-in finished setting up an authenticator: shown once. */
+      recoveryCodes?: string[] | undefined;
+    }
+  | {
+      ok: false;
+      /**
+       * The password was right and a second step is due: a code from the app
+       * ('totp_required'), or — policy requiring one the account does not
+       * have yet — setting the app up first ('totp_enrolment_required').
+       * Neither is recorded as an attempt; the resubmission with a code is.
+       */
+      outcome: 'totp_required' | 'totp_enrolment_required';
+      enrolment?: Enrolment | undefined;
     }
   | {
       ok: false;
       outcome: Exclude<LoginOutcome, 'success' | 'radius_unavailable'>;
+      enrolment?: undefined;
       /** Present only for 'locked'. Shown to the person, never to a stranger. */
       retryAfter?: Date | undefined;
     };
@@ -92,6 +114,8 @@ interface ChallengeRow {
   throttled: boolean;
   account_failures: number;
   address_failures: number;
+  totp_enrolled: boolean;
+  totp_required: boolean;
 }
 
 /** Eight hours, matching the SSO session in auth/config.ts. */
@@ -183,6 +207,8 @@ export async function attemptLocalLogin(request: LoginRequest): Promise<LoginRes
         await record(sql, email, userId, 'disabled', request);
         return { ok: false, outcome: 'disabled' };
       }
+      const second = await secondStep(sql, email, userId, challenge, request);
+      if (second.stop) return second.stop;
       const established = await openSession(sql, userId, 'radius', request);
       await record(sql, email, userId, 'success', request);
       return {
@@ -194,6 +220,7 @@ export async function attemptLocalLogin(request: LoginRequest): Promise<LoginRes
         // one they did not use would be a prompt with nothing behind it.
         mustChange: false,
         method: 'radius',
+        recoveryCodes: second.recoveryCodes,
       };
     }
   }
@@ -233,6 +260,9 @@ export async function attemptLocalLogin(request: LoginRequest): Promise<LoginRes
     void rehashQuietly(userId, request.password);
   }
 
+  const second = await secondStep(sql, email, userId, challenge, request);
+  if (second.stop) return second.stop;
+
   const established = await openSession(sql, userId, 'password', request);
 
   await record(sql, email, userId, 'success', request);
@@ -244,7 +274,52 @@ export async function attemptLocalLogin(request: LoginRequest): Promise<LoginRes
     expires: established.expires,
     mustChange: challenge.must_change,
     method: 'password',
+    recoveryCodes: second.recoveryCodes,
   };
+}
+
+/**
+ * The second step, once the password (or the directory) has said yes (0960).
+ *
+ * ONLY FOR A SIGN-IN. A re-authentication — step-up, changing the password —
+ * is made from a session that already passed this step, and asks only for the
+ * password; requiring a code there too would be a second factor for the same
+ * session twice.
+ *
+ * Enrolled: a code is required, and a wrong one is a failed attempt that
+ * counts and locks. Not enrolled but required by policy: the first submission
+ * gets a seed to set the app up with, and the next one, with a code from it,
+ * confirms it and signs in. Neither: nothing to do.
+ */
+async function secondStep(
+  sql: ReturnType<typeof db>,
+  email: string,
+  userId: string,
+  challenge: ChallengeRow,
+  request: LoginRequest,
+): Promise<{ stop?: LoginResult; recoveryCodes?: string[] }> {
+  if (request.establishSession === false) return {};
+  const code = request.code?.trim();
+
+  if (challenge.totp_enrolled) {
+    if (!code) return { stop: { ok: false, outcome: 'totp_required' } };
+    if (await verifySecondFactor(userId, code)) return {};
+    await record(sql, email, userId, 'bad_totp', request);
+    return { stop: { ok: false, outcome: 'bad_totp' } };
+  }
+
+  if (challenge.totp_required) {
+    if (!code) {
+      const enrolment = await startEnrolment(userId, email, { reuse: true });
+      return { stop: { ok: false, outcome: 'totp_enrolment_required', enrolment } };
+    }
+    const recoveryCodes = await confirmEnrolment(userId, code);
+    if (recoveryCodes) return { recoveryCodes };
+    await record(sql, email, userId, 'bad_totp', request);
+    return { stop: { ok: false, outcome: 'bad_totp' } };
+  }
+
+  return {};
 }
 
 /**

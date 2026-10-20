@@ -32,6 +32,7 @@ export function SessionPolicyCard({ initial }: { initial: SessionPolicySettings 
   const router = useRouter();
   const [saved, setSaved] = useState(initial);
   const [draft, setDraft] = useState<Draft>(draftOf(initial));
+  const [requireTotp, setRequireTotp] = useState(initial.requireLocalTotp);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -39,7 +40,8 @@ export function SessionPolicyCard({ initial }: { initial: SessionPolicySettings 
   const [ending, setEnding] = useState(false);
 
   const set = (key: keyof Draft, value: string) => setDraft((d) => ({ ...d, [key]: value }));
-  const dirty = JSON.stringify(draft) !== JSON.stringify(draftOf(saved));
+  const dirty = JSON.stringify(draft) !== JSON.stringify(draftOf(saved))
+    || requireTotp !== saved.requireLocalTotp;
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -55,6 +57,7 @@ export function SessionPolicyCard({ initial }: { initial: SessionPolicySettings 
           stepUpMinutes: Number(draft.stepUpMinutes),
           lockoutThreshold: Number(draft.lockoutThreshold),
           lockoutMaxMinutes: Number(draft.lockoutMaxMinutes),
+          requireLocalTotp: requireTotp,
         },
       });
       if (!result.ok) {
@@ -63,6 +66,7 @@ export function SessionPolicyCard({ initial }: { initial: SessionPolicySettings 
       }
       setSaved(result.value.policy);
       setDraft(draftOf(result.value.policy));
+      setRequireTotp(result.value.policy.requireLocalTotp);
       setNotice('Saved. It applies to every session from its next request.');
       router.refresh();
     } finally {
@@ -126,6 +130,18 @@ export function SessionPolicyCard({ initial }: { initial: SessionPolicySettings 
                 'Never permanent, so a stranger cannot lock out your break-glass account for good. 1 to 1440.', 1, 1440)}
             </div>
           </fieldset>
+
+          <label className="flex items-start gap-2 text-sm text-ink">
+            <input type="checkbox" checked={requireTotp} onChange={(e) => setRequireTotp(e.target.checked)}
+              className="mt-0.5 size-4 rounded border-border-strong" />
+            <span>
+              Require an authenticator-app code for every local sign-in
+              <span className="block text-xs text-ink-muted">
+                Anybody without one is walked through setting it up at their next local sign-in.
+                Single sign-on is unaffected — set two-step there in your identity provider.
+              </span>
+            </span>
+          </label>
 
           {error && <p role="alert" className="text-sm text-danger">{error}</p>}
           {notice && <p className="text-sm text-ok">{notice}</p>}
