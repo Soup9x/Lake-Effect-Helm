@@ -46,6 +46,11 @@ describe('CSV exports', () => {
       .entries[0]).toMatchObject({ name: 'NAS', url: 'https://nas.local', username: 'root' });
   });
 
+  it('reads the template the import dialog offers', () => {
+    expect(parseVaultImport('name,url,username,password,totp,notes\nRouter,https://10.0.0.1,admin,pw,,closet').entries[0])
+      .toEqual({ name: 'Router', url: 'https://10.0.0.1', username: 'admin', password: 'pw', totp: null, notes: 'closet' });
+  });
+
   it('reads a semicolon-separated export', () => {
     expect(parseCsv('name;username;password\nA;b;c')).toEqual([['name', 'username', 'password'], ['A', 'b', 'c']]);
   });
