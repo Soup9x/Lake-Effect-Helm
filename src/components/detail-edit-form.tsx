@@ -20,6 +20,9 @@ import { Loader2, SlidersHorizontal } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
+import { PasswordGenerator } from './password-generator';
+import { useStepUp } from './step-up-dialog';
+import { withStepUp } from '@/lib/ui/step-up';
 import { apiFetch } from '@/lib/ui/api';
 import { humanise } from '@/lib/ui/format';
 import { toDateTimeLocalInput, fromDateTimeLocalInput } from '@/lib/ui/format';
@@ -68,31 +71,59 @@ export function toPayload(f: DetailField, v: string | boolean): unknown {
   return s;
 }
 
+/**
+ * A credential's password, when the person may change it here: a rotation of
+ * the stored one (a new version, and a reason for the audit log), or the
+ * first one on a credential that has none.
+ */
+export type PasswordEdit = { mode: 'change'; secretId: string } | { mode: 'set' };
+
 export function DetailEditForm({
   nodeId,
   nodeType,
   fields,
   values,
+  password,
 }: {
   nodeId: string;
   nodeType: string;
   fields: readonly DetailField[];
   values: Record<string, unknown>;
+  password?: PasswordEdit | undefined;
 }) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(() => toDraft(fields, values));
+  const [newPassword, setNewPassword] = useState('');
+  const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const initial = toDraft(fields, values);
   const changed = fields.filter((f) => draft[f.key] !== initial[f.key]);
   const missing = changed.filter((f) => f.required && f.kind !== 'boolean' && String(draft[f.key]).trim() === '');
+  const changingPassword = password !== undefined && newPassword !== '';
+  // A rotation is the one credential event whose reason is read later.
+  const reasonShort = changingPassword && password.mode === 'change' && reason.trim().length < 10;
 
   function reset() {
     setDraft(toDraft(fields, values));
+    setNewPassword('');
+    setReason('');
     setError(null);
   }
+
+  /*
+   * The password goes through its own audited endpoint, never the detail
+   * PATCH: a rotation and a corrected username are different events, and
+   * the second must not carry the first under its name. Read at call time so
+   * the step-up retry sends what is in the boxes then.
+   */
+  const attemptPassword = () =>
+    password?.mode === 'change'
+      ? apiFetch(`/api/secrets/${password.secretId}/rotate`, { json: { value: newPassword, reason: reason.trim() } })
+      : apiFetch(`/api/assets/${nodeId}/password`, { method: 'PUT', json: { value: newPassword } });
 
   async function save() {
     if (missing.length > 0) {
@@ -102,14 +133,29 @@ export function DetailEditForm({
     setBusy(true);
     setError(null);
     try {
-      const payload = Object.fromEntries(changed.map((f) => [f.key, toPayload(f, draft[f.key]!)]));
-      const result = await apiFetch(`/api/assets/${nodeId}/detail`, { method: 'PATCH', json: payload });
-      if (!result.ok) {
-        setError(result.message);
-        return;
+      if (changed.length > 0) {
+        const payload = Object.fromEntries(changed.map((f) => [f.key, toPayload(f, draft[f.key]!)]));
+        const result = await apiFetch(`/api/assets/${nodeId}/detail`, { method: 'PATCH', json: payload });
+        if (!result.ok) {
+          setError(result.message);
+          return;
+        }
+      }
+      if (changingPassword) {
+        const result = await withStepUp(attemptPassword, stepUp.prompt);
+        if (!result.ok) {
+          setError(changed.length > 0
+            ? `The details were saved, but the password was not changed: ${result.message}`
+            : result.message);
+          router.refresh();
+          return;
+        }
       }
       setOpen(false);
+      reset();
       router.refresh();
+    } catch {
+      setError('The request did not reach the server.');
     } finally {
       setBusy(false);
     }
@@ -119,6 +165,7 @@ export function DetailEditForm({
 
   return (
     <>
+      {stepUp.dialog}
       <Button variant="secondary" size="sm" onClick={() => { reset(); setOpen(true); }}>
         <SlidersHorizontal className="size-3.5" aria-hidden />
         Edit details
@@ -133,12 +180,52 @@ export function DetailEditForm({
         <div className="space-y-4">
           <DetailFieldInputs fields={fields} draft={draft} set={set} />
 
+          {password && (
+            <fieldset className="space-y-3 rounded-md border border-border p-3">
+              <legend className="px-1 text-sm font-medium text-ink">
+                {password.mode === 'change' ? 'Change password' : 'Set a password'}
+              </legend>
+              <div className="space-y-1.5">
+                <Label htmlFor={`detail-password-${nodeId}`}>
+                  {password.mode === 'change' ? 'New password' : 'Password'}
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    id={`detail-password-${nodeId}`}
+                    type="password"
+                    value={newPassword}
+                    autoComplete="new-password"
+                    placeholder={password.mode === 'change' ? 'Leave empty to keep the current one' : 'None is stored yet'}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                  />
+                  <PasswordGenerator onUse={setNewPassword} />
+                </div>
+                {password.mode === 'change' && (
+                  <FieldHint>Stored as a new version. The previous one is superseded, not deleted.</FieldHint>
+                )}
+              </div>
+              {password.mode === 'change' && changingPassword && (
+                <div className="space-y-1.5">
+                  <Label htmlFor={`detail-password-reason-${nodeId}`}>Why</Label>
+                  <Input
+                    id={`detail-password-reason-${nodeId}`}
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    placeholder="e.g. rotated after the Miller offboarding"
+                    maxLength={500}
+                  />
+                  <FieldHint>At least ten characters. Recorded in the audit log with the change.</FieldHint>
+                </div>
+              )}
+            </fieldset>
+          )}
+
           {error && (
             <p role="alert" className="text-sm text-danger">{error}</p>
           )}
 
           <div className="flex gap-2 border-t border-border pt-3">
-            <Button type="button" variant="primary" onClick={() => void save()} disabled={busy || changed.length === 0}>
+            <Button type="button" variant="primary" onClick={() => void save()} disabled={busy || (changed.length === 0 && !changingPassword) || reasonShort}>
               {busy && <Loader2 className="animate-spin" aria-hidden />}
               Save
             </Button>

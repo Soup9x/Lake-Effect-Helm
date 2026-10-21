@@ -2,9 +2,11 @@
 
 import { useCallback, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Archive, ArchiveRestore, FileDown, Tag, X } from 'lucide-react';
+import { Archive, ArchiveRestore, CopyPlus, FileDown, Tag, X } from 'lucide-react';
 import { useDismissable } from '@/lib/ui/use-dismissable';
 import { apiFetch } from '@/lib/ui/api';
+import { withStepUp } from '@/lib/ui/step-up';
+import { useStepUp } from './step-up-dialog';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
 
@@ -28,12 +30,15 @@ export function BulkBar({
   ids,
   onClear,
   archived = false,
+  copyable = false,
 }: {
   target: BulkTarget;
   ids: string[];
   onClear: () => void;
   /** When the current view is the archive, the action is Restore rather than Archive. */
   archived?: boolean;
+  /** Offer "Make copies": entries, none of them a kind that cannot be copied. */
+  copyable?: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -96,6 +101,20 @@ export function BulkBar({
         </Button>
 
         <ExportPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />
+
+        {copyable && !archived && (
+          <CopyAction
+            ids={ids}
+            busy={busy !== null}
+            onDone={(count) => {
+              setError(null);
+              setDone(`Copied ${count} item${count === 1 ? '' : 's'}.`);
+              onClear();
+              startTransition(() => router.refresh());
+            }}
+            onError={(message) => { setDone(null); setError(message); }}
+          />
+        )}
 
         <button
           type="button"
@@ -262,5 +281,78 @@ function ExportPopover({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * "Make copies": every selected entry as "<name> (copy)", credentials with
+ * their passwords. Copying a password is reading it, so this is the one bulk
+ * action that can be refused for a step-up or a reason: the step-up is asked
+ * for once and the batch retried, and a reason, once given, applies to every
+ * password in it. The server copies all of them or none (POST /api/bulk/copy).
+ */
+function CopyAction({
+  ids,
+  busy,
+  onDone,
+  onError,
+}: {
+  ids: string[];
+  busy: boolean;
+  onDone: (count: number) => void;
+  onError: (message: string) => void;
+}) {
+  const stepUp = useStepUp();
+  const [working, setWorking] = useState(false);
+  const [needsReason, setNeedsReason] = useState(false);
+  const [reason, setReason] = useState('');
+
+  // Read at call time, so the step-up retry sends what is in the box then.
+  const attempt = () =>
+    apiFetch<{ affected: number }>('/api/bulk/copy', {
+      json: { ids, ...(reason.trim() ? { reason: reason.trim() } : {}) },
+    });
+
+  async function run() {
+    setWorking(true);
+    try {
+      const result = await withStepUp(attempt, stepUp.prompt);
+      if (!result.ok) {
+        if (result.code === 'reason_required') setNeedsReason(true);
+        onError(result.code === 'network' ? `${result.message} Nothing was copied.` : result.message);
+        return;
+      }
+      setNeedsReason(false);
+      setReason('');
+      onDone(result.value?.affected ?? ids.length);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <>
+      {stepUp.dialog}
+      {needsReason && (
+        <Input
+          aria-label="Reason for copying these passwords"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Reason, for the audit log"
+          maxLength={500}
+          className="h-8 w-56"
+        />
+      )}
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={busy || working || (needsReason && reason.trim().length < 10)}
+        onClick={() => void run()}
+        title="Copy each as “<name> (copy)”; credentials bring their passwords, recorded as copies"
+      >
+        <CopyPlus className="size-4" aria-hidden />
+        {needsReason ? 'Copy with reason' : 'Make copies'}
+      </Button>
+    </>
   );
 }

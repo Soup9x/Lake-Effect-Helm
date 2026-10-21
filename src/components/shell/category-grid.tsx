@@ -8,8 +8,13 @@
  * Without this wrapper the page itself would have to be a client component, and
  * every query it runs would have to move to an endpoint.
  *
- * WHAT IT DOES NOT DO: decrypt anything. The copy-username button copies a column
- * that was already on screen. The OTP badge is a LINK to the credential, not a
+ * SELECTION, on lists of entries only. A list that is all entries — devices,
+ * credentials, domains, the global lists — gets checkboxes and the bulk bar:
+ * archive or restore, tags, export, and Make copies. A list mixing kinds the
+ * bulk actions cannot treat alike (documents with folders, contacts, locations)
+ * does not, because a checkbox that does nothing is worse than none.
+ *
+ * WHAT IT DOES NOT DO: decrypt anything. The OTP badge is a LINK to the credential, not a
  * code — generating one requires secret:reveal and writes an audit row, and a
  * grid that minted codes for eighty rows on render would be eighty audited
  * reveals nobody asked for.
@@ -18,8 +23,11 @@ import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  ArchiveRestore, ExternalLink, EyeOff, KeyRound, Lock, Pencil, Trash2,
+  ArchiveRestore, CopyPlus, ExternalLink, EyeOff, KeyRound, Lock, Pencil, Trash2,
 } from 'lucide-react';
+import { BulkBar } from '../bulk-bar';
+import { CopyEntryDialog } from '../copy-entry-dialog';
+import { isCopyable } from '@/lib/assets/copyable';
 import { FilterToolbar } from './filter-toolbar';
 import { ColumnMenu, useHiddenColumns, type ColumnChoice } from './column-menu';
 import { DataTable, type Column, type GridRow } from './data-table';
@@ -54,6 +62,8 @@ export interface CategoryRecord {
   folder?: { itemCount: number; itemNoun: string; href: string } | undefined;
   /** What removing this row actually does. Omitted where it cannot be removed. */
   removeKind?: RemoveKind | undefined;
+  /** An entry's kind (asset_node.node_type), for Make a copy. Omitted for anything else. */
+  nodeType?: string | undefined;
   /**
    * Shown because "Include archived" is on. Its actions become Restore and,
    * for whoever holds asset:delete, Delete permanently.
@@ -135,6 +145,16 @@ export function CategoryGrid({
   const [permissioning, setPermissioning] = useState<CategoryRecord | null>(null);
   const [editingContact, setEditingContact] = useState<CategoryRecord | null>(null);
   const [editingSite, setEditingSite] = useState<CategoryRecord | null>(null);
+  const [copying, setCopying] = useState<CategoryRecord | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [clearSignal, setClearSignal] = useState(0);
+
+  // Checkboxes only where every row is an entry: see the header.
+  const selectable = canWrite && records.length > 0 && records.every((r) => r.removeKind === 'node');
+  const chosen = useMemo(() => {
+    const ids = new Set(selected);
+    return records.filter((r) => ids.has(r.id));
+  }, [records, selected]);
 
   /*
    * A row's actions. A folder's is Delete, only ever of an empty folder; an
@@ -173,6 +193,9 @@ export function CategoryGrid({
         : []),
       ...(canWrite && record.editSite
         ? [{ label: 'Edit', icon: Pencil, onClick: () => setEditingSite(record) }]
+        : []),
+      ...(canWrite && isCopyable(record.nodeType)
+        ? [{ label: 'Make a copy', icon: CopyPlus, onClick: () => setCopying(record) }]
         : []),
       // Only where there is a flag to edit: a contact has no visibility
       // of its own, so offering the control would be offering nothing.
@@ -334,12 +357,38 @@ export function CategoryGrid({
         columns={columns}
         hiddenColumns={hidden}
         query={query}
-        // Not selectable: nothing here acts on a selection. The checkboxes this
-        // used to render ticked and did nothing, because a category mixes
-        // records BulkBar cannot act on together (assets, documents, contacts,
-        // sites, folders). Bulk actions live on the clients list.
+        selectable={selectable}
+        onSelectionChange={setSelected}
+        clearSelectionSignal={clearSignal}
         emptyMessage={`No ${categoryLabel.toLowerCase()} recorded for this client yet.`}
       />
+
+      {selectable && chosen.length > 0 && (
+        <BulkBar
+          target="node"
+          ids={chosen.map((r) => r.id)}
+          // Restore when everything ticked is archived; Archive otherwise.
+          archived={chosen.every((r) => r.archived)}
+          copyable={chosen.every((r) => isCopyable(r.nodeType))}
+          // Clears both halves: this copy, which hides the bar, and the
+          // table's own set, which owns the checkboxes.
+          onClear={() => {
+            setSelected([]);
+            setClearSignal((n) => n + 1);
+          }}
+        />
+      )}
+
+      {copying?.nodeType && (
+        <CopyEntryDialog
+          key={copying.id}
+          nodeId={copying.id}
+          name={copying.name}
+          nodeType={copying.nodeType}
+          open
+          onOpenChange={(next) => { if (!next) setCopying(null); }}
+        />
+      )}
 
       {removing?.record.removeKind && (
         <RowRemoveDialog

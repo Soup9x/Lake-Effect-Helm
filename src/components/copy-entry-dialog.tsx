@@ -11,22 +11,27 @@ import { withStepUp } from '@/lib/ui/step-up';
 import { apiFetch } from '@/lib/ui/api';
 
 /**
- * "Make a copy": a new entry from this one, under a name you choose, opened
- * straight away so the parts that differ can be changed.
+ * "Make a copy": a new entry from an existing one, under a name you choose,
+ * opened straight away so the parts that differ can be changed. Opened from a
+ * list row's actions; a whole selection is copied from the bulk bar instead.
  *
  * What comes across is the copy route's business. What this dialog has to say
  * is what a credential's copy means: its password is read to be copied, which
  * is a reveal like any other, so a step-up or a reason is asked for here when
  * the password requires one, and the audit log records it as a copy.
  */
-export function CopyEntryButton({
+export function CopyEntryDialog({
   nodeId,
   name,
   nodeType,
+  open,
+  onOpenChange,
 }: {
   nodeId: string;
   name: string;
   nodeType: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
   const router = useRouter();
   const stepUp = useStepUp();
@@ -35,7 +40,6 @@ export function CopyEntryButton({
   // A domain is called by its domain name, which must be unique, so there is
   // no sensible default to offer; anything else gets "(copy)".
   const initial = isDomain ? '' : `${name} (copy)`;
-  const [open, setOpen] = useState(false);
   const [copyName, setCopyName] = useState(initial);
   const [reason, setReason] = useState('');
   // Shown once the password has said it wants one, as Reveal does.
@@ -44,7 +48,7 @@ export function CopyEntryButton({
   const [error, setError] = useState<string | null>(null);
 
   const reset = (next: boolean) => {
-    setOpen(next);
+    onOpenChange(next);
     if (!next) {
       setCopyName(initial);
       setReason('');
@@ -70,7 +74,7 @@ export function CopyEntryButton({
         setError(result.message);
         return;
       }
-      setOpen(false);
+      onOpenChange(false);
       router.push(`/assets/${result.value!.asset.id}`);
     } catch {
       setError('The request did not reach the server.');
@@ -82,10 +86,6 @@ export function CopyEntryButton({
   return (
     <>
       {stepUp.dialog}
-      <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
-        <CopyPlus aria-hidden />
-        Make a copy
-      </Button>
       <Modal
         open={open}
         onOpenChange={reset}

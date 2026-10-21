@@ -1668,6 +1668,19 @@ describe('how each kind of entry lays out its cards', () => {
     const fields = (form!.fields as { key: string }[]).map((f) => f.key);
     expect(fields).toEqual(['username', 'url', 'credential_type']);
     expect(form!.values).toMatchObject({ username: 'rendered-admin', url: 'https://acme.test' });
+    // No password is stored on this one, so Edit details offers to set one.
+    expect(form!.password).toEqual({ mode: 'set' });
+  });
+
+  it('marks every row of an entry list with its kind, for Make a copy and selection', async () => {
+    const page = await (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({
+      params: p({ organizationId: IDS.orgAcme, category: 'passwords' }),
+      searchParams: p({}),
+    });
+    const grid = propsOf(page, 'CategoryGrid');
+    const records = grid!.records as { removeKind?: string; nodeType?: string }[];
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.every((r) => r.removeKind === 'node' && r.nodeType === 'credential')).toBe(true);
   });
 
   it('offers a copy of the username, and a one-time code added after the entry was made', async () => {
@@ -1676,7 +1689,7 @@ describe('how each kind of entry lays out its cards', () => {
     expect(propsOf(page, 'TotpSeedControl')).toEqual({ nodeId: credentialId, hasTotp: false });
   });
 
-  it('lets the password be changed from its own row', async () => {
+  it('lets the password be changed from Edit details, not from its row', async () => {
     // A credential that HAS a password, made the real way: the shared one
     // above has none, and a Password row with nothing stored offers nothing.
     const h = buildHarness();
@@ -1697,7 +1710,8 @@ describe('how each kind of entry lays out its cards', () => {
     const page = await assetPage(withPassword);
     const reveal = propsOf(page, 'RevealButton');
     expect(reveal, 'the Password row').toBeTruthy();
-    expect(propsOf(reveal!.extraAction, 'ChangePasswordButton')).toMatchObject({ secretId: reveal!.secretId });
+    expect(propsOf(page, 'DetailEditForm')!.password).toEqual({ mode: 'change', secretId: reveal!.secretId });
+    expect(propsOf(page, 'ChangePasswordButton')).toBeNull();
   });
 
   it('lays a password entry out as login rows, with no raw secret id among them', async () => {
