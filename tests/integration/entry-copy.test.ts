@@ -3,9 +3,11 @@
  * location, and a domain's details at creation (1020), through the real routes.
  *
  *   COPY          the shared fields and the kind's row come across under a new
- *                 name; a password, a seed and an external check's findings do
- *                 not; a domain takes the new name as its domain name, and a
- *                 name already taken is a 409; procedures are refused.
+ *                 name; a credential's password comes as its own new secret,
+ *                 read as an audited copy that asks for any reason it needs;
+ *                 a seed and an external check's findings do not; a domain
+ *                 takes the new name as its domain name, and a name already
+ *                 taken is a 409; procedures are refused.
  *   SET PASSWORD  only on a credential with none; a second is a 409.
  *   LOCATIONS     a contact goes at one of its own client's locations only.
  *   CREATE        a domain's details are stored with it, in one transaction.
@@ -90,36 +92,86 @@ describe('copying an entry', () => {
     });
   });
 
-  it('copies a credential without its password, which can then be set — once', async () => {
+  const viewAs = async (secretId: string) => {
+    const revealed = await h.secrets.reveal(
+      { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' }, secretId, { purpose: 'view', reason: 'checking the copy in a test' });
+    try { return revealed.value.expose(); } finally { revealed.value.dispose(); }
+  };
+
+  it('copies a credential with its password, as a new secret under the same rules', async () => {
     currentUser = ADMIN;
     const made = await createSecret(req('POST', {
       organizationId: IDS.orgAcme, label: 'Acme root', value: 'original-password-long-enough',
-      credentialType: 'root', username: 'root', url: 'ssh://acme-helm01',
+      credentialType: 'root', username: 'root', url: 'ssh://acme-helm01', sensitivity: 'elevated',
     }));
-    expect(made.status).toBe(200);
-    const { credentialId } = await json<{ credentialId: string }>(made);
+    expect(made.status, await made.clone().text()).toBe(200);
+    const { credentialId, secretId: originalSecret } = await json<{ credentialId: string; secretId: string }>(made);
 
     const copied = await copy(credentialId, 'Acme root (copy)');
-    expect(copied.status).toBe(200);
-    const { asset } = await json<{ asset: { id: string } }>(copied);
-    const [row] = await su((sql) => sql<{ username: string; url: string; secret_id: string | null; totp_secret_id: string | null }[]>`
-      SELECT username, url, secret_id, totp_secret_id FROM credential WHERE id = ${asset.id}::uuid`);
-    expect(row).toEqual({ username: 'root', url: 'ssh://acme-helm01', secret_id: null, totp_secret_id: null });
+    expect(copied.status, await copied.clone().text()).toBe(200);
+    const { asset, passwordCopied } = await json<{ asset: { id: string }; passwordCopied: boolean }>(copied);
+    expect(passwordCopied).toBe(true);
 
-    const set = await setPassword(req('PUT', { value: 'the-copy-has-its-own' }), nodeParams(asset.id));
-    expect(set.status, await set.clone().text()).toBe(200);
-    const { secretId } = await json<{ secretId: string }>(set);
-    const revealed = await h.secrets.reveal(
-      { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' }, secretId, { purpose: 'view' });
-    try {
-      expect(revealed.value.expose()).toBe('the-copy-has-its-own');
-    } finally {
-      revealed.value.dispose();
-    }
+    const [row] = await su((sql) => sql<{ username: string; url: string; secret_id: string; totp_secret_id: string | null; sensitivity: string }[]>`
+      SELECT c.username, c.url, c.secret_id, c.totp_secret_id, s.sensitivity::text AS sensitivity
+      FROM credential c JOIN secret s ON s.id = c.secret_id WHERE c.id = ${asset.id}::uuid`);
+    expect(row).toMatchObject({ username: 'root', url: 'ssh://acme-helm01', totp_secret_id: null, sensitivity: 'elevated' });
+    // Its own secret, not a second pointer at the original's.
+    expect(row!.secret_id).not.toBe(originalSecret);
+    expect(await viewAs(row!.secret_id)).toBe('original-password-long-enough');
 
+    // Reading the original to copy it is on the record, as a copy.
+    const [audit] = await su((sql) => sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM audit_log
+      WHERE action = 'secret.revealed' AND entity_id = ${originalSecret}::uuid AND metadata->>'purpose' = 'copy'`);
+    expect(audit!.n).toBe(1);
+
+    // And Set password knows it has one.
     const again = await setPassword(req('PUT', { value: 'a-second-one' }), nodeParams(asset.id));
     expect(again.status).toBe(409);
     expect(await message(again)).toMatch(/already has a password/);
+  });
+
+  it('asks for the reason a password requires, and makes nothing until it is given', async () => {
+    currentUser = ADMIN;
+    const made = await createSecret(req('POST', {
+      organizationId: IDS.orgAcme, label: 'Acme domain admin', value: 'reasoned-password-long-enough',
+      credentialType: 'domain_admin', requiresReason: true,
+    }));
+    expect(made.status, await made.clone().text()).toBe(200);
+    const { credentialId } = await json<{ credentialId: string }>(made);
+
+    const refused = await copy(credentialId, 'Acme domain admin (copy)');
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('reason_required');
+    const [none] = await su((sql) => sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM asset_node WHERE name = 'Acme domain admin (copy)'`);
+    expect(none!.n).toBe(0);
+
+    const given = await copyEntry(
+      req('POST', { name: 'Acme domain admin (copy)', reason: 'INC-42 second admin for the migration' }),
+      nodeParams(credentialId),
+    );
+    expect(given.status, await given.clone().text()).toBe(200);
+  });
+
+  it('sets a password on a credential that has none — once', async () => {
+    currentUser = ADMIN;
+    const [bare] = await su((sql) => sql<{ id: string }[]>`
+      WITH n AS (
+        INSERT INTO asset_node (tenant_id, organization_id, node_type, name)
+        VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'credential', 'Acme printer login')
+        RETURNING id, tenant_id
+      )
+      INSERT INTO credential (id, tenant_id) SELECT id, tenant_id FROM n RETURNING id`);
+
+    const set = await setPassword(req('PUT', { value: 'the-printer-password' }), nodeParams(bare!.id));
+    expect(set.status, await set.clone().text()).toBe(200);
+    const { secretId } = await json<{ secretId: string }>(set);
+    expect(await viewAs(secretId)).toBe('the-printer-password');
+
+    const again = await setPassword(req('PUT', { value: 'a-second-one' }), nodeParams(bare!.id));
+    expect(again.status).toBe(409);
   });
 
   it('gives a copied domain its new name, refuses one already taken, and leaves the check’s findings behind', async () => {
