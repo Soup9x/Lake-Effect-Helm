@@ -100,6 +100,8 @@ let siteId = '';
 let diagramId = '';
 /** Set in beforeAll: a password entry with no secret, for its own page layout. */
 let credentialId = '';
+/** Set in beforeAll: an entry in the admin's own vault (1030), for its page. */
+let vaultEntryId = '';
 
 beforeAll(async () => {
   resetDatabase();
@@ -206,6 +208,14 @@ beforeAll(async () => {
       VALUES (${credential!.id}::uuid, ${IDS.tenant1}::uuid, 'rendered-admin', 'https://acme.test')
     `;
     credentialId = credential!.id;
+
+    // No password, so no data key is needed to make it.
+    const [vaultEntry] = await tx<{ id: string }[]>`
+      INSERT INTO personal_credential (tenant_id, owner_user_id, name, username, url, notes)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.admin1}::uuid, 'My bank', 'me@example.test', 'https://bank.test', 'Branch 4')
+      RETURNING id
+    `;
+    vaultEntryId = vaultEntry!.id;
 
     /*
      * A checklist run, for the same reason: the run page takes one in its path.
@@ -577,6 +587,18 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     // a whole scope's tab with it.
     name: 'personal',
     load: async () => (await import('../../src/app/(app)/personal/page')).default(),
+  },
+  {
+    // The personal vault opened from its card: the list, and one entry.
+    name: 'my passwords',
+    load: async () => (await import('../../src/app/(app)/personal/passwords/page')).default(),
+  },
+  {
+    name: 'one of my passwords',
+    load: async () =>
+      (await import('../../src/app/(app)/personal/passwords/[entryId]/page')).default({
+        params: p({ entryId: vaultEntryId }),
+      }),
   },
   {
     name: 'global',
@@ -1619,6 +1641,13 @@ describe('a malformed id in the path', () => {
           params: p({ runId: NOT_A_UUID }),
         }),
     },
+    {
+      name: 'a personal password',
+      load: async () =>
+        (await import('../../src/app/(app)/personal/passwords/[entryId]/page')).default({
+          params: p({ entryId: NOT_A_UUID }),
+        }),
+    },
   ];
 
   for (const c of cases) {
@@ -1732,5 +1761,60 @@ describe('how each kind of entry lays out its cards', () => {
 
   it('shows no Credentials card on a configuration that holds no secret', async () => {
     expect(cardTitles(await assetPage(IDS.globexServer))).not.toContain('Credentials');
+  });
+});
+
+describe('the personal vault, opened from its card', () => {
+  const vaultPage = async (entryId: string) =>
+    (await import('../../src/app/(app)/personal/passwords/[entryId]/page')).default({ params: p({ entryId }) });
+
+  it('is a card on the Personal page that opens the list, not the list itself', async () => {
+    const page = await (await import('../../src/app/(app)/personal/page')).default();
+    expect(cardTitles(page).some((t) => t.startsWith('My passwords'))).toBe(true);
+    expect(propsOf(page, 'AccountLink')).toBeTruthy();
+    const links: unknown[] = [];
+    const walk = (value: unknown): void => {
+      if (Array.isArray(value)) { value.forEach(walk); return; }
+      if (!value || typeof value !== 'object') return;
+      const element = value as { type?: unknown; props?: Record<string, unknown> };
+      if (typeof element.type === 'function' && element.type.name === 'AccountLink') links.push(element.props?.href);
+      if (element.props) Object.values(element.props).forEach(walk);
+    };
+    walk(page);
+    expect(links).toContain('/personal/passwords');
+    expect(propsOf(page, 'VaultLoginRows')).toBeNull();
+  });
+
+  it('lists the entries in the credentials grid, each opening its own page, with no entry actions', async () => {
+    const page = await (await import('../../src/app/(app)/personal/passwords/page')).default();
+    const records = propsOf(page, 'CategoryGrid')!.records as {
+      id: string; href: string; secondary: string; removeKind?: string; nodeType?: string; permissions?: unknown;
+    }[];
+    expect(records).toContainEqual(expect.objectContaining({
+      id: vaultEntryId, href: `/personal/passwords/${vaultEntryId}`, secondary: 'me@example.test',
+    }));
+    // Not an asset_node: no bulk bar, no Make a copy, no permissions dialog.
+    expect(records.every((r) => !r.removeKind && !r.nodeType && !r.permissions)).toBe(true);
+  });
+
+  it('lays an entry out as a credential: notes, then login rows under Edit details', async () => {
+    const page = await vaultPage(vaultEntryId);
+    expect(cardTitles(page)).toContain('Credentials');
+    expect(propsOf(page, 'NotesCard')).toMatchObject({
+      endpoint: `/api/personal/vault/${vaultEntryId}`, notes: 'Branch 4', canEdit: true,
+    });
+    expect(propsOf(page, 'EditVaultEntryButton')).toBeTruthy();
+    expect(propsOf(page, 'VaultLoginRows')).toBeTruthy();
+  });
+
+  it("is a 404 for somebody else's entry, an administrator included", async () => {
+    const [theirs] = await withTenant(actor(IDS.tenant1, IDS.tech1), (tx) => tx<{ id: string }[]>`
+      INSERT INTO personal_credential (tenant_id, owner_user_id, name)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.tech1}::uuid, 'Not yours')
+      RETURNING id
+    `);
+    await expect(vaultPage(theirs!.id)).rejects.toSatisfy(
+      (error: unknown) => /NEXT_HTTP_ERROR_FALLBACK;404/.test(String((error as { digest?: string }).digest)),
+    );
   });
 });

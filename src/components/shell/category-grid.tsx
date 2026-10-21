@@ -116,6 +116,9 @@ export function CategoryGrid({
   columnScope,
   extraColumns = [],
   canDelete = false,
+  emptyMessage,
+  omitColumns,
+  archivable = true,
 }: {
   records: readonly CategoryRecord[];
   total: number;
@@ -129,6 +132,12 @@ export function CategoryGrid({
   extraColumns?: readonly ExtraColumn[] | undefined;
   /** asset:delete — offers Delete permanently on archived rows. */
   canDelete?: boolean | undefined;
+  /** For a list that is not a client's. */
+  emptyMessage?: string | undefined;
+  /** Columns a list has nothing for, left out rather than shown as dashes. */
+  omitColumns?: readonly ('type' | 'extra' | 'updatedBy')[] | undefined;
+  /** False where the rows have no archive, so Include archived would do nothing. */
+  archivable?: boolean | undefined;
 }) {
   const params = useSearchParams();
   const query = params?.get('q') ?? '';
@@ -232,7 +241,7 @@ export function CategoryGrid({
   );
 
   const columns = useMemo<Column<Row>[]>(
-    () => [
+    () => ([
       {
         key: 'name',
         header: 'Name',
@@ -326,8 +335,8 @@ export function CategoryGrid({
         sortBy: (r) => r.record.updatedBy?.toLowerCase() ?? null,
         cell: (r) => <span className="text-ink-faint">{r.record.updatedBy || '—'}</span>,
       },
-    ],
-    [labels, extraColumns],
+    ] as Column<Row>[]).filter((c) => !(omitColumns as readonly string[] | undefined)?.includes(c.key)),
+    [labels, extraColumns, omitColumns],
   );
 
   // The same matcher DataTable filters with, so the count agrees with the rows.
@@ -348,6 +357,7 @@ export function CategoryGrid({
       <FilterToolbar
         shown={shown}
         total={total}
+        showArchivedToggle={archivable}
         columnMenu={
           <ColumnMenu columns={choices} hidden={hidden} onToggle={toggle} onReset={reset} />
         }
@@ -360,7 +370,7 @@ export function CategoryGrid({
         selectable={selectable}
         onSelectionChange={setSelected}
         clearSelectionSignal={clearSignal}
-        emptyMessage={`No ${categoryLabel.toLowerCase()} recorded for this client yet.`}
+        emptyMessage={emptyMessage ?? `No ${categoryLabel.toLowerCase()} recorded for this client yet.`}
       />
 
       {selectable && chosen.length > 0 && (

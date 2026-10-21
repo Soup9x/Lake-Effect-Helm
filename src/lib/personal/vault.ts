@@ -74,6 +74,12 @@ const view = (r: Row): VaultEntry => ({
   updatedAt: r.updated_at.toISOString(),
 });
 
+/** How many entries this person has, for the Personal page's card. */
+export async function countVault(tx: HelmTx): Promise<number> {
+  const [row] = await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM personal_credential`;
+  return row?.n ?? 0;
+}
+
 export async function listVault(tx: HelmTx): Promise<VaultEntry[]> {
   const rows = await tx<Row[]>`
     SELECT id, name, username, url, notes, has_password, has_totp, updated_at

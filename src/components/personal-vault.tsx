@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronDown, ChevronRight, ExternalLink, KeyRound, Loader2, Lock, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ExternalLink, KeyRound, Loader2, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
@@ -15,137 +15,99 @@ import { apiFetch } from '@/lib/ui/api';
 import type { VaultEntry } from '@/lib/personal/vault';
 
 /**
- * My passwords: the signed-in person's own vault (1030).
+ * My passwords: the signed-in person's own vault (1030), laid out the way a
+ * client's credentials are — a list at /personal/passwords, and a page per
+ * entry with a Notes card and a Credentials card of login rows.
  *
- * Each entry opens into the same rows a client's credential has — username,
+ * Each entry has the same rows a client's credential has — username,
  * password, one-time code, website — with the same copy, show and open
  * controls, reading through the vault's own routes. Nothing here is a
  * client's, so nothing here appears in a client list, search or an export.
  *
- * WHAT THE PAGE PROMISES, and only that: nobody else can open these, an
+ * WHAT THE PAGES PROMISE, and only that: nobody else can open these, an
  * administrator included. The server holds the key, as it does for every
- * secret in Helm, so the card says so rather than calling it zero-knowledge.
+ * secret in Helm, so the list says so rather than calling it zero-knowledge.
  */
-export function PersonalVault({ entries }: { entries: VaultEntry[] }) {
-  const [open, setOpen] = useState<string | null>(null);
-  const [editing, setEditing] = useState<VaultEntry | 'new' | null>(null);
 
+/** + Add a password, above the list. */
+export function AddVaultEntryButton() {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <p className="max-w-2xl text-sm text-ink-muted">
-          <Lock className="mr-1 inline size-3.5 text-ink-faint" aria-hidden />
-          Only you can see or open these, an administrator included. They belong to no client, never
-          appear in search or exports, and are deleted if you leave. Encrypted like every Helm secret; each
-          time one is opened it is logged, without its name.
-        </p>
-        <Button variant="secondary" size="sm" onClick={() => setEditing('new')}>
-          <Plus aria-hidden />
-          Add a password
-        </Button>
-      </div>
-
-      {entries.length === 0 ? (
-        <p className="text-sm text-ink-faint">Nothing stored yet.</p>
-      ) : (
-        <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
-          {entries.map((entry) => {
-            const expanded = open === entry.id;
-            return (
-              <li key={entry.id}>
-                <div className="flex items-center gap-2 px-3 py-2">
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                    onClick={() => setOpen(expanded ? null : entry.id)}
-                    aria-expanded={expanded}
-                  >
-                    {expanded
-                      ? <ChevronDown className="size-4 shrink-0 text-ink-faint" aria-hidden />
-                      : <ChevronRight className="size-4 shrink-0 text-ink-faint" aria-hidden />}
-                    <span className="truncate text-sm font-medium text-ink">{entry.name}</span>
-                    {entry.username && <span className="truncate text-xs text-ink-faint">{entry.username}</span>}
-                  </button>
-                  <button type="button" className={iconActionClass} title="Edit" aria-label={`Edit ${entry.name}`}
-                          onClick={() => setEditing(entry)}>
-                    <Pencil aria-hidden />
-                  </button>
-                </div>
-                {expanded && <EntryRows entry={entry} />}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      {editing && (
-        <EntryDialog
-          key={editing === 'new' ? 'new' : editing.id}
-          entry={editing === 'new' ? null : editing}
-          onClose={() => setEditing(null)}
-        />
-      )}
-    </div>
+    <>
+      <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
+        <Plus aria-hidden />
+        Add a password
+      </Button>
+      {open && <EntryDialog entry={null} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 
-function EntryRows({ entry }: { entry: VaultEntry }) {
+/** Edit details, on the entry's Credentials card, as on a client's credential. */
+export function EditVaultEntryButton({ entry }: { entry: VaultEntry }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
+        <SlidersHorizontal className="size-3.5" aria-hidden />
+        Edit details
+      </Button>
+      {open && <EntryDialog key={entry.id} entry={entry} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/** The login rows: what the entry is opened to copy. Notes have their own card. */
+export function VaultLoginRows({ entry }: { entry: VaultEntry }) {
   const base = `/api/personal/vault/${entry.id}`;
   const website = entry.url && /^https?:\/\//i.test(entry.url) ? entry.url : null;
   return (
-    <div className="px-3 pb-3">
-      <FieldList>
-        {entry.username && (
-          <FieldRow label="Username">
-            <FieldLine actions={<CopyValueButton value={entry.username} label="Copy username" size="md" />}>
-              {entry.username}
-            </FieldLine>
-          </FieldRow>
-        )}
-        <FieldRow label="Password">
-          {entry.hasPassword ? (
-            <RevealButton
-              secretId={entry.id}
-              label={entry.name}
-              requiresReason={false}
-              requiresStepUp={false}
-              endpoints={{ reveal: `${base}/reveal` }}
-            />
-          ) : (
-            <FieldLine><span className="text-ink-faint">No password stored</span></FieldLine>
-          )}
+    <FieldList>
+      {entry.username && (
+        <FieldRow label="Username">
+          <FieldLine actions={<CopyValueButton value={entry.username} label="Copy username" size="md" />}>
+            {entry.username}
+          </FieldLine>
         </FieldRow>
-        {entry.hasTotp && (
-          <FieldRow label="Verification code (TOTP)">
-            <TotpPanel nodeId={entry.id} canReveal codePath={`${base}/code`} />
-          </FieldRow>
+      )}
+      <FieldRow label="Password">
+        {entry.hasPassword ? (
+          <RevealButton
+            secretId={entry.id}
+            label={entry.name}
+            requiresReason={false}
+            requiresStepUp={false}
+            endpoints={{ reveal: `${base}/reveal` }}
+          />
+        ) : (
+          <FieldLine><span className="text-ink-faint">No password stored — set one in Edit details</span></FieldLine>
         )}
-        {entry.url && (
-          <FieldRow label="Website">
-            <FieldLine
-              actions={
-                <>
-                  {website && (
-                    <a href={website} target="_blank" rel="noopener noreferrer" className={iconActionClass}
-                       title="Open in a new tab" aria-label="Open website">
-                      <ExternalLink aria-hidden />
-                    </a>
-                  )}
-                  <CopyValueButton value={entry.url} label="Copy website" size="md" />
-                </>
-              }
-            >
-              {entry.url}
-            </FieldLine>
-          </FieldRow>
-        )}
-        {entry.notes && (
-          <FieldRow label="Notes">
-            <p className="whitespace-pre-wrap text-sm text-ink">{entry.notes}</p>
-          </FieldRow>
-        )}
-      </FieldList>
-    </div>
+      </FieldRow>
+      {entry.hasTotp && (
+        <FieldRow label="Verification code (TOTP)">
+          <TotpPanel nodeId={entry.id} canReveal codePath={`${base}/code`} />
+        </FieldRow>
+      )}
+      {entry.url && (
+        <FieldRow label="Website">
+          <FieldLine
+            actions={
+              <>
+                {website && (
+                  <a href={website} target="_blank" rel="noopener noreferrer" className={iconActionClass}
+                     title="Open in a new tab" aria-label="Open website">
+                    <ExternalLink aria-hidden />
+                  </a>
+                )}
+                <CopyValueButton value={entry.url} label="Copy website" size="md" />
+              </>
+            }
+          >
+            {entry.url}
+          </FieldLine>
+        </FieldRow>
+      )}
+    </FieldList>
   );
 }
 
@@ -177,19 +139,28 @@ function EntryDialog({ entry, onClose }: { entry: VaultEntry | null; onClose: ()
         name: name.trim(),
         username: username.trim() || null,
         url: url.trim() || null,
-        notes: notes.trim() || null,
+        ...(entry ? {} : { notes: notes.trim() || null }),
         ...(removePassword ? { password: null } : password ? { password } : {}),
         ...(removeTotp ? { totp: null } : totp.trim() ? { totp: totp.trim() } : {}),
       };
-      const result = entry
-        ? await apiFetch(`/api/personal/vault/${entry.id}`, { method: 'PATCH', json: body })
-        : await apiFetch('/api/personal/vault', { json: body });
+      if (entry) {
+        const result = await apiFetch(`/api/personal/vault/${entry.id}`, { method: 'PATCH', json: body });
+        if (!result.ok) {
+          setError(result.message);
+          return;
+        }
+        onClose();
+        router.refresh();
+        return;
+      }
+      const result = await apiFetch<{ entry: { id: string } }>('/api/personal/vault', { json: body });
       if (!result.ok) {
         setError(result.message);
         return;
       }
       onClose();
-      router.refresh();
+      // A new entry opens on its own page, as a new client credential does.
+      router.push(`/personal/passwords/${result.value.entry.id}`);
     } catch {
       setError('The request did not reach the server.');
     } finally {
@@ -208,6 +179,8 @@ function EntryDialog({ entry, onClose }: { entry: VaultEntry | null; onClose: ()
         return;
       }
       onClose();
+      // Its page is gone with it: back to the list.
+      router.push('/personal/passwords');
       router.refresh();
     } finally {
       setBusy(false);
@@ -271,10 +244,13 @@ function EntryDialog({ entry, onClose }: { entry: VaultEntry | null; onClose: ()
               </label>
             )}
           </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="vault-notes">Notes</Label>
-            <Textarea id="vault-notes" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={4000} />
-          </div>
+          {/* Once the entry exists its notes are edited on their own card. */}
+          {!entry && (
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="vault-notes">Notes</Label>
+              <Textarea id="vault-notes" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={4000} />
+            </div>
+          )}
         </div>
 
         {error && <p role="alert" className="text-sm text-danger">{error}</p>}
