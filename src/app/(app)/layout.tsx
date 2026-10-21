@@ -49,7 +49,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
    * The preferences FORM reads its own copy on the account page, because that
    * page needs the name halves too.
    */
-  const { preferences, unreadNotifications, idleMinutes } = await readShellState(identity);
+  const { preferences, unreadNotifications, idleMinutes, avatarUrl } = await readShellState(identity);
 
   /*
    * Pages that are NOT inside an organization get the content column straight
@@ -59,7 +59,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   return (
     <>
       <ThemeSync accountTheme={preferences.theme} />
-      <AppChrome identity={identity} unreadNotifications={unreadNotifications} idleMinutes={idleMinutes}>
+      <AppChrome identity={identity} unreadNotifications={unreadNotifications} idleMinutes={idleMinutes} avatarUrl={avatarUrl}>
         {children}
       </AppChrome>
     </>

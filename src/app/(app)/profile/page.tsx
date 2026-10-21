@@ -9,6 +9,8 @@ import { totpStatus } from '@/lib/auth/local-totp';
 import { db } from '@/lib/db/client';
 import { ProfileForm } from '@/components/profile-form';
 import { readMyPreferences } from '@/lib/ui/account-queries';
+import { AvatarControl } from '@/components/avatar-control';
+import { avatarUrls } from '@/lib/avatars/service';
 
 interface CredentialRow {
   must_change: boolean;
@@ -28,8 +30,8 @@ interface CredentialRow {
 export default async function ProfilePage() {
   const identity = await getServerIdentity();
 
-  const { credential, timezones } = await withTenant(actorOf(identity), async (tx) => {
-    const [credentialRows, timezoneRows] = await Promise.all([
+  const { credential, timezones, avatarUrl } = await withTenant(actorOf(identity), async (tx) => {
+    const [credentialRows, timezoneRows, avatars] = await Promise.all([
       // The view carries no hash — helm_app holds column grants that exclude
       // it. Its only job is to answer "do you have a local password, and did
       // somebody else choose it".
@@ -46,8 +48,13 @@ export default async function ProfilePage() {
         WHERE name LIKE '%/%' AND name NOT LIKE 'posix/%' AND name NOT LIKE 'right/%'
         ORDER BY name
       `,
+      avatarUrls(tx, [identity.actorId]),
     ]);
-    return { credential: credentialRows[0] ?? null, timezones: timezoneRows.map((r) => r.name) };
+    return {
+      credential: credentialRows[0] ?? null,
+      timezones: timezoneRows.map((r) => r.name),
+      avatarUrl: avatars.get(identity.actorId) ?? null,
+    };
   });
 
   const preferences = await readMyPreferences(identity);
@@ -63,7 +70,7 @@ export default async function ProfilePage() {
     <>
       <PageHeader
         title="Profile & password"
-        description="Your name, time zone and theme, your local password and two-step sign-in."
+        description="Your picture, name, time zone and theme, your local password and two-step sign-in."
       />
       <PageBody>
         <ChangePasswordCard
@@ -85,6 +92,9 @@ export default async function ProfilePage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
+            {/* Your picture (1040), beside your name everywhere it is shown. */}
+            <AvatarControl name={identity.name} src={avatarUrl} />
+
             {/*
               Read here rather than taken from `identity`: identity.name comes
               from the session and falls back to the email address, and this

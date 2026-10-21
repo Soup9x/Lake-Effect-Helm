@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { apiFetch, type ApiRequest } from '@/lib/ui/api';
 import { SignInDialog, lastEmailLine, type MemberSignIn } from './sign-in-dialog';
 import { PasswordGenerator } from './password-generator';
+import { UserAvatar } from './user-avatar';
 
 /**
  * Who has access to this tenant.
@@ -50,6 +51,8 @@ interface Member {
   isSelf: boolean;
   /** Has an authenticator for local sign-in (0960). */
   hasTotp: boolean;
+  /** Their profile picture (1040), or null for initials. */
+  avatarUrl: string | null;
   /** Local password or not, and the last account email (1000). */
   signIn: MemberSignIn;
 }
@@ -176,6 +179,9 @@ export function PeopleManager({
               {members.map((m) => (
                 <TableRow key={m.userId}>
                   <TableCell>
+                    <div className="flex items-center gap-2.5">
+                      <UserAvatar name={m.name ?? m.email} src={m.avatarUrl} size="sm" />
+                      <div className="min-w-0">
                     <div className="text-ink">{m.name ?? m.email}</div>
                     {m.name && <div className="text-xs text-ink-faint">{m.email}</div>}
                     {(() => {
@@ -187,6 +193,8 @@ export function PeopleManager({
                         </div>
                       );
                     })()}
+                      </div>
+                    </div>
                   </TableCell>
                   <TableCell>
                     {canWrite && m.editable ? (

@@ -189,7 +189,7 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
         <p className="mt-1 text-sm text-ink-muted">Sign in to continue.</p>
       </div>
 
-      {ssoConfigured ? (
+      {ssoConfigured && (
         <>
           <div className="mt-6 space-y-2">
             {entraConfigured && (
@@ -238,11 +238,6 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
             <span className="h-px flex-1 bg-border" />
           </div>
         </>
-      ) : (
-        <div className="mt-6 rounded-md border border-border bg-surface-raised p-3 text-xs text-ink-muted">
-          No single sign-on provider is configured on this deployment. Local
-          passwords are the only way in.
-        </div>
       )}
 
       <form onSubmit={submit} className="mt-4 space-y-3">

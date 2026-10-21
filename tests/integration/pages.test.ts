@@ -1818,3 +1818,22 @@ describe('the personal vault, opened from its card', () => {
     );
   });
 });
+
+describe('profile pictures (1040)', () => {
+  it('offers the picture control on the Profile page, with initials until one is set', async () => {
+    const page = await (await import('../../src/app/(app)/profile/page')).default();
+    expect(propsOf(page, 'AvatarControl')).toMatchObject({ src: null });
+  });
+
+  it('hands every person on the People page their picture, or null', async () => {
+    const page = await (await import('../../src/app/(app)/people/page')).default();
+    const members = propsOf(page, 'PeopleManager')!.members as { avatarUrl: string | null }[];
+    expect(members.length).toBeGreaterThan(0);
+    expect(members.every((m) => m.avatarUrl === null || m.avatarUrl.startsWith('/api/users/'))).toBe(true);
+  });
+
+  it('gives the account menu the signed-in person\'s picture, through the layout', async () => {
+    const layout = await (await import('../../src/app/(app)/layout')).default({ children: null });
+    expect(propsOf(layout, 'AppChrome')).toHaveProperty('avatarUrl', null);
+  });
+});

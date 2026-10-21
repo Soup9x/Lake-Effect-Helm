@@ -5,6 +5,7 @@ import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { AdminNav } from '@/components/admin-nav';
 import { Card, CardContent } from '@/components/ui/card';
 import { PeopleManager } from '@/components/people-manager';
+import { avatarUrls } from '@/lib/avatars/service';
 import { RolesManager } from '@/components/roles-manager';
 import { ACCESS_LEVELS, grantableRoles, listPermissions, listRoles } from '@/lib/roles/catalogue';
 
@@ -71,8 +72,11 @@ export default async function PeoplePage() {
       email_kind: string | null; email_status: string | null; email_error: string | null; email_at: Date | null;
     }[]>`SELECT * FROM helm.member_sign_in_state()`).map((r) => [r.user_id, r]));
 
+    // Everybody's picture (1040), one query for the whole list.
+    const avatars = await avatarUrls(tx);
+
     return {
-      members, roles, organizations, myRank, catalogue, permissions, withTotp, signIn,
+      members, roles, organizations, myRank, catalogue, permissions, withTotp, signIn, avatars,
       myPermissions: session.permissions,
       canWrite: session.permissions.includes('user:write'),
       canManageRoles: session.permissions.includes('tenant:write'),
@@ -114,6 +118,7 @@ export default async function PeoplePage() {
               orgScope: m.org_scope ?? [],
               lastLoginAt: m.last_login_at?.toISOString() ?? null,
               hasTotp: data.withTotp.has(m.user_id),
+              avatarUrl: data.avatars.get(m.user_id) ?? null,
               signIn: (() => {
                 const state = data.signIn.get(m.user_id);
                 return {
