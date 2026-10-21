@@ -33,6 +33,7 @@ export function AppChrome({
   identity,
   unreadNotifications,
   idleMinutes,
+  avatarUrl,
   children,
 }: {
   identity: ServerIdentity;
@@ -44,6 +45,8 @@ export function AppChrome({
   unreadNotifications: number;
   /** The session policy's idle timeout (0890); the shell warns before it. */
   idleMinutes: number;
+  /** The signed-in person's profile picture (1040), or null. */
+  avatarUrl: string | null;
   children: ReactNode;
 }) {
   const isClient = isClientRole(identity.roleKey);
@@ -78,6 +81,7 @@ export function AppChrome({
                 email={identity.email}
                 roleName={active?.roleName ?? identity.roleKey}
                 isClient={isClient}
+                avatarUrl={avatarUrl}
               />
             </>
           }

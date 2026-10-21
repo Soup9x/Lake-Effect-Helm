@@ -593,3 +593,19 @@ export const organizationLogo = pgTable('organization_logo', {
   uploadedAt: tstz('uploaded_at').notNull().defaultNow(),
   uploadedBy: uuid('uploaded_by'),
 });
+
+/**
+ * A member's profile picture (1040). Seen by the tenant, set only by the member
+ * themselves; encrypted under the tenant data key exactly as a client logo is.
+ */
+export const memberAvatar = pgTable('member_avatar', {
+  tenantId: uuid('tenant_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  contentType: text('content_type').notNull(),
+  byteSize: bigint('byte_size', { mode: 'number' }).notNull(),
+  storageKey: text('storage_key').notNull().unique(),
+  contentSha256: bytea('content_sha256').notNull(),
+  dataKeyId: uuid('data_key_id').notNull(),
+  encryptionNonce: bytea('encryption_nonce').notNull(),
+  uploadedAt: tstz('uploaded_at').notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.tenantId, t.userId] })]);

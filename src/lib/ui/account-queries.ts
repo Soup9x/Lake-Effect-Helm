@@ -16,6 +16,7 @@ import { withTenant } from '../db/client';
 import { actorOf, type ServerIdentity } from '../auth/server-identity';
 import { unreadCount } from '../notifications/inbox';
 import { readTheme, type AccountPreferences } from './preferences';
+import { avatarUrls } from '../avatars/service';
 
 interface Row {
   name: string | null;
@@ -66,6 +67,8 @@ export interface ShellState {
   unreadNotifications: number;
   /** The signed-in person's effective idle timeout (0890), for the shell's warning. */
   idleMinutes: number;
+  /** Their profile picture (1040), for the account menu, or null. */
+  avatarUrl: string | null;
 }
 
 export async function readShellState(identity: ServerIdentity): Promise<ShellState> {
@@ -89,6 +92,7 @@ export async function readShellState(identity: ServerIdentity): Promise<ShellSta
       idleMinutes: (await tx<{ idle_minutes: number }[]>`
         SELECT idle_minutes FROM helm.my_session_policy()
       `)[0]?.idle_minutes ?? 480,
+      avatarUrl: (await avatarUrls(tx, [identity.actorId])).get(identity.actorId) ?? null,
     };
   });
 }

@@ -6,7 +6,7 @@ import { LogOut, UserCog } from 'lucide-react';
 import { cn } from '@/lib/ui/cn';
 import { Badge } from './ui/badge';
 import { ThemeToggle } from './theme-toggle';
-import { initials } from '@/lib/ui/format';
+import { UserAvatar } from './user-avatar';
 import { useDismissable } from '@/lib/ui/use-dismissable';
 import { apiFetch } from '@/lib/ui/api';
 
@@ -30,11 +30,14 @@ export function AccountMenu({
   email,
   roleName,
   isClient,
+  avatarUrl,
 }: {
   name: string;
   email: string;
   roleName: string;
   isClient: boolean;
+  /** Their profile picture (1040), or null for initials. */
+  avatarUrl: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
@@ -93,12 +96,7 @@ export function AccountMenu({
           'hover:bg-white/10',
         )}
       >
-        <span
-          className="grid size-7 shrink-0 place-items-center rounded-full bg-white/15 text-xs font-medium text-nav-ink-active"
-          aria-hidden
-        >
-          {initials(name)}
-        </span>
+        <UserAvatar name={name} src={avatarUrl} size="sm" className="bg-white/15 text-nav-ink-active" />
         <span className="hidden min-w-0 sm:block">
           <span className="block truncate text-sm leading-tight text-nav-ink-active">{name}</span>
           <span className="block truncate text-xs leading-tight text-nav-ink">{roleName}</span>
@@ -113,8 +111,13 @@ export function AccountMenu({
           className="absolute right-0 z-30 mt-1 w-64 overflow-hidden rounded-md border border-border bg-surface-raised shadow-lg"
         >
           <div className="border-b border-border px-3 py-2.5">
-            <div className="truncate text-sm font-medium text-ink">{name}</div>
-            <div className="truncate text-xs text-ink-faint">{email}</div>
+            <div className="flex items-center gap-2.5">
+              <UserAvatar name={name} src={avatarUrl} size="md" />
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-ink">{name}</div>
+                <div className="truncate text-xs text-ink-faint">{email}</div>
+              </div>
+            </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-1">
               <Badge tone="neutral">{roleName}</Badge>
               {isClient && (
