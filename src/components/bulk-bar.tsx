@@ -86,8 +86,7 @@ export function BulkBar({
       <div className="flex flex-wrap items-center gap-2 rounded-full border border-border-strong bg-surface-raised px-3 py-2 shadow-lg">
         <span className="px-1 text-sm font-medium text-ink">{label}</span>
 
-        {/* A contact has no tags and no export of its own: archive is what applies. */}
-        {target !== 'contact' && <TagPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />}
+        <TagPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />
 
         <Button
           variant="secondary"
@@ -101,15 +100,16 @@ export function BulkBar({
           {archived ? 'Restore' : 'Archive'}
         </Button>
 
-        {target !== 'contact' && <ExportPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />}
+        <ExportPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />
 
         {copyable && !archived && (
           <CopyAction
+            target={target === 'contact' ? 'contact' : 'node'}
             ids={ids}
             busy={busy !== null}
             onDone={(count) => {
               setError(null);
-              setDone(`Copied ${count} item${count === 1 ? '' : 's'}.`);
+              setDone(`Copied ${count} ${noun}${count === 1 ? '' : 's'}.`);
               onClear();
               startTransition(() => router.refresh());
             }}
@@ -293,11 +293,14 @@ function ExportPopover({
  * password in it. The server copies all of them or none (POST /api/bulk/copy).
  */
 function CopyAction({
+  target,
   ids,
   busy,
   onDone,
   onError,
 }: {
+  /** Entries, or contacts (copied without a reveal: they hold no password). */
+  target: 'node' | 'contact';
   ids: string[];
   busy: boolean;
   onDone: (count: number) => void;
@@ -311,7 +314,7 @@ function CopyAction({
   // Read at call time, so the step-up retry sends what is in the box then.
   const attempt = () =>
     apiFetch<{ affected: number }>('/api/bulk/copy', {
-      json: { ids, ...(reason.trim() ? { reason: reason.trim() } : {}) },
+      json: { target, ids, ...(reason.trim() ? { reason: reason.trim() } : {}) },
     });
 
   async function run() {

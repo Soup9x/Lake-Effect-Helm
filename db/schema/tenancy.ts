@@ -129,6 +129,8 @@ export const contact = pgTable('contact', {
   psaContactId: text('psa_contact_id'),
   /** 0850: off the list and out of search, restorable. Distinct from deleted_at. */
   archivedAt: tstz('archived_at'),
+  /** 1050: free-text labels, beside the role flags rather than instead of them. */
+  tags: textArray('tags').notNull().default([]),
   ...auditColumns,
   ...softDelete,
 }, (t) => [
