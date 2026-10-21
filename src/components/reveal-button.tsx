@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Check, Copy, Eye, EyeOff, Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
@@ -80,11 +80,14 @@ export function RevealButton({
   label,
   requiresReason,
   requiresStepUp,
+  extraAction,
 }: {
   secretId: string;
   label: string;
   requiresReason: boolean;
   requiresStepUp: boolean;
+  /** Another action on the same line, before show and copy — such as changing it. */
+  extraAction?: ReactNode;
 }) {
   const stepUp = useStepUp();
   const [state, setState] = useState<RevealState>({ status: 'idle' });
@@ -215,6 +218,7 @@ export function RevealButton({
         mono
         actions={
           <>
+            {extraAction}
             <button
               type="button"
               className={iconActionClass}
