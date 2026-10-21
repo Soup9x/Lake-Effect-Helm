@@ -12,9 +12,14 @@
  * something is about to be sent.
  *
  * AND THE RELAY HAS TO BE ON. A tenant with no smtp_setting row, or one with
- * `enabled = false`, sends nothing — helm.smtp_transport() returns no row at
+ * `enabled = false`, sends nothing — helm.email_delivery() returns no row at
  * all in that case, which is the air-gapped default 0670 established and this
  * follows.
+ *
+ * TWO WAYS OUT (1010): the relay, or Microsoft 365's sendMail through the
+ * MSP's own connection. Everything above this line — the recipient gate, the
+ * batching, the outcome recorded on the setting — is the same for both; only
+ * the last step differs, in GraphDelivery or the nodemailer transport.
  *
  * THE PASSWORD LIVES FOR ONE CONNECTION. It is opened from the envelope here,
  * handed to a transport that is closed when the batch ends, and the buffer is
@@ -22,6 +27,7 @@
  */
 import { withTenant, db } from '../db/client';
 import { openSmtpPassword } from './secret';
+import { GraphDelivery } from './graph-delivery';
 import {
   buildTransport, describeTransportError, fromHeader,
   EmailTransportError, type RelayConfig,
@@ -122,58 +128,26 @@ export async function recipientAllowed(
   );
 }
 
-/**
- * A connection held for a batch of messages, then closed.
- *
- * Opening one connection per message is how a relay's rate limiter decides Helm
- * is a spam source; holding one open for the life of the worker is how the
- * opened password outlives the work it was for. One per batch is the middle,
- * and `close()` is in a finally everywhere it is used.
- */
-export class EmailBatch {
+/** The last step of a send, whichever way the mail leaves. */
+interface Delivery {
+  readonly from: string;
+  send(mail: OutgoingMail): Promise<void>;
+  close(): void;
+}
+
+/** The relay: one nodemailer connection for the batch. */
+class SmtpDelivery implements Delivery {
   private readonly transport;
 
-  private constructor(
-    private readonly actor: WorkerActor,
-    private readonly config: RelayConfig,
-  ) {
+  constructor(private readonly config: RelayConfig) {
     this.transport = buildTransport(config);
   }
 
-  /**
-   * Takes the ACTOR rather than a bare tenant id, because the recipient gate
-   * below has to be asked inside a tenant context — see recipientAllowed().
-   */
-  static async open(actor: WorkerActor): Promise<EmailBatch | null> {
-    const config = await loadRelay(actor.tenantId);
-    if (!config) return null;
-    return new EmailBatch(actor, config);
-  }
-
-  /** The address messages will appear to come from, for a log line. */
   get from(): string {
     return this.config.fromAddress;
   }
 
-  /**
-   * `recipientGate: false` is for account emails (1000) only: an invitation or
-   * password link goes to the person's own sign-in address, typed by an
-   * administrator holding user:write, and carries nothing about any client.
-   * The allow-list exists for notifications, which do — and a client's own
-   * staff, invited to Helm, sit at that client's domain, not the MSP's.
-   */
-  async send(mail: OutgoingMail, options: { recipientGate?: boolean } = {}): Promise<void> {
-    if ((options.recipientGate ?? true) && !(await recipientAllowed(this.actor, mail.to))) {
-      // Refused rather than dropped quietly: the caller records it against the
-      // row so somebody can see WHY nothing arrived. The message names the
-      // setting rather than the address, because the address is in the row.
-      throw new EmailTransportError(
-        'that address is outside the domains this tenant allows notifications to '
-        + 'be sent to. An administrator can widen them under Administration → Email & notifications.',
-        'misconfigured',
-      );
-    }
-
+  async send(mail: OutgoingMail): Promise<void> {
     try {
       await this.transport.sendMail({
         from: fromHeader(this.config),
@@ -198,6 +172,82 @@ export class EmailBatch {
     // cannot be wiped in JavaScript — so the reference is dropped and the
     // transport that held it is torn down, which is the best available.
     (this.config as { password: string | null }).password = null;
+  }
+}
+
+interface DeliveryRow {
+  delivery: 'smtp' | 'microsoft_graph';
+  graph_connection_id: string | null;
+  from_address: string;
+  sync_actor_id: string | null;
+}
+
+/**
+ * A connection held for a batch of messages, then closed.
+ *
+ * Opening one connection per message is how a relay's rate limiter decides Helm
+ * is a spam source; holding one open for the life of the worker is how the
+ * opened password outlives the work it was for. One per batch is the middle,
+ * and `close()` is in a finally everywhere it is used. Through Microsoft 365
+ * the same holds for the token: one sign-in per batch.
+ */
+export class EmailBatch {
+  private constructor(
+    private readonly actor: WorkerActor,
+    private readonly delivery: Delivery,
+  ) {}
+
+  /**
+   * Takes the ACTOR rather than a bare tenant id, because the recipient gate
+   * below has to be asked inside a tenant context — see recipientAllowed().
+   */
+  static async open(actor: WorkerActor): Promise<EmailBatch | null> {
+    const [mode] = await db('worker')<DeliveryRow[]>`
+      SELECT delivery::text AS delivery, graph_connection_id, from_address, sync_actor_id
+      FROM helm.email_delivery(${actor.tenantId}::uuid)
+    `;
+    if (!mode) return null;
+    if (mode.delivery === 'microsoft_graph') {
+      // The client secret is opened as the sync's identity, which is the one
+      // integration credentials belong to — see 1010.
+      const opener = mode.sync_actor_id
+        ? { tenantId: actor.tenantId, actorId: mode.sync_actor_id, actorType: 'service_account' as const }
+        : null;
+      return new EmailBatch(actor, new GraphDelivery(opener, mode.graph_connection_id, mode.from_address));
+    }
+    const config = await loadRelay(actor.tenantId);
+    if (!config) return null;
+    return new EmailBatch(actor, new SmtpDelivery(config));
+  }
+
+  /** The address messages will appear to come from, for a log line. */
+  get from(): string {
+    return this.delivery.from;
+  }
+
+  /**
+   * `recipientGate: false` is for account emails (1000) only: an invitation or
+   * password link goes to the person's own sign-in address, typed by an
+   * administrator holding user:write, and carries nothing about any client.
+   * The allow-list exists for notifications, which do — and a client's own
+   * staff, invited to Helm, sit at that client's domain, not the MSP's.
+   */
+  async send(mail: OutgoingMail, options: { recipientGate?: boolean } = {}): Promise<void> {
+    if ((options.recipientGate ?? true) && !(await recipientAllowed(this.actor, mail.to))) {
+      // Refused rather than dropped quietly: the caller records it against the
+      // row so somebody can see WHY nothing arrived. The message names the
+      // setting rather than the address, because the address is in the row.
+      throw new EmailTransportError(
+        'that address is outside the domains this tenant allows notifications to '
+        + 'be sent to. An administrator can widen them under Administration → Email & notifications.',
+        'misconfigured',
+      );
+    }
+    await this.delivery.send(mail);
+  }
+
+  close(): void {
+    this.delivery.close();
   }
 }
 

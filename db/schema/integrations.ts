@@ -10,7 +10,7 @@ import { bigint, boolean, index, integer, jsonb, pgTable, primaryKey, smallint, 
 import { bytea, citext, textArray, tstz } from './_types';
 import {
   integrationProvider, integrationStatus, syncDirection,
-  notificationTransport, smtpSecurity, syncRunStatus, taskReminderKind,
+  emailDelivery, notificationTransport, smtpSecurity, syncRunStatus, taskReminderKind,
   webhookDeliveryStatus, webhookFormat,
 } from './enums';
 import { appUser } from './identity';
@@ -239,7 +239,11 @@ export type NotificationCursor = typeof notificationCursor.$inferSelect;
 export const smtpSetting = pgTable('smtp_setting', {
   tenantId: uuid('tenant_id').primaryKey().references(() => tenant.id, { onDelete: 'cascade' }),
   enabled: boolean('enabled').notNull().default(false),
-  host: text('host').notNull(),
+  /** 1010: the relay below, or Graph sendMail through the MSP's own connection. */
+  delivery: emailDelivery('delivery').notNull().default('smtp'),
+  graphConnectionId: uuid('graph_connection_id'),
+  /** Null only when delivery is microsoft_graph and no relay was ever set. */
+  host: text('host'),
   port: integer('port').notNull().default(587),
   security: smtpSecurity('security').notNull().default('starttls'),
   tlsVerify: boolean('tls_verify').notNull().default(true),

@@ -9,13 +9,18 @@
  *   User.Read.All           users, for contacts
  *   Domain.Read.All         domains
  *
- * WHAT IS READ — nothing is ever written:
+ * WHAT IS READ — the sync writes nothing:
  *
  *   POST login.microsoftonline.com/{tenant}/oauth2/v2.0/token
  *   GET  /v1.0/organization       the tenant's display name (the connection test)
  *   GET  /v1.0/users              paged by @odata.nextLink
  *   GET  /v1.0/subscribedSkus
  *   GET  /v1.0/domains
+ *
+ * AND ONE THING IS SENT, only from the MSP's own connection and only when
+ * email is set to go through Microsoft 365 (1010):
+ *
+ *   POST /v1.0/users/{mailbox}/sendMail    needs Mail.Send (application)
  *
  * THE TOKEN GOES TO GRAPH ONLY. A nextLink is followed only when it is a Graph
  * URL: a page that pointed somewhere else would otherwise receive the bearer.
@@ -248,4 +253,62 @@ export function listSubscribedSkus(target: GraphTarget, token: string): Promise<
 
 export function listDomains(target: GraphTarget, token: string): Promise<GraphDomain[]> {
   return collect<GraphDomain>(target, token, '/v1.0/domains', 'domains', 'Domain.Read.All');
+}
+
+/** One plain-text message, as EmailBatch hands it over. */
+export interface GraphMail {
+  to: string;
+  subject: string;
+  text: string;
+}
+
+/**
+ * Send one message as `mailbox`, which must be a user or shared mailbox in
+ * this tenant. Graph answers 202 with no body; nothing is kept in Sent Items,
+ * because a notification is not a conversation.
+ *
+ * Only `X-` headers may be set through Graph, so Auto-Submitted cannot be;
+ * X-Auto-Response-Suppress is Exchange's own way of saying "do not answer
+ * this", which is what Auto-Submitted is for on the relay path.
+ */
+export async function sendMail(target: GraphTarget, token: string, mailbox: string, mail: GraphMail): Promise<void> {
+  const response = await send(`${GRAPH_URL}/v1.0/users/${encodeURIComponent(mailbox)}/sendMail`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({
+      message: {
+        subject: mail.subject,
+        body: { contentType: 'Text', content: mail.text },
+        toRecipients: [{ emailAddress: { address: mail.to } }],
+        internetMessageHeaders: [
+          { name: 'X-Helm-Notification', value: '1' },
+          { name: 'X-Auto-Response-Suppress', value: 'All' },
+        ],
+      },
+      saveToSentItems: false,
+    }),
+    timeoutMs: target.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
+  if (response.status === 202 || response.status === 200) return;
+
+  const detail = entraMessage(safeParse(response.body));
+  if (response.status === 401 || response.status === 403) {
+    throw new GraphError(
+      `Microsoft 365 would not let the app send as ${mailbox}${detail ? `: ${detail}` : ''}`,
+      'forbidden',
+      'Give the app the Mail.Send application permission and grant admin consent; if an application access '
+        + 'policy limits the app, include this mailbox in it.',
+      response.status,
+    );
+  }
+  if (response.status === 404) {
+    throw new GraphError(
+      `Microsoft 365 has no mailbox for ${mailbox}${detail ? `: ${detail}` : ''}`,
+      'not_found',
+      'The sending address must be a licensed user or a shared mailbox in your Microsoft 365 tenant.',
+      response.status,
+    );
+  }
+  throw new GraphError(`Microsoft 365 answered ${response.status} to sendMail${detail ? `: ${detail}` : ''}`,
+    'http_error', undefined, response.status);
 }

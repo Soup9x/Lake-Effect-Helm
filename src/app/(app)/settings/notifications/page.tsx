@@ -9,7 +9,7 @@ import { SmtpSettingsCard } from '@/components/smtp-settings';
 import { NotificationSettingsCard } from '@/components/notification-settings';
 import { ExpiryAlertForm } from '@/components/expiry-alert-form';
 import { readExpiryAlertSetting } from '@/lib/alerts/queries';
-import { readSmtpSetting } from '@/lib/email/settings';
+import { listSendingConnections, readSmtpSetting } from '@/lib/email/settings';
 import { readTenantSummary } from '@/lib/tenant/queries';
 import { listNotificationDestinations, listRecentDeliveries, NOTIFICATION_EVENTS } from '@/lib/notifications/queries';
 
@@ -22,20 +22,22 @@ export default async function NotificationSettingsPage() {
   const identity = await getServerIdentity();
 
   const {
-    tenant, smtp, destinations, deliveries, expiryAlerts, canManageAlerts,
+    tenant, smtp, connections, destinations, deliveries, expiryAlerts, canManageAlerts,
   } = await withTenant(actorOf(identity), async (tx) => {
-    const [tenant, smtp, destinations, deliveries, expiryAlerts, alertPermissionRows] = await Promise.all([
+    const [tenant, smtp, connections, destinations, deliveries, expiryAlerts, alertPermissionRows] = await Promise.all([
       readTenantSummary(tx, identity.actorId),
       // The mail relay, without its password: helm_app has no privilege on the
       // envelope columns, so `passwordSet` is a boolean the database computed.
       readSmtpSetting(tx),
+      // The MSP's own Microsoft 365 connections, which mail can go out through (1010).
+      listSendingConnections(tx),
       listNotificationDestinations(tx),
       listRecentDeliveries(tx),
       readExpiryAlertSetting(tx),
       tx<{ allowed: boolean }[]>`SELECT helm.has_permission('alert:manage') AS allowed`,
     ]);
     return {
-      tenant, smtp, destinations, deliveries, expiryAlerts,
+      tenant, smtp, connections, destinations, deliveries, expiryAlerts,
       canManageAlerts: alertPermissionRows[0]?.allowed ?? false,
     };
   });
@@ -44,7 +46,7 @@ export default async function NotificationSettingsPage() {
     <>
       <PageHeader
         title="Email & notifications"
-        description="The mail relay, where notifications are sent, and when expiry warnings go out."
+        description="How Helm sends mail, where notifications are sent, and when expiry warnings go out."
         trail={[{ label: 'Administration', href: '/settings' }]}
       />
       <PageBody>
@@ -55,7 +57,11 @@ export default async function NotificationSettingsPage() {
           * destination cannot be saved without one, and a page that offers the
           * dependent control first teaches people to hit the error.
           */}
-        <SmtpSettingsCard initial={smtp} canManage={tenant?.can_write_tenant ?? false} />
+        <SmtpSettingsCard
+          initial={smtp}
+          canManage={tenant?.can_write_tenant ?? false}
+          connections={connections}
+        />
 
         <NotificationSettingsCard
           destinations={destinations}
