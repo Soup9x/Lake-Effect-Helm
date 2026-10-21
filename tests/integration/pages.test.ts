@@ -53,7 +53,7 @@ import { beforeAll, afterAll, afterEach, beforeEach, describe, expect, it, vi } 
 import { withTenant } from '../../src/lib/db/client';
 import { useSessionResolver } from '../../src/lib/auth/session';
 import {
-  IDS, actor, connectPools, disconnectPools, resetDatabase, superuserSql,
+  IDS, actor, buildHarness, connectPools, disconnectPools, resetDatabase, superuserSql,
 } from './harness';
 import { clientComponentNames, describeViolations, findBoundaryViolations } from '../support/rsc-boundary';
 import { datesDisagree, type ExternalCheckState } from '../../src/components/external-check-note';
@@ -61,6 +61,9 @@ import { DEFAULT_NOTIFICATION_KINDS } from '../../src/lib/notifications/kinds';
 import { importantContacts } from '../../src/lib/contacts/important';
 import type { ImportantContact } from '../../src/components/client-widgets';
 import { FakeSmtp } from '../support/fake-smtp';
+import { NextRequest } from 'next/server';
+import { resetServices, setKekProvider } from '../../src/lib/services';
+import { POST as createCredential } from '../../src/app/api/secrets/route';
 
 /**
  * next/headers reaches into a request scope that does not exist here.
@@ -1671,6 +1674,30 @@ describe('how each kind of entry lays out its cards', () => {
     const page = await assetPage(credentialId);
     expect(propsOf(page, 'CopyValueButton')).toMatchObject({ value: 'rendered-admin' });
     expect(propsOf(page, 'TotpSeedControl')).toEqual({ nodeId: credentialId, hasTotp: false });
+  });
+
+  it('lets the password be changed from its own row', async () => {
+    // A credential that HAS a password, made the real way: the shared one
+    // above has none, and a Password row with nothing stored offers nothing.
+    const h = buildHarness();
+    resetServices();
+    setKekProvider(h.kek);
+    await h.keys.provision(IDS.tenant1, IDS.admin1, { reason: 'change password page test' });
+    const created = await createCredential(new NextRequest(new Request('https://helm.test/api/secrets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        organizationId: IDS.orgAcme, label: 'Page login', value: 'a-password-that-is-long-enough',
+        credentialType: 'service_account',
+      }),
+    })));
+    expect(created.status).toBe(200);
+    const { credentialId: withPassword } = (await created.json()) as { credentialId: string };
+
+    const page = await assetPage(withPassword);
+    const reveal = propsOf(page, 'RevealButton');
+    expect(reveal, 'the Password row').toBeTruthy();
+    expect(propsOf(reveal!.extraAction, 'ChangePasswordButton')).toMatchObject({ secretId: reveal!.secretId });
   });
 
   it('lays a password entry out as login rows, with no raw secret id among them', async () => {

@@ -17,6 +17,7 @@ import { RevealButton } from '@/components/reveal-button';
 import { TotpPanel } from '@/components/totp-panel';
 import { TotpSeedControl } from '@/components/totp-seed-control';
 import { CopyValueButton } from '@/components/copy-value-button';
+import { ChangePasswordButton } from '@/components/change-password-button';
 import { FieldLine, FieldList, FieldRow, iconActionClass } from '@/components/field-row';
 import { formatDate, formatDateTime, humanise } from '@/lib/ui/format';
 import { recordView } from '@/lib/workspace/queries';
@@ -214,8 +215,10 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
      * does not carry it. These only decide what the page OFFERS — every route
      * and every policy checks again.
      */
-    const [perm] = await tx<{ reveal: boolean; author: boolean; run: boolean; seed: boolean }[]>`
+    const [perm] = await tx<{ reveal: boolean; author: boolean; run: boolean; seed: boolean; rotate: boolean }[]>`
       SELECT helm.has_permission('secret:reveal') AS reveal,
+             -- The rotate route's gate: changing a password is a new version of it.
+             helm.has_permission('secret:write')  AS rotate,
              helm.has_permission('sop:write')     AS author,
              helm.has_permission('sop:execute')   AS run,
              -- The TOTP route's own pair: it writes a secret onto an asset.
@@ -326,6 +329,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       totp: totp ?? null,
       canReveal: perm?.reveal ?? false,
       canManageSeed: perm?.seed ?? false,
+      canChangePassword: perm?.rotate ?? false,
       canAuthorProcedures: perm?.author ?? false,
       canRunChecklists: perm?.run ?? false,
       assignable,
@@ -337,7 +341,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   if (!data) notFound();
   const {
-    node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams, totp, canReveal, canManageSeed,
+    node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams, totp, canReveal, canManageSeed, canChangePassword,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
     attachments, canDeleteAttachments, device, history,
   } = data;
@@ -659,6 +663,9 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
                   label={secret.label}
                   requiresReason={secret.requires_reason}
                   requiresStepUp={secret.requires_step_up}
+                  extraAction={canWrite && canChangePassword
+                    ? <ChangePasswordButton secretId={secret.id} label={secret.label} />
+                    : undefined}
                 />
               </FieldRow>
             ))}
