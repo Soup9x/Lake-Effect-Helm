@@ -28,6 +28,12 @@ export interface ExportScope {
   readonly includeSops?: boolean | undefined;
   /** Include the relationship graph. */
   readonly includeGraph?: boolean | undefined;
+  /**
+   * A contacts-only bundle: these contacts and nothing else — no entries, no
+   * credentials, no graph, no SOPs. What "Export" on a selection of contacts
+   * asks for.
+   */
+  readonly contactIds?: string[] | undefined;
 }
 
 export interface CollectedExport {
@@ -192,6 +198,8 @@ export async function collectExport(
 
   const nodeIds = scope.nodeIds ?? [];
   const nodeTypes = scope.nodeTypes ?? [];
+  const contactIds = scope.contactIds ?? [];
+  const contactsOnly = contactIds.length > 0;
 
   const sites = await tx<SiteRecord[]>`
     SELECT id, name, code, is_primary, address_line1, city, region, postal_code,
@@ -204,8 +212,18 @@ export async function collectExport(
     SELECT id, first_name, last_name, title, email::text, phone, mobile,
            is_primary, is_technical, is_emergency, is_authorised
     FROM contact WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
+      AND (${!contactsOnly} OR id = ANY(${contactIds}::uuid[]))
     ORDER BY is_primary DESC, last_name, first_name
   `;
+
+  // A contacts-only bundle stops here: the people, and none of the estate.
+  if (contactsOnly) {
+    return {
+      organization, sites: [], contacts, assets: [], credentials: [], relationships: [],
+      expirations: [], procedures: [], flexibleAssets: [], documents: [],
+      attestation: await collectAttestation(tx),
+    };
+  }
 
   const nodes = await tx<(Omit<AssetRecord, 'detail'> & { detail: null })[]>`
     SELECT id, node_type::text, name, description, status::text, tags, criticality, site_id, NULL AS detail

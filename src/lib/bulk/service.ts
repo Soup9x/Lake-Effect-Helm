@@ -146,15 +146,9 @@ function normaliseTags(raw: string[]): string[] {
 const TABLE: Record<BulkTarget, { name: string; archiveColumn: string; label: string }> = {
   client: { name: 'organization', archiveColumn: 'archived_at', label: 'client' },
   node: { name: 'asset_node', archiveColumn: 'archived_at', label: 'item' },
-  // A contact archives (0850) but has no tags column: its badges are its role
-  // flags. Tagging refuses it below rather than reaching for a column that
-  // is not there.
+  // Archived since 0850, tagged since 1050.
   contact: { name: 'contact', archiveColumn: 'archived_at', label: 'contact' },
 };
-
-function taggable(target: BulkTarget): void {
-  if (target === 'contact') throw ApiError.invalid('contacts are not tagged; their badges are their roles');
-}
 
 /**
  * Add tags to every selected row, keeping what is already there.
@@ -170,7 +164,6 @@ export async function bulkAddTags(
   ids: string[],
   tags: string[],
 ): Promise<BulkOutcome> {
-  taggable(target);
   const selection = normaliseSelection(ids);
   const clean = normaliseTags(tags);
   const table = TABLE[target];
@@ -199,7 +192,6 @@ export async function bulkRemoveTags(
   ids: string[],
   tags: string[],
 ): Promise<BulkOutcome> {
-  taggable(target);
   const selection = normaliseSelection(ids);
   const clean = normaliseTags(tags);
   const table = TABLE[target];
@@ -293,6 +285,26 @@ export async function resolveNodes(tx: HelmTx, ids: string[]): Promise<SelectedN
 
   requireAll(selection, rows.map((r) => r.id), 'export');
   return rows.map((r) => ({ id: r.id, organizationId: r.organization_id, name: r.name }));
+}
+
+export interface SelectedContact {
+  id: string;
+  organizationId: string;
+}
+
+/**
+ * The contacts a selection names, grouped later by client for export, with the
+ * same all-or-nothing reach check as nodes. Archived contacts are not exported,
+ * as archived entries are not.
+ */
+export async function resolveContacts(tx: HelmTx, ids: string[]): Promise<SelectedContact[]> {
+  const selection = normaliseSelection(ids);
+  const rows = await tx<{ id: string; organization_id: string }[]>`
+    SELECT id, organization_id FROM contact
+    WHERE id = ANY(${selection}::uuid[]) AND deleted_at IS NULL AND archived_at IS NULL
+  `;
+  requireAll(selection, rows.map((r) => r.id), 'export');
+  return rows.map((r) => ({ id: r.id, organizationId: r.organization_id }));
 }
 
 export async function resolveClients(tx: HelmTx, ids: string[]): Promise<string[]> {

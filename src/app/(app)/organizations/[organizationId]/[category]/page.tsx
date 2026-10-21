@@ -255,9 +255,9 @@ export default async function CategoryPage({
     if (category.source === 'contact') {
       const rows = await tx<({
         id: string; first_name: string; last_name: string | null; title: string | null;
-        email: string | null; phone: string | null; updated_at: Date; archived: boolean;
+        email: string | null; phone: string | null; updated_at: Date; archived: boolean; tags: string[];
       } & ContactFlags)[]>`
-        SELECT id, first_name, last_name, title, email::text, phone, updated_at,
+        SELECT id, first_name, last_name, title, email::text, phone, updated_at, tags,
                is_primary, is_technical, is_billing, is_emergency, is_authorised,
                archived_at IS NOT NULL AS archived
         FROM contact
@@ -283,6 +283,8 @@ export default async function CategoryPage({
           extra: r.phone,
           flagged: r.is_primary,
           updatedAt: r.updated_at.toISOString(),
+          // Free-text tags (1050), a column of their own and matched by the filter.
+          cells: { tags: r.tags.join(', ') || null },
           // No visibility flag on `contact`, so no permissions action.
           removeKind: 'contact',
           editContact: { organizationId },
@@ -656,7 +658,9 @@ export default async function CategoryPage({
                   { key: 'registered', header: 'Registered' },
                   { key: 'expires', header: 'Expires' },
                 ]
-              : []
+              : category.source === 'contact'
+                ? [{ key: 'tags', header: 'Tags' }]
+                : []
         }
         // A domain has no username or vault entry for those two columns to
         // show, so they would be a dash on every row; its dates replace them.

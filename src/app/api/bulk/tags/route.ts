@@ -4,7 +4,7 @@ import { ApiError, zodIssues } from '@/lib/api/errors';
 import { MAX_SELECTION, bulkAddTags, bulkRemoveTags } from '@/lib/bulk/service';
 
 const schema = z.object({
-  target: z.enum(['client', 'node']),
+  target: z.enum(['client', 'node', 'contact']),
   ids: z.array(z.guid()).min(1).max(MAX_SELECTION),
   tags: z.array(z.string().trim().min(1).max(60)).min(1).max(20),
   mode: z.enum(['add', 'remove']).default('add'),
@@ -42,7 +42,7 @@ export const POST = tenantRoute(
     await tx`
       SELECT helm.audit(
         ${`bulk.tag_${body.mode}`},
-        ${body.target === 'client' ? 'organization' : 'asset_node'},
+        ${body.target === 'client' ? 'organization' : body.target === 'contact' ? 'contact' : 'asset_node'},
         NULL::uuid,
         'success'::audit_outcome,
         NULL::uuid, NULL::uuid, NULL::text,

@@ -20,6 +20,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { useSessionResolver, type SessionUser } from '../../src/lib/auth/session';
 import { resetServices, setKekProvider } from '../../src/lib/services';
 import {
+  actor,
   buildHarness,
   connectPools,
   disconnectPools,
@@ -32,6 +33,9 @@ import {
 import { POST as bulkTags } from '../../src/app/api/bulk/tags/route';
 import { POST as bulkArchive } from '../../src/app/api/bulk/archive/route';
 import { POST as bulkExport } from '../../src/app/api/bulk/export/route';
+import { POST as bulkCopy } from '../../src/app/api/bulk/copy/route';
+import { collectExport } from '../../src/lib/exports/collect';
+import { withTenant } from '../../src/lib/db/client';
 
 let h: Harness;
 let currentUser: SessionUser | null = null;
@@ -588,9 +592,90 @@ describe('contacts', () => {
     expect(await contactArchivedAt(contacts.globex)).toBeNull();
   });
 
-  it('does not tag contacts, which have no tags', async () => {
+  it('tags a selection of contacts, lowercased, and takes a tag off again', async () => {
     asUser(IDS.admin1, 'admin@northwind.test');
-    const response = await bulkTags(post('/api/bulk/tags', { target: 'contact', ids: [contacts.acme1], tags: ['x'] }));
-    expect(response.status).toBe(400);
+    const tagged = await bulkTags(post('/api/bulk/tags', { target: 'contact', ids: [contacts.acme1, contacts.acme2], tags: ['VIP'] }));
+    expect(tagged.status).toBe(200);
+    const sql = superuserSql();
+    try {
+      const rows = await sql<{ tags: string[] }[]>`SELECT tags FROM contact WHERE id = ANY(${[contacts.acme1, contacts.acme2]}::uuid[])`;
+      expect(rows.map((r) => r.tags)).toEqual([['vip'], ['vip']]);
+      await bulkTags(post('/api/bulk/tags', { target: 'contact', ids: [contacts.acme1], tags: ['vip'], mode: 'remove' }));
+      const [one] = await sql<{ tags: string[] }[]>`SELECT tags FROM contact WHERE id = ${contacts.acme1}::uuid`;
+      expect(one!.tags).toEqual([]);
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('exports a selection of contacts as one contacts-only bundle per client', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const response = await bulkExport(post('/api/bulk/export', {
+      target: 'contact', ids: [contacts.acme1, contacts.acme2, contacts.globex],
+      reason: 'Contact list for the new account manager',
+    }));
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect((await body(response)).clients).toBe(2);
+    const sql = superuserSql();
+    try {
+      const jobs = await sql<{ scope: { contactIds?: string[] }; include_secrets: boolean }[]>`
+        SELECT scope, include_secrets FROM export_job ORDER BY created_at`;
+      expect(jobs.every((j) => !j.include_secrets)).toBe(true);
+      expect(jobs.map((j) => [...(j.scope.contactIds ?? [])].sort()).sort()).toEqual(
+        [[contacts.acme1, contacts.acme2].sort(), [contacts.globex]].sort(),
+      );
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+
+    // What such a bundle collects: those contacts, and none of the estate.
+    const collected = await withTenant(actor(IDS.tenant1, IDS.admin1), (tx) =>
+      collectExport(tx, IDS.orgAcme, { contactIds: [contacts.acme1] }));
+    expect(collected.contacts.map((c) => c.id)).toEqual([contacts.acme1]);
+    expect(collected.assets).toEqual([]);
+    expect(collected.credentials).toEqual([]);
+  });
+
+  it('copies a selection of contacts with every email and number, never as the primary', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const sql = superuserSql();
+    try {
+      await sql`UPDATE contact SET is_primary = true, is_technical = true, tags = '{vip}' WHERE id = ${contacts.acme1}::uuid`;
+      await sql`INSERT INTO contact_email (tenant_id, contact_id, address, label, is_primary)
+                VALUES (${IDS.tenant1}::uuid, ${contacts.acme1}::uuid, 'one@acme.test', 'work', true),
+                       (${IDS.tenant1}::uuid, ${contacts.acme1}::uuid, 'one@home.test', 'personal', false)`;
+      await sql`INSERT INTO contact_phone (tenant_id, contact_id, number, label, is_primary)
+                VALUES (${IDS.tenant1}::uuid, ${contacts.acme1}::uuid, '555-0101', 'mobile', true)`;
+
+      const response = await bulkCopy(post('/api/bulk/copy', { target: 'contact', ids: [contacts.acme1, contacts.acme2] }));
+      expect(response.status, await response.clone().text()).toBe(200);
+      const { copies } = (await body(response)) as { copies: { id: string; sourceId: string; name: string }[] };
+      expect(copies).toHaveLength(2);
+      const copy = copies.find((c) => c.sourceId === contacts.acme1)!;
+      expect(copy.name).toBe('Bulk One (copy)');
+
+      const [row] = await sql<{ is_primary: boolean; is_technical: boolean; tags: string[]; email: string; mobile: string }[]>`
+        SELECT is_primary, is_technical, tags, email::text, mobile FROM contact WHERE id = ${copy.id}::uuid`;
+      expect(row).toMatchObject({ is_primary: false, is_technical: true, tags: ['vip'], email: 'one@acme.test', mobile: '555-0101' });
+      const emails = await sql<{ address: string }[]>`
+        SELECT address::text FROM contact_email WHERE contact_id = ${copy.id}::uuid ORDER BY address`;
+      expect(emails.map((e) => e.address)).toEqual(['one@acme.test', 'one@home.test']);
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('refuses to copy a selection reaching a contact the actor cannot see, and copies nothing', async () => {
+    asUser(SCOPED_ID, 'scoped@northwind.test');
+    const sql = superuserSql();
+    try {
+      const [before] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM contact`;
+      const response = await bulkCopy(post('/api/bulk/copy', { target: 'contact', ids: [contacts.acme2, contacts.globex] }));
+      expect([403, 404]).toContain(response.status);
+      const [after] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM contact`;
+      expect(after!.n).toBe(before!.n);
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
   });
 });

@@ -40,8 +40,8 @@ export function TagEditor({
   tags,
   canWrite,
 }: {
-  /** Matches /api/bulk/tags: a client row or an asset node. */
-  target: 'client' | 'node';
+  /** Matches /api/bulk/tags: a client row, an asset node or a contact (1050). */
+  target: 'client' | 'node' | 'contact';
   id: string;
   tags: string[];
   canWrite: boolean;

@@ -10,11 +10,10 @@
  *
  * SELECTION, on lists of entries and on Contacts. A list that is all entries —
  * devices, credentials, domains, the global lists — gets checkboxes and the
- * bulk bar: archive or restore, tags, export, and Make copies. Contacts get
- * archive and restore, which is what a contact has (no tags column, no export
- * of its own). A list mixing kinds the bulk actions cannot treat alike
- * (documents with folders, locations) does not, because a checkbox that does
- * nothing is worse than none.
+ * bulk bar: archive or restore, tags, export, and Make copies — and so does a
+ * Contacts list, for contacts. A list mixing kinds the bulk actions cannot
+ * treat alike (documents with folders, locations) does not, because a checkbox
+ * that does nothing is worse than none.
  *
  * WHAT IT DOES NOT DO: decrypt anything. The OTP badge is a LINK to the credential, not a
  * code — generating one requires secret:reveal and writes an audit row, and a
@@ -386,7 +385,7 @@ export function CategoryGrid({
           ids={chosen.map((r) => r.id)}
           // Restore when everything ticked is archived; Archive otherwise.
           archived={chosen.every((r) => r.archived)}
-          copyable={chosen.every((r) => isCopyable(r.nodeType))}
+          copyable={bulkTarget === 'contact' || chosen.every((r) => isCopyable(r.nodeType))}
           // Clears both halves: this copy, which hides the bar, and the
           // table's own set, which owns the checkboxes.
           onClear={() => {

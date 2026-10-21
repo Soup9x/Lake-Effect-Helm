@@ -16,6 +16,7 @@ import { readChannels } from '@/lib/contacts/channels';
 import { contactTags, type ContactFlags } from '@/lib/contacts/tags';
 import { isClientRole } from '@/lib/ui/roles';
 import { formatDateTime } from '@/lib/ui/format';
+import { TagEditor } from '@/components/tag-editor';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,12 +41,12 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
       id: string; organization_id: string; organization_name: string;
       first_name: string; last_name: string; title: string | null; notes: string | null;
       site_id: string | null; site_name: string | null; login_name: string | null; login_email: string | null;
-      psa_contact_id: string | null; archived_at: Date | null; updated_at: Date;
+      psa_contact_id: string | null; archived_at: Date | null; updated_at: Date; free_tags: string[];
     } & ContactFlags)[]>`
       SELECT c.id, c.organization_id, o.name AS organization_name,
              c.first_name, c.last_name, c.title, c.notes,
              s.id AS site_id, s.name AS site_name, u.name AS login_name, u.email::text AS login_email,
-             c.psa_contact_id, c.archived_at, c.updated_at,
+             c.psa_contact_id, c.archived_at, c.updated_at, c.tags AS free_tags,
              c.is_primary, c.is_technical, c.is_billing, c.is_emergency, c.is_authorised
       FROM contact c
       JOIN organization o ON o.id = c.organization_id
@@ -97,12 +98,12 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
         ) : undefined}
       />
       <PageBody>
-        {(tags.length > 0 || archived) && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {archived && <Badge tone="warning">Archived {formatDateTime(row.archived_at!.toISOString())}</Badge>}
-            {tags.map((tag) => <Badge key={tag} tone="brand">{tag}</Badge>)}
-          </div>
-        )}
+        {/* The role badges, then free-text tags (1050) — editable, as an entry's are. */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {archived && <Badge tone="warning">Archived {formatDateTime(row.archived_at!.toISOString())}</Badge>}
+          {tags.map((tag) => <Badge key={tag} tone="brand">{tag}</Badge>)}
+          <TagEditor target="contact" id={row.id} tags={row.free_tags} canWrite={canWrite && !archived} />
+        </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
           <Card>
