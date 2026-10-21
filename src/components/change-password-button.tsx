@@ -24,7 +24,15 @@ import { apiFetch } from '@/lib/ui/api';
  * The value only ever travels to the server. Nothing here reads the current
  * password, and the box is emptied whether the save succeeds or is cancelled.
  */
-export function ChangePasswordButton({ secretId, label }: { secretId: string; label: string }) {
+export function ChangePasswordButton(
+  props:
+    | { mode?: 'change'; secretId: string; label: string }
+    /** A credential with no password yet: stored as version 1, no reason asked. */
+    | { mode: 'set'; nodeId: string; label: string },
+) {
+  const { label } = props;
+  const setting = props.mode === 'set';
+  const fieldKey = setting ? props.nodeId : props.secretId;
   const router = useRouter();
   const stepUp = useStepUp();
   const [open, setOpen] = useState(false);
@@ -44,9 +52,14 @@ export function ChangePasswordButton({ secretId, label }: { secretId: string; la
 
   // Read at call time, so the step-up retry sends what is in the boxes then.
   const attempt = () =>
-    apiFetch<{ version?: number } | undefined>(`/api/secrets/${secretId}/rotate`, {
-      json: { value, reason: reason.trim() },
-    });
+    props.mode === 'set'
+      ? apiFetch<{ version?: number } | undefined>(`/api/assets/${props.nodeId}/password`, {
+        method: 'PUT',
+        json: { value },
+      })
+      : apiFetch<{ version?: number } | undefined>(`/api/secrets/${props.secretId}/rotate`, {
+        json: { value, reason: reason.trim() },
+      });
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -70,29 +83,40 @@ export function ChangePasswordButton({ secretId, label }: { secretId: string; la
   return (
     <>
       {stepUp.dialog}
-      <button
-        type="button"
-        className={iconActionClass}
-        onClick={() => setOpen(true)}
-        title="Change password"
-        aria-label={`Change ${label}`}
-      >
-        <Pencil aria-hidden />
-      </button>
+      {setting ? (
+        <Button type="button" variant="secondary" size="sm" onClick={() => setOpen(true)}>
+          <KeyRound aria-hidden />
+          Set password
+        </Button>
+      ) : (
+        <button
+          type="button"
+          className={iconActionClass}
+          onClick={() => setOpen(true)}
+          title="Change password"
+          aria-label={`Change ${label}`}
+        >
+          <Pencil aria-hidden />
+        </button>
+      )}
 
       <Modal
         open={open}
         onOpenChange={reset}
-        title="Change password"
+        title={setting ? 'Set password' : 'Change password'}
         icon={KeyRound}
-        description="Stored as a new version. The previous one is superseded, not deleted."
+        description={
+          setting
+            ? 'Encrypted and stored as this credential\u2019s first version.'
+            : 'Stored as a new version. The previous one is superseded, not deleted.'
+        }
       >
         <form onSubmit={save} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor={`new-password-${secretId}`}>New password</Label>
+            <Label htmlFor={`new-password-${fieldKey}`}>{setting ? 'Password' : 'New password'}</Label>
             <div className="flex gap-2">
               <Input
-                id={`new-password-${secretId}`}
+                id={`new-password-${fieldKey}`}
                 type="password"
                 value={value}
                 autoComplete="new-password"
@@ -103,10 +127,11 @@ export function ChangePasswordButton({ secretId, label }: { secretId: string; la
               <PasswordGenerator onUse={setValue} />
             </div>
           </div>
+          {!setting && (
           <div className="space-y-1.5">
-            <Label htmlFor={`change-reason-${secretId}`}>Why</Label>
+            <Label htmlFor={`change-reason-${fieldKey}`}>Why</Label>
             <Input
-              id={`change-reason-${secretId}`}
+              id={`change-reason-${fieldKey}`}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="e.g. rotated after the Miller offboarding"
@@ -114,12 +139,13 @@ export function ChangePasswordButton({ secretId, label }: { secretId: string; la
             />
             <FieldHint>At least ten characters. Recorded in the audit log with the change.</FieldHint>
           </div>
+          )}
           {error && <p className="text-xs text-danger">{error}</p>}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" disabled={busy} onClick={() => reset(false)}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary" disabled={busy || !value || reason.trim().length < 10}>
+            <Button type="submit" variant="primary" disabled={busy || !value || (!setting && reason.trim().length < 10)}>
               {busy && <Loader2 className="animate-spin" aria-hidden />}
               Save password
             </Button>

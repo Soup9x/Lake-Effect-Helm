@@ -8,6 +8,8 @@ import { Modal } from './ui/modal';
 import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { apiFetch } from '@/lib/ui/api';
 import { NODE_STATUSES } from '@/lib/assets/statuses';
+import { detailFieldsFor } from '@/lib/assets/detail-fields';
+import { DetailFieldInputs, toPayload, type Draft } from './detail-edit-form';
 
 /**
  * Documenting an asset.
@@ -90,6 +92,19 @@ const NAME_PLACEHOLDER: Record<string, string> = {
  */
 const NAME_IS_EXTRA = new Set(['domain']);
 
+/**
+ * Kinds whose whole Details form is asked for at creation, rather than in
+ * Edit details afterwards. A domain is documented once, from the registrar's
+ * page, with everything in front of you; making somebody save it and then open
+ * it again to type the expiry was the complaint. The required field the kind
+ * is created by (the domain name) is asked for above, so it is left out here.
+ */
+const DETAILS_AT_CREATE = new Set(['domain']);
+const detailsAtCreate = (nodeType: string) =>
+  DETAILS_AT_CREATE.has(nodeType)
+    ? detailFieldsFor(nodeType).filter((f) => f.key !== 'domain_name')
+    : [];
+
 const humanise = (v: string) => v.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
 interface Site {
@@ -139,6 +154,7 @@ export function NewAssetForm({
   const [status, setStatus] = useState<string>('active');
   const [criticality, setCriticality] = useState(3);
   const [tagText, setTagText] = useState('');
+  const [detail, setDetail] = useState<Draft>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -151,6 +167,7 @@ export function NewAssetForm({
     setStatus('active');
     setCriticality(3);
     setTagText('');
+    setDetail({});
     setNodeType('device');
     setError(null);
     setOpen(false);
@@ -175,6 +192,7 @@ export function NewAssetForm({
   }
 
   const field = extraField();
+  const detailFields = detailsAtCreate(nodeType);
   // A select always has a value; a free-text one starts empty and is required.
   const extraValue = field?.options ? extra || field.options[0]! : extra;
 
@@ -192,6 +210,13 @@ export function NewAssetForm({
     setError(null);
     try {
       const key = EXTRA_KEY[nodeType];
+      // Only what was filled in, as Edit details would send it; a box left
+      // empty is not a value, and a tick left alone keeps the column default.
+      const detailPayload = Object.fromEntries(
+        detailFields
+          .filter((f) => (f.kind === 'boolean' ? detail[f.key] !== undefined : String(detail[f.key] ?? '').trim() !== ''))
+          .map((f) => [f.key, toPayload(f, detail[f.key]!)]),
+      );
       const result = await apiFetch('/api/assets', {
         json: {
           organizationId,
@@ -204,6 +229,7 @@ export function NewAssetForm({
           status,
           criticality,
           tags: tagText.split(',').map((t) => t.trim()).filter(Boolean),
+          ...(Object.keys(detailPayload).length > 0 ? { detail: detailPayload } : {}),
         },
       });
       if (!result.ok) {
@@ -330,6 +356,18 @@ export function NewAssetForm({
               </div>
             )}
           </div>
+
+          {detailFields.length > 0 && (
+            <fieldset className="space-y-2 rounded-md border border-border p-3">
+              <legend className="px-1 text-sm font-medium text-ink">{humanise(nodeType)} details</legend>
+              <DetailFieldInputs
+                fields={detailFields}
+                draft={detail}
+                set={(k, v) => setDetail((d) => ({ ...d, [k]: v }))}
+                idPrefix="create-detail"
+              />
+            </fieldset>
+          )}
 
           {/*
             The fields every kind shares, asked for up front so nobody has to

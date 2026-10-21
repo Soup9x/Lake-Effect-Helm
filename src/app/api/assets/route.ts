@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { NODE_STATUSES } from '@/lib/assets/statuses';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
+import { DETAIL_TABLE, detailFieldsFor } from '@/lib/assets/detail-fields';
+import { writeDetail } from '@/lib/assets/detail-write';
 
 /**
  * The node types this route creates.
@@ -74,6 +76,13 @@ const createSchema = z.object({
   address: z.string().trim().max(45).optional(),
   domainName: z.string().trim().max(253).optional(),
   commonName: z.string().trim().max(253).optional(),
+  /**
+   * The kind's own Details fields, for a create dialog that asks for them up
+   * front (a domain's registrar, expiry and the rest). The same catalogue and
+   * the same writer as PATCH /api/assets/:id/detail, so a field refused there
+   * is refused here, with the same message.
+   */
+  detail: z.record(z.string().min(1).max(64), z.unknown()).optional(),
 });
 
 type CreateBody = z.infer<typeof createSchema>;
@@ -190,6 +199,14 @@ export const POST = tenantRoute(
         await tx`INSERT INTO vendor (id, tenant_id, node_type)
                  VALUES (${node.id}::uuid, ${identity.tenantId}::uuid, 'vendor')`;
         break;
+    }
+
+    // Same transaction again: a refused detail takes the new entry with it,
+    // rather than leaving a domain saved without the expiry somebody typed.
+    if (body.detail && Object.keys(body.detail).length > 0) {
+      const table = DETAIL_TABLE[body.nodeType];
+      if (!table) throw ApiError.invalid(`a ${body.nodeType} has no details`);
+      await writeDetail(tx, table, detailFieldsFor(body.nodeType), node.id, body.detail, { kindName: body.nodeType });
     }
 
     return { asset: { id: node.id, name: body.name, nodeType: body.nodeType } };

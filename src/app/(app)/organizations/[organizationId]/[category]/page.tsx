@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { contactTags, type ContactFlags } from '@/lib/contacts/tags';
 import { siteValuesFrom } from '@/lib/sites/values';
+import { siteAddress } from '@/lib/sites/address';
 import { isUuid } from '@/lib/ids';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -301,7 +302,9 @@ export default async function CategoryPage({
         records: rows.map<CategoryRecord>((r) => ({
           id: r.id,
           name: r.name,
-          secondary: r.city,
+          // The whole address, not the city: two offices in one city are the
+          // normal case, and the list is where somebody looks one up.
+          secondary: siteAddress(r),
           type: r.code,
           extra: r.main_phone,
           flagged: r.is_primary,
@@ -554,7 +557,7 @@ export default async function CategoryPage({
       : category.source === 'contact'
       ? { secondary: 'Email', type: 'Title', extra: 'Phone' }
       : category.source === 'site'
-        ? { secondary: 'City', type: 'Code', extra: 'Phone' }
+        ? { secondary: 'Address', type: 'Code', extra: 'Phone' }
         : category.source === 'network_diagram'
         ? { secondary: 'Location', type: 'Network', extra: 'Drawing' }
         : category.source === 'attachment'
