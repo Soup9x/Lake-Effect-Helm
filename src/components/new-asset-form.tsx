@@ -94,16 +94,20 @@ const NAME_IS_EXTRA = new Set(['domain']);
 
 /**
  * Kinds whose whole Details form is asked for at creation, rather than in
- * Edit details afterwards. A domain is documented once, from the registrar's
- * page, with everything in front of you; making somebody save it and then open
- * it again to type the expiry was the complaint. The required field the kind
- * is created by (the domain name) is asked for above, so it is left out here.
+ * Edit details afterwards, each with the one field the kind is created by —
+ * asked for above, so left out here. A domain is documented once, from the
+ * registrar's page, with everything in front of you; a network the same way,
+ * from the firewall's: making somebody save it and then open it again to type
+ * the subnet and gateway was the complaint.
  */
-const DETAILS_AT_CREATE = new Set(['domain']);
-const detailsAtCreate = (nodeType: string) =>
-  DETAILS_AT_CREATE.has(nodeType)
-    ? detailFieldsFor(nodeType).filter((f) => f.key !== 'domain_name')
-    : [];
+const DETAILS_AT_CREATE: Record<string, string> = {
+  domain: 'domain_name',
+  network: 'kind',
+};
+const detailsAtCreate = (nodeType: string) => {
+  const askedAbove = DETAILS_AT_CREATE[nodeType];
+  return askedAbove ? detailFieldsFor(nodeType).filter((f) => f.key !== askedAbove) : [];
+};
 
 const humanise = (v: string) => v.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 

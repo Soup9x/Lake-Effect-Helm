@@ -114,6 +114,17 @@ const MAPPED: Record<string, { kind: 'invalid' | 'conflict' | 'not_found'; fallb
 };
 
 /**
+ * Check constraints whose refusal a person meets in a form, by name, with the
+ * sentence that says what to change. Every other check keeps the fallback.
+ */
+const CHECK_SENTENCES: Record<string, string> = {
+  network_gateway_in_cidr: 'the gateway must sit inside the subnet',
+  network_dhcp_range_ordered: 'the DHCP range must start before it ends',
+  network_vlan_range: 'a VLAN ID is between 1 and 4094',
+  domain_expiry_after_registration: 'a domain must expire after it was registered',
+};
+
+/**
  * The ApiError a database refusal becomes, or null when it is a fault.
  *
  * insufficient_privilege (42501) is not here: the handler maps it itself,
@@ -132,7 +143,8 @@ export function mapDatabaseError(error: unknown): ApiError | null {
   // fault until somebody decides what it means.
   if (pg.code === 'P0001' && own === null) return null;
 
-  const message = own ?? entry.fallback;
+  const named = pg.code === '23514' && pg.constraint ? CHECK_SENTENCES[pg.constraint] : undefined;
+  const message = own ?? named ?? entry.fallback;
   switch (entry.kind) {
     case 'invalid':
       return ApiError.invalid(message);

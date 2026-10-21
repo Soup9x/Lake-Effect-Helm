@@ -10,7 +10,7 @@ import { useStepUp } from './step-up-dialog';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
 
-export type BulkTarget = 'client' | 'node';
+export type BulkTarget = 'client' | 'node' | 'contact';
 
 /**
  * The bar that appears when something is selected.
@@ -46,7 +46,7 @@ export function BulkBar({
   const [done, setDone] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  const noun = target === 'client' ? 'client' : 'item';
+  const noun = target === 'client' ? 'client' : target === 'contact' ? 'contact' : 'item';
   const label = `${ids.length} ${noun}${ids.length === 1 ? '' : 's'} selected`;
 
   async function post(path: string, body: unknown, verb: string) {
@@ -86,7 +86,8 @@ export function BulkBar({
       <div className="flex flex-wrap items-center gap-2 rounded-full border border-border-strong bg-surface-raised px-3 py-2 shadow-lg">
         <span className="px-1 text-sm font-medium text-ink">{label}</span>
 
-        <TagPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />
+        {/* A contact has no tags and no export of its own: archive is what applies. */}
+        {target !== 'contact' && <TagPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />}
 
         <Button
           variant="secondary"
@@ -100,7 +101,7 @@ export function BulkBar({
           {archived ? 'Restore' : 'Archive'}
         </Button>
 
-        <ExportPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />
+        {target !== 'contact' && <ExportPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />}
 
         {copyable && !archived && (
           <CopyAction

@@ -4,7 +4,7 @@ import { ApiError, zodIssues } from '@/lib/api/errors';
 import { MAX_SELECTION, bulkSetArchived } from '@/lib/bulk/service';
 
 const schema = z.object({
-  target: z.enum(['client', 'node']),
+  target: z.enum(['client', 'node', 'contact']),
   ids: z.array(z.guid()).min(1).max(MAX_SELECTION),
   /** false restores. The same endpoint, because they are one state. */
   archived: z.boolean(),
@@ -41,7 +41,7 @@ export const POST = tenantRoute(
     await tx`
       SELECT helm.audit(
         ${body.archived ? 'bulk.archive' : 'bulk.restore'},
-        ${body.target === 'client' ? 'organization' : 'asset_node'},
+        ${body.target === 'client' ? 'organization' : body.target === 'contact' ? 'contact' : 'asset_node'},
         NULL::uuid,
         'success'::audit_outcome,
         NULL::uuid, NULL::uuid, NULL::text,
