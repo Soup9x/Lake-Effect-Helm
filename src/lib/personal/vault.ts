@@ -251,6 +251,55 @@ export async function deleteEntry(tx: HelmTx, id: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * Many entries at once, from another password manager's export
+ * (src/lib/personal/import.ts reads the file; this stores what it found).
+ *
+ * ONE TRANSACTION: an import lands whole or not at all, so a failure halfway
+ * never leaves half a vault to tidy by hand.
+ *
+ * TWO THINGS ARE LEFT OUT RATHER THAN REFUSED, and counted so the person is
+ * told: an entry identical to one already stored (same name, username and
+ * website — so importing the same file twice does not double the vault), and
+ * a one-time code seed that cannot be read (Steam's, a typo), which costs that
+ * entry its code and not its password.
+ *
+ * ONE AUDIT ROW for the whole import, with the counts and no names.
+ */
+export async function importEntries(
+  tx: HelmTx, tenantId: string, ownerId: string, entries: readonly VaultInput[],
+): Promise<{ imported: number; duplicates: number; codesDropped: number }> {
+  const existing = await tx<{ k: string }[]>`
+    SELECT lower(name) || chr(31) || coalesce(lower(username), '') || chr(31) || coalesce(lower(url), '') AS k
+    FROM personal_credential
+  `;
+  const seen = new Set(existing.map((r) => r.k));
+  let imported = 0;
+  let duplicates = 0;
+  let codesDropped = 0;
+  for (const entry of entries) {
+    const key = [entry.name, entry.username ?? '', entry.url ?? '']
+      .map((part) => (part ?? '').trim().toLowerCase()).join(String.fromCharCode(31));
+    if (seen.has(key)) { duplicates += 1; continue; }
+    seen.add(key);
+    let totp = entry.totp ?? null;
+    if (totp) {
+      try { parseTotpEnrolment(totp); } catch (error) {
+        if (!(error instanceof TotpEnrolmentError)) throw error;
+        totp = null;
+        codesDropped += 1;
+      }
+    }
+    await createEntry(tx, tenantId, ownerId, { ...entry, totp });
+    imported += 1;
+  }
+  await tx`
+    SELECT helm.audit('personal_vault.imported', 'personal_credential', NULL, 'success',
+                      NULL, NULL, NULL, ${tx.json({ imported, duplicates, codesDropped })}::jsonb)
+  `;
+  return { imported, duplicates, codesDropped };
+}
+
 /* ------------------------------------------------------------------------- *
  * Reading
  * ------------------------------------------------------------------------- */

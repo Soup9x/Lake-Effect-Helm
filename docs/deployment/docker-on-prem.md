@@ -245,7 +245,7 @@ cd /opt/lake-effect-helm
 sudo ./deploy/init-secrets.sh
 ```
 
-This writes exactly two things and refuses to overwrite either:
+This writes exactly three things and refuses to overwrite any of them:
 
 * **`deploy/secrets/master.key`** — a versioned JSON key ring, mode `0400`,
   owned by uid 10001:
@@ -263,6 +263,9 @@ This writes exactly two things and refuses to overwrite either:
 
 * **`.env`** — every password and application secret, mode `0600`.
 
+* **`deploy/secrets/backup.pass`** — the passphrase that seals every built-in
+  backup set (§7.1a), mode `0400`, owned by uid 10001.
+
 Confirm the permissions before going further; nothing downstream will:
 
 ```bash
@@ -270,11 +273,11 @@ stat -c '%a %u:%g %n' deploy/secrets/master.key
 # 400 10001:10001 deploy/secrets/master.key
 ```
 
-> **Back both files up off this host now, encrypted.** Without `master.key`
+> **Back all three up off this host now, encrypted.** Without `master.key`
 > the database is a pile of ciphertext and there is no recovery path — that is
-> the design, not a gap in it. Without `.env` you will be rebuilding database
-> roles by hand. §7 covers doing this properly; do it crudely right now
-> regardless.
+> the design, not a gap in it. Without `backup.pass` every built-in backup set
+> is noise. Without `.env` you will be rebuilding database roles by hand. §7
+> covers doing this properly; do it crudely right now regardless.
 
 ---
 
@@ -775,24 +778,34 @@ reachable from the internet. Most MSPs should put it behind a VPN and use
 | # | Item | Where it lives | If you lose it |
 | --- | --- | --- | --- |
 | 1 | Database | `lake-effect-helm_postgres-data` | Everything, unless you have a dump |
-| 2 | **Master key** | `deploy/secrets/master.key` (**bind mount, not a volume**) | Every credential is unrecoverable ciphertext. Permanently. |
-| 3 | `.env` | repo root | Database roles must be rebuilt by hand |
-| 4 | Export passphrases | `lake-effect-helm_helm-passphrases` | Existing encrypted bundles cannot be opened |
-| 5 | Caddy CA | `lake-effect-helm_caddy-data` | Every distributed root certificate stops matching |
-| 6 | Audit anchors | `lake-effect-helm_helm-anchors` | Historical chain heads lose their witness |
+| 2 | Client documents | `lake-effect-helm_helm-documents` | Every uploaded file, client logo and profile picture. The rows survive and point at nothing. |
+| 3 | **Master key** | `deploy/secrets/master.key` (**bind mount, not a volume**) | Every credential, document and personal vault entry is unrecoverable ciphertext. Permanently. |
+| 4 | **Backup passphrase** | `deploy/secrets/backup.pass` (**bind mount, not a volume**) | Every built-in backup set (§7.1a) cannot be opened |
+| 5 | `.env` | repo root | Database roles, `AUTH_SECRET` and your SSO and Vault settings must be rebuilt by hand |
+| 6 | Export passphrases | `lake-effect-helm_helm-passphrases` | Existing encrypted bundles cannot be opened |
+| 7 | Caddy CA | `lake-effect-helm_caddy-data` | Every distributed root certificate stops matching |
+| 8 | Audit anchors | `lake-effect-helm_helm-anchors` | Historical chain heads lose their witness |
+
+Plus anything you changed by hand: `deploy/tls/` if you supplied your own
+certificate (§6.2), and your edits to the `Caddyfile` or a compose override.
 
 > **The master key is a file on your host, not a Docker volume.** A backup job
-> that walks `docker volume ls` will not see it. This is the single most common
-> way an on-premises Helm backup turns out to be worthless — the database
-> restores perfectly and decrypts nothing.
+> that walks `docker volume ls` will not see it, nor `backup.pass` beside it.
+> This is the single most common way an on-premises Helm backup turns out to be
+> worthless — the database restores perfectly and decrypts nothing.
 
 Two separation rules that are part of the security design, not preferences:
 
-* **(2) must not live on the same medium as (1).** The whole point of envelope
-  encryption is that a stolen database dump yields nothing. Put the key backup
-  somewhere the database backup is not.
-* **(4) must not live in the same archive as `helm-exports`.** A bundle and its
+* **(3) and (4) must not live on the same medium as (1) and (2).** The whole
+  point of envelope encryption is that a stolen database dump yields nothing.
+  Put the key backup somewhere the database backup is not.
+* **(6) must not live in the same archive as `helm-exports`.** A bundle and its
   passphrase travelling together is an unencrypted bundle.
+
+And one rule the other way: **(1) and (2) belong in the SAME backup set.** The
+filenames, the folder tree and the nonce that opens each document are rows in
+the database; restoring one half without the other leaves documents nobody can
+open.
 
 ### 7.1a Built-in backups
 
@@ -814,8 +827,8 @@ on a schedule, and records each run where Settings can show it.
   file with its size and the SHA-256 of its contents before sealing. Every
   file is sealed with AES-256-GCM under a key derived (scrypt) from
   `deploy/secrets/backup.pass`, which `init-secrets.sh` generates.
-* **What it never contains:** the master key and `.env`. §7.1's rule stands:
-  back those up by hand to a different medium (§7.3). The backup container
+* **What it never contains:** the master key, `backup.pass` and `.env`. §7.1's
+  rule stands: back those up by hand to a different medium (§7.3). The backup container
   does not even mount the key.
 * **Opening a set:**
 
@@ -890,7 +903,7 @@ first-time initialisation. If you do capture globals anyway:
 ### 7.3 Backing up the key and `.env`
 
 ```bash
-tar czf helm-secrets.tar.gz deploy/secrets/master.key .env
+tar czf helm-secrets.tar.gz deploy/secrets/master.key deploy/secrets/backup.pass .env
 gpg --symmetric --cipher-algo AES256 helm-secrets.tar.gz
 rm helm-secrets.tar.gz
 # Store helm-secrets.tar.gz.gpg OFF this host.
@@ -907,6 +920,12 @@ alongside a host directory:
 
 ```bash
 mkdir -p ./backups
+
+# Client documents, logos and profile pictures — WITH the database dump.
+docker run --rm \
+  -v lake-effect-helm_helm-documents:/src:ro \
+  -v "$PWD/backups:/dst" \
+  alpine tar czf /dst/helm-documents.tar.gz -C /src .
 
 # Passphrases — its OWN archive, on its OWN backup set.
 docker run --rm \
@@ -949,13 +968,13 @@ docker compose exec -T postgres sh -c \
   'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U postgres -d helm -Fc' > "$DEST/helm.dump"
 
 # 2. Volumes, passphrases in their own archive
-for vol in helm-passphrases caddy-data helm-anchors; do
+for vol in helm-documents helm-passphrases caddy-data helm-anchors; do
   docker run --rm -v "lake-effect-helm_$vol:/src:ro" -v "$DEST:/dst" \
     alpine tar czf "/dst/$vol.tar.gz" -C /src .
 done
 
 # 3. Key material, encrypted, to the OTHER medium
-tar czf - deploy/secrets/master.key .env \
+tar czf - deploy/secrets/master.key deploy/secrets/backup.pass .env \
   | gpg --batch --yes --symmetric --cipher-algo AES256 \
         --passphrase-file /root/.helm-backup-pass \
         -o "$VAULT/secrets-$STAMP.tar.gz.gpg"
@@ -979,8 +998,8 @@ cd /opt/lake-effect-helm
 gpg -d /backup/helm-keys/secrets-<STAMP>.tar.gz.gpg | tar xzf -
 
 # 2. Permissions. Restoring from an archive does not preserve these reliably.
-sudo chown 10001:10001 deploy/secrets/master.key
-sudo chmod 0400 deploy/secrets/master.key
+sudo chown 10001:10001 deploy/secrets/master.key deploy/secrets/backup.pass
+sudo chmod 0400 deploy/secrets/master.key deploy/secrets/backup.pass
 sudo chmod 0600 .env
 
 # 3. Bring up ONLY the database, so migrate does not race the restore.
@@ -997,7 +1016,7 @@ docker compose exec -T postgres sh -c \
   < /backup/helm/<STAMP>/helm.dump
 
 # 5. Volumes.
-for vol in helm-passphrases caddy-data helm-anchors; do
+for vol in helm-documents helm-passphrases caddy-data helm-anchors; do
   docker run --rm -v "lake-effect-helm_$vol:/dst" \
     -v "/backup/helm/<STAMP>:/src:ro" \
     alpine sh -c "rm -rf /dst/* && tar xzf /src/$vol.tar.gz -C /dst"

@@ -2,7 +2,7 @@ import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { CategoryGrid, type CategoryRecord } from '@/components/shell/category-grid';
 import { ViewHeader } from '@/components/shell/view-header';
-import { AddVaultEntryButton } from '@/components/personal-vault';
+import { AddVaultEntryButton, ImportVaultButton } from '@/components/personal-vault';
 import { listVault } from '@/lib/personal/vault';
 
 export const dynamic = 'force-dynamic';
@@ -45,7 +45,7 @@ export default async function MyPasswordsPage() {
         trail={[{ label: 'Personal', href: '/personal' }]}
         title="My passwords"
         description={VAULT_PROMISE}
-        actions={<AddVaultEntryButton />}
+        actions={<><ImportVaultButton /><AddVaultEntryButton /></>}
       />
       <CategoryGrid
         records={records}

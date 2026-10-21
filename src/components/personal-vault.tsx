@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ExternalLink, KeyRound, Loader2, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { ExternalLink, FileUp, KeyRound, Loader2, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label, Textarea } from './ui/field';
 import { Modal } from './ui/modal';
@@ -13,6 +13,7 @@ import { RevealButton } from './reveal-button';
 import { TotpPanel } from './totp-panel';
 import { apiFetch } from '@/lib/ui/api';
 import type { VaultEntry } from '@/lib/personal/vault';
+import { ImportFormatError, MAX_IMPORT_ENTRIES, parseVaultImport, type ParsedImport } from '@/lib/personal/import';
 
 /**
  * My passwords: the signed-in person's own vault (1030), laid out the way a
@@ -39,6 +40,140 @@ export function AddVaultEntryButton() {
         Add a password
       </Button>
       {open && <EntryDialog entry={null} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/**
+ * Import, beside + Add a password: another password manager's export into
+ * this vault.
+ *
+ * READ HERE, IN THE BROWSER, before anything is sent: the dialog says what it
+ * found — the format, how many logins, how many it is leaving out — and only
+ * then is there a button that stores them. The file itself never leaves the
+ * page; the entries go to the vault's own import route, in one transaction.
+ *
+ * The export is a file of every password in plain text. The dialog says to
+ * delete it afterwards, because that is the step people forget.
+ */
+export function ImportVaultButton() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [parsed, setParsed] = useState<ParsedImport | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<{ imported: number; duplicates: number; codesDropped: number } | null>(null);
+
+  function reset() {
+    setParsed(null); setFileName(null); setError(null); setDone(null); setBusy(false);
+  }
+
+  async function read(file: File) {
+    setError(null); setDone(null); setParsed(null); setFileName(file.name);
+    if (file.size > 16 * 1024 * 1024) { setError('That file is larger than 16 MB, which is not a password export.'); return; }
+    try {
+      const result = parseVaultImport(await file.text());
+      if (result.entries.length === 0) { setError('No logins were found in that file.'); return; }
+      if (result.entries.length > MAX_IMPORT_ENTRIES) {
+        setError(`That file holds ${result.entries.length} logins; one import takes up to ${MAX_IMPORT_ENTRIES}. Split it and import each part.`);
+        return;
+      }
+      setParsed(result);
+    } catch (cause) {
+      setError(cause instanceof ImportFormatError ? cause.message : 'That file could not be read.');
+    }
+  }
+
+  async function store() {
+    if (!parsed) return;
+    setBusy(true); setError(null);
+    try {
+      const result = await apiFetch<{ imported: number; duplicates: number; codesDropped: number }>(
+        '/api/personal/vault/import', { json: { entries: parsed.entries } },
+      );
+      if (!result.ok) { setError(result.message); return; }
+      setDone(result.value);
+      setParsed(null);
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const withPassword = parsed?.entries.filter((e) => e.password).length ?? 0;
+  const withCode = parsed?.entries.filter((e) => e.totp).length ?? 0;
+
+  return (
+    <>
+      <Button variant="secondary" size="sm" onClick={() => { reset(); setOpen(true); }}>
+        <FileUp aria-hidden />
+        Import
+      </Button>
+      <Modal
+        open={open}
+        onOpenChange={(next) => { setOpen(next); if (!next) reset(); }}
+        title="Import passwords"
+        icon={FileUp}
+        description="From another password manager's export. Read on this page first; nothing is stored until you say so."
+        size="lg"
+      >
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="vault-import-file">Export file</Label>
+            <Input id="vault-import-file" type="file" accept=".csv,.json,text/csv,application/json"
+                   onChange={(e) => { const file = e.target.files?.[0]; if (file) void read(file); }} />
+            <FieldHint>
+              CSV from Bitwarden, Chrome or Edge, Firefox, 1Password, LastPass or KeePass, or Bitwarden&apos;s
+              unencrypted JSON. Logins only; cards, identities and secure notes are left out.
+            </FieldHint>
+          </div>
+
+          {parsed && (
+            <div className="space-y-2 rounded-md border border-border p-3 text-sm">
+              <p className="text-ink">
+                <span className="font-medium">{parsed.entries.length}</span> login{parsed.entries.length === 1 ? '' : 's'} in{' '}
+                {fileName ? <span className="font-medium">{fileName}</span> : 'the file'} ({parsed.format}):{' '}
+                {withPassword} with a password, {withCode} with a one-time code.
+                {parsed.skipped > 0 && ` ${parsed.skipped} other item${parsed.skipped === 1 ? '' : 's'} left out.`}
+              </p>
+              <ul className="max-h-40 overflow-y-auto text-xs text-ink-muted">
+                {parsed.entries.slice(0, 50).map((e, i) => (
+                  <li key={i} className="truncate">{e.name}{e.username ? ` · ${e.username}` : ''}</li>
+                ))}
+                {parsed.entries.length > 50 && <li>…and {parsed.entries.length - 50} more</li>}
+              </ul>
+              <p className="text-xs text-ink-faint">
+                An entry with the same name, username and website as one you already have is skipped, so importing
+                the same file twice adds nothing.
+              </p>
+            </div>
+          )}
+
+          {done && (
+            <p role="status" className="rounded-md bg-surface-sunken px-3 py-2 text-sm text-ink">
+              Imported {done.imported} {done.imported === 1 ? 'entry' : 'entries'}.
+              {done.duplicates > 0 && ` ${done.duplicates} already here, skipped.`}
+              {done.codesDropped > 0 && ` ${done.codesDropped} one-time code${done.codesDropped === 1 ? '' : 's'} could not be read and ${done.codesDropped === 1 ? 'was' : 'were'} left off.`}
+              {' '}Now delete the export file: it holds every password in plain text.
+            </p>
+          )}
+
+          {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+
+          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+            {parsed ? (
+              <Button type="button" variant="primary" disabled={busy} onClick={() => void store()}>
+                {busy && <Loader2 className="animate-spin" aria-hidden />}
+                Import {parsed.entries.length} {parsed.entries.length === 1 ? 'entry' : 'entries'}
+              </Button>
+            ) : null}
+            <Button type="button" variant="ghost" disabled={busy} onClick={() => setOpen(false)}>
+              {done ? 'Close' : 'Cancel'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </>
   );
 }
