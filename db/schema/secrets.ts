@@ -200,3 +200,28 @@ export type RevealDenialReason =
   | 'not_a_totp_seed'
   | 'no_such_version'
   | 'key_destroyed';
+
+/**
+ * 1030 — a person's own passwords. Owner-only by RLS, with no administrator
+ * override; one envelope per entry under the tenant data key; no organisation,
+ * so nothing here reaches a client list, search or an export.
+ */
+export const personalCredential = pgTable('personal_credential', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  ownerUserId: uuid('owner_user_id').notNull(),
+  name: text('name').notNull(),
+  username: text('username'),
+  url: text('url'),
+  notes: text('notes'),
+  hasPassword: boolean('has_password').notNull().default(false),
+  hasTotp: boolean('has_totp').notNull().default(false),
+  dataKeyId: uuid('data_key_id').references(() => tenantDataKey.id),
+  secretVersion: integer('secret_version').notNull().default(0),
+  secretCiphertext: bytea('secret_ciphertext'),
+  secretNonce: bytea('secret_nonce'),
+  secretTag: bytea('secret_tag'),
+  secretAad: text('secret_aad'),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+});
