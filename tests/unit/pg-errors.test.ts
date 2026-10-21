@@ -68,6 +68,16 @@ describe('mapDatabaseError', () => {
     expect(mapped?.message).not.toMatch(/smtp|relation|constraint/);
   });
 
+  it('says what to change for a check a person meets in a form, by its name', () => {
+    const mapped = mapDatabaseError(
+      pg('23514', 'new row for relation "network" violates check constraint "network_gateway_in_cidr"', {
+        constraint_name: 'network_gateway_in_cidr',
+      }),
+    );
+    expect(mapped?.status).toBe(400);
+    expect(mapped?.message).toBe('the gateway must sit inside the subnet');
+  });
+
   it('maps the constraint family to the right status class', () => {
     expect(mapDatabaseError(pg('23505', 'duplicate key value'))?.status).toBe(409);
     expect(mapDatabaseError(pg('23P01', 'conflicting key value'))?.status).toBe(409);

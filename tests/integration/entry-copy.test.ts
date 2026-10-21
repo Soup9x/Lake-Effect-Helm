@@ -339,6 +339,45 @@ describe('creating a domain with its details', () => {
   });
 });
 
+describe('creating a network with its configuration', () => {
+  it('stores the subnet, gateway, VLAN, DNS, DHCP range and Wi-Fi with it', async () => {
+    currentUser = ADMIN;
+    const response = await createAsset(req('POST', {
+      organizationId: IDS.orgAcme, nodeType: 'network', name: 'Acme Voice', networkKind: 'vlan',
+      detail: {
+        cidr: '10.20.30.0/24', gateway: '10.20.30.1', vlan_id: '30',
+        dns_servers: '10.20.30.10, 1.1.1.1', dhcp_range_start: '10.20.30.100', dhcp_range_end: '10.20.30.200',
+        ssid: 'Acme-Voice', purpose: 'Voice', is_guest: false,
+      },
+    }));
+    expect(response.status, await response.clone().text()).toBe(200);
+    const { asset } = await json<{ asset: { id: string } }>(response);
+    const [row] = await su((sql) => sql<{
+      kind: string; cidr: string; gateway: string; vlan_id: number; dns: string[]; ssid: string; purpose: string; is_guest: boolean;
+    }[]>`
+      SELECT kind::text, cidr::text, host(gateway) AS gateway, vlan_id,
+             array(SELECT host(d) FROM unnest(dns_servers) d) AS dns, ssid, purpose, is_guest
+      FROM network WHERE id = ${asset.id}::uuid`);
+    expect(row).toMatchObject({
+      kind: 'vlan', cidr: '10.20.30.0/24', gateway: '10.20.30.1', vlan_id: 30,
+      dns: ['10.20.30.10', '1.1.1.1'], ssid: 'Acme-Voice', purpose: 'Voice', is_guest: false,
+    });
+  });
+
+  it('refuses a gateway outside the subnet, and leaves no network behind', async () => {
+    currentUser = ADMIN;
+    const refused = await createAsset(req('POST', {
+      organizationId: IDS.orgAcme, nodeType: 'network', name: 'Acme Broken', networkKind: 'subnet',
+      detail: { cidr: '10.40.0.0/24', gateway: '192.168.1.1' },
+    }));
+    expect(refused.status).toBe(400);
+    expect(await message(refused)).toMatch(/gateway/i);
+    const [left] = await su((sql) => sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM asset_node WHERE name = 'Acme Broken'`);
+    expect(left!.n).toBe(0);
+  });
+});
+
 describe('a location’s address', () => {
   it('reads as one line, with the country only when it is not the default', () => {
     expect(siteAddress({
