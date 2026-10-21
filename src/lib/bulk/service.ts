@@ -31,7 +31,7 @@ import { ApiError } from '../api/errors';
 
 export const MAX_SELECTION = 500;
 
-export type BulkTarget = 'client' | 'node';
+export type BulkTarget = 'client' | 'node' | 'contact';
 
 export interface BulkOutcome {
   /** Ids the caller asked for. */
@@ -146,7 +146,15 @@ function normaliseTags(raw: string[]): string[] {
 const TABLE: Record<BulkTarget, { name: string; archiveColumn: string; label: string }> = {
   client: { name: 'organization', archiveColumn: 'archived_at', label: 'client' },
   node: { name: 'asset_node', archiveColumn: 'archived_at', label: 'item' },
+  // A contact archives (0850) but has no tags column: its badges are its role
+  // flags. Tagging refuses it below rather than reaching for a column that
+  // is not there.
+  contact: { name: 'contact', archiveColumn: 'archived_at', label: 'contact' },
 };
+
+function taggable(target: BulkTarget): void {
+  if (target === 'contact') throw ApiError.invalid('contacts are not tagged; their badges are their roles');
+}
 
 /**
  * Add tags to every selected row, keeping what is already there.
@@ -162,6 +170,7 @@ export async function bulkAddTags(
   ids: string[],
   tags: string[],
 ): Promise<BulkOutcome> {
+  taggable(target);
   const selection = normaliseSelection(ids);
   const clean = normaliseTags(tags);
   const table = TABLE[target];
@@ -190,6 +199,7 @@ export async function bulkRemoveTags(
   ids: string[],
   tags: string[],
 ): Promise<BulkOutcome> {
+  taggable(target);
   const selection = normaliseSelection(ids);
   const clean = normaliseTags(tags);
   const table = TABLE[target];
@@ -245,7 +255,7 @@ export async function bulkSetArchived(
         `UPDATE ${table.name} SET
            ${table.archiveColumn} = CASE WHEN $2::boolean THEN now() ELSE NULL END,
            updated_at = now()
-         WHERE id = ANY($1::uuid[])
+         WHERE id = ANY($1::uuid[])${target === 'contact' ? ' AND deleted_at IS NULL' : ''}
          RETURNING id`,
         [selection, archived],
       ),

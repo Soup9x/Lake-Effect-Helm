@@ -535,3 +535,62 @@ describe('the audit trail', () => {
     }
   });
 });
+
+describe('contacts', () => {
+  const contacts: Record<'acme1' | 'acme2' | 'globex', string> = { acme1: '', acme2: '', globex: '' };
+  const contactArchivedAt = async (id: string) => {
+    const sql = superuserSql();
+    try {
+      const [row] = await sql<{ archived_at: Date | null }[]>`SELECT archived_at FROM contact WHERE id = ${id}::uuid`;
+      return row?.archived_at ?? null;
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  };
+
+  beforeAll(async () => {
+    const sql = superuserSql();
+    try {
+      for (const [key, org, last] of [
+        ['acme1', IDS.orgAcme, 'One'], ['acme2', IDS.orgAcme, 'Two'], ['globex', IDS.orgGlobex, 'Three'],
+      ] as const) {
+        const [row] = await sql<{ id: string }[]>`
+          INSERT INTO contact (tenant_id, organization_id, first_name, last_name)
+          VALUES (${IDS.tenant1}::uuid, ${org}::uuid, 'Bulk', ${last}) RETURNING id`;
+        contacts[key] = row!.id;
+      }
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('archives a selection of contacts, and restores it', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const ids = [contacts.acme1, contacts.acme2];
+    const archived = await bulkArchive(post('/api/bulk/archive', { target: 'contact', ids, archived: true }));
+    expect(archived.status).toBe(200);
+    expect((await body(archived)).affected).toBe(2);
+    expect(await contactArchivedAt(contacts.acme1)).not.toBeNull();
+    expect(await contactArchivedAt(contacts.acme2)).not.toBeNull();
+
+    const restored = await bulkArchive(post('/api/bulk/archive', { target: 'contact', ids, archived: false }));
+    expect(restored.status).toBe(200);
+    expect(await contactArchivedAt(contacts.acme1)).toBeNull();
+  });
+
+  it('refuses a selection reaching a contact the actor cannot see, and changes nothing', async () => {
+    asUser(SCOPED_ID, 'scoped@northwind.test');
+    const response = await bulkArchive(post('/api/bulk/archive', {
+      target: 'contact', ids: [contacts.acme1, contacts.globex], archived: true,
+    }));
+    expect(response.status).toBe(403);
+    expect(await contactArchivedAt(contacts.acme1)).toBeNull();
+    expect(await contactArchivedAt(contacts.globex)).toBeNull();
+  });
+
+  it('does not tag contacts, which have no tags', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const response = await bulkTags(post('/api/bulk/tags', { target: 'contact', ids: [contacts.acme1], tags: ['x'] }));
+    expect(response.status).toBe(400);
+  });
+});

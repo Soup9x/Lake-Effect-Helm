@@ -8,11 +8,13 @@
  * Without this wrapper the page itself would have to be a client component, and
  * every query it runs would have to move to an endpoint.
  *
- * SELECTION, on lists of entries only. A list that is all entries — devices,
- * credentials, domains, the global lists — gets checkboxes and the bulk bar:
- * archive or restore, tags, export, and Make copies. A list mixing kinds the
- * bulk actions cannot treat alike (documents with folders, contacts, locations)
- * does not, because a checkbox that does nothing is worse than none.
+ * SELECTION, on lists of entries and on Contacts. A list that is all entries —
+ * devices, credentials, domains, the global lists — gets checkboxes and the
+ * bulk bar: archive or restore, tags, export, and Make copies. Contacts get
+ * archive and restore, which is what a contact has (no tags column, no export
+ * of its own). A list mixing kinds the bulk actions cannot treat alike
+ * (documents with folders, locations) does not, because a checkbox that does
+ * nothing is worse than none.
  *
  * WHAT IT DOES NOT DO: decrypt anything. The OTP badge is a LINK to the credential, not a
  * code — generating one requires secret:reveal and writes an audit row, and a
@@ -158,8 +160,13 @@ export function CategoryGrid({
   const [selected, setSelected] = useState<string[]>([]);
   const [clearSignal, setClearSignal] = useState(0);
 
-  // Checkboxes only where every row is an entry: see the header.
-  const selectable = canWrite && records.length > 0 && records.every((r) => r.removeKind === 'node');
+  // Checkboxes only where every row is an entry, or every row a contact: see
+  // the header. A list mixing the two would need two kinds of bulk action.
+  const bulkTarget: 'node' | 'contact' | null =
+    records.length > 0 && records.every((r) => r.removeKind === 'node') ? 'node'
+      : records.length > 0 && records.every((r) => r.removeKind === 'contact') ? 'contact'
+        : null;
+  const selectable = canWrite && bulkTarget !== null;
   const chosen = useMemo(() => {
     const ids = new Set(selected);
     return records.filter((r) => ids.has(r.id));
@@ -375,7 +382,7 @@ export function CategoryGrid({
 
       {selectable && chosen.length > 0 && (
         <BulkBar
-          target="node"
+          target={bulkTarget ?? 'node'}
           ids={chosen.map((r) => r.id)}
           // Restore when everything ticked is archived; Archive otherwise.
           archived={chosen.every((r) => r.archived)}
