@@ -30,7 +30,7 @@ interface EmailDraft { address: string; label: string; isPrimary: boolean }
 interface PhoneDraft { number: string; extension: string; label: string; isPrimary: boolean }
 
 interface ContactView {
-  firstName: string; lastName: string; title: string | null;
+  firstName: string; lastName: string; title: string | null; siteId: string | null;
   isPrimary: boolean; isTechnical: boolean; isBilling: boolean; isEmergency: boolean; isAuthorised: boolean;
   emails: { address: string; label: string; isPrimary: boolean }[];
   phones: { number: string; extension: string | null; label: string; isPrimary: boolean }[];
@@ -48,12 +48,15 @@ type FlagKey = (typeof FLAGS)[number][0];
 export function ContactForm({
   organizationId,
   contactId,
+  defaultSiteId,
   open,
   onOpenChange,
 }: {
   organizationId: string;
   /** Set to edit that contact; absent to create one. */
   contactId?: string | undefined;
+  /** For a new contact made from a location's page: that location, preselected. */
+  defaultSiteId?: string | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -62,6 +65,9 @@ export function ContactForm({
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [title, setTitle] = useState('');
+  // Which of the client's locations this person works at, if one in particular.
+  const [siteId, setSiteId] = useState(defaultSiteId ?? '');
+  const [sites, setSites] = useState<{ id: string; name: string; city: string | null }[]>([]);
   const [flags, setFlags] = useState<Record<FlagKey, boolean>>({
     isPrimary: false, isTechnical: false, isBilling: false, isEmergency: false, isAuthorised: false,
   });
@@ -72,10 +78,22 @@ export function ContactForm({
   const [error, setError] = useState<string | null>(null);
 
   const reset = () => {
-    setFirstName(''); setLastName(''); setTitle('');
+    setFirstName(''); setLastName(''); setTitle(''); setSiteId(defaultSiteId ?? '');
     setFlags({ isPrimary: false, isTechnical: false, isBilling: false, isEmergency: false, isAuthorised: false });
     setEmails([]); setPhones([]); setError(null);
   };
+
+  // The client's locations, for the Location choice, fetched when the dialog opens.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void apiFetch<{ sites: { id: string; name: string; city: string | null }[] }>(
+      `/api/sites?organizationId=${organizationId}`, { method: 'GET' },
+    ).then((result) => {
+      if (!cancelled && result.ok) setSites(result.value?.sites ?? []);
+    });
+    return () => { cancelled = true; };
+  }, [open, organizationId]);
 
   // Edit mode: the current contact, fetched when the dialog opens.
   useEffect(() => {
@@ -87,7 +105,7 @@ export function ContactForm({
       setLoading(false);
       if (!result.ok) { setError(result.message); return; }
       const c = result.value!.contact;
-      setFirstName(c.firstName); setLastName(c.lastName); setTitle(c.title ?? '');
+      setFirstName(c.firstName); setLastName(c.lastName); setTitle(c.title ?? ''); setSiteId(c.siteId ?? '');
       setFlags({
         isPrimary: c.isPrimary, isTechnical: c.isTechnical, isBilling: c.isBilling,
         isEmergency: c.isEmergency, isAuthorised: c.isAuthorised,
@@ -107,6 +125,7 @@ export function ContactForm({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         title: title.trim() === '' ? null : title.trim(),
+        siteId: siteId === '' ? null : siteId,
         ...flags,
         emails: emails.filter((e) => e.address.trim() !== '').map((e) => ({ ...e, address: e.address.trim() })),
         phones: phones.filter((p) => p.number.trim() !== '').map((p) => ({
@@ -156,10 +175,26 @@ export function ContactForm({
           </div>
         </div>
 
-        <div>
-          <Label htmlFor="contact-title">Job title</Label>
-          <Input id="contact-title" value={title} maxLength={160} placeholder="Optional"
-                 onChange={(e) => setTitle(e.target.value)} />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <Label htmlFor="contact-title">Job title</Label>
+            <Input id="contact-title" value={title} maxLength={160} placeholder="Optional"
+                   onChange={(e) => setTitle(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="contact-site">Location</Label>
+            <Select id="contact-site" value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+              <option value="">Not at one location</option>
+              {sites.map((s) => (
+                <option key={s.id} value={s.id}>{s.city ? `${s.name} (${s.city})` : s.name}</option>
+              ))}
+              {/* An archived location still shows as itself rather than vanishing. */}
+              {siteId !== '' && !sites.some((s) => s.id === siteId) && (
+                <option value={siteId}>Current location</option>
+              )}
+            </Select>
+            <FieldHint>Where this person works. They are listed on that location&rsquo;s page.</FieldHint>
+          </div>
         </div>
 
         {/* ------------------------------------------------------------ emails */}

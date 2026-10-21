@@ -11,6 +11,7 @@ import { NotesCard } from '@/components/notes-card';
 import { HistoryCard } from '@/components/history-card';
 import { listHistory } from '@/lib/history/queries';
 import { SitePageActions } from '@/components/site-page-actions';
+import { SitePeopleCard } from '@/components/site-people-card';
 import { siteValuesFrom } from '@/lib/sites/values';
 import { categoryBySource, ORG_CATEGORIES } from '@/lib/nav/org-categories';
 import { isClientRole } from '@/lib/ui/roles';
@@ -63,6 +64,14 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
       WHERE site_id = ${siteId}::uuid AND deleted_at IS NULL AND archived_at IS NULL
       ORDER BY lower(last_name), lower(first_name)
     `;
+    // The client's other people, who can be assigned to this location.
+    const others = await tx<{ id: string; name: string; title: string | null }[]>`
+      SELECT id, first_name || ' ' || last_name AS name, title
+      FROM contact
+      WHERE organization_id = ${row.organization_id}::uuid AND site_id IS DISTINCT FROM ${siteId}::uuid
+        AND deleted_at IS NULL AND archived_at IS NULL
+      ORDER BY lower(last_name), lower(first_name)
+    `;
     const assets = await tx<AssetHere[]>`
       SELECT id, name, node_type::text, status::text
       FROM asset_node
@@ -74,11 +83,11 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
       WHERE site_id = ${siteId}::uuid AND archived_at IS NULL
       ORDER BY lower(name)
     `;
-    return { row, contacts, assets, diagrams, history: await listHistory(tx, 'site', siteId) };
+    return { row, contacts, others, assets, diagrams, history: await listHistory(tx, 'site', siteId) };
   });
   if (!data) notFound();
 
-  const { row, contacts, assets, diagrams, history } = data;
+  const { row, contacts, others, assets, diagrams, history } = data;
   const canWrite = !isClientRole(identity.roleKey);
   const values = siteValuesFrom(row);
 
@@ -184,25 +193,13 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
         <NotesCard endpoint={`/api/sites/${row.id}`} notes={row.notes} canEdit={canWrite} />
 
         <div className="grid gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>People here</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm">
-              {contacts.length === 0 ? (
-                <p className="text-ink-faint">No contacts are recorded at this location.</p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {contacts.map((c) => (
-                    <li key={c.id} className="flex flex-wrap items-baseline gap-2">
-                      <Link href={`/contacts/${c.id}`} className="font-medium text-ink hover:underline">{c.name}</Link>
-                      {c.title && <span className="text-ink-muted">{c.title}</span>}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
+          <SitePeopleCard
+            siteId={row.id}
+            organizationId={row.organization_id}
+            people={contacts}
+            others={others}
+            canWrite={canWrite && row.archived_at === null}
+          />
 
           <Card>
             <CardHeader>

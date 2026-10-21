@@ -7,6 +7,7 @@ import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { SiteForm } from '@/components/site-form';
 import { siteValuesFrom } from '@/lib/sites/values';
+import { siteAddress } from '@/lib/sites/address';
 import { CredentialEditForm } from '@/components/credential-edit-form';
 import { InlineRename } from '@/components/inline-rename';
 import { RelationshipPicker } from '@/components/relationship-picker';
@@ -423,7 +424,7 @@ export default async function OrganizationPage({
                   )}
                 </div>,
                 <div key="addr" className="text-ink-muted">
-                  {[site.address_line1, site.city, site.region].filter(Boolean).join(', ') || '—'}
+                  {siteAddress(site) ?? '—'}
                   {site.notes && (
                     <p className="mt-1 whitespace-pre-wrap break-words border-l-2 border-border pl-2 text-xs">
                       {site.notes}

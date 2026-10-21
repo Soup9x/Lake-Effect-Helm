@@ -31,7 +31,6 @@ import type { SiteValues } from '@/lib/sites/values';
 import { RowPermissionsDialog, type RowPermissions } from './row-permissions-dialog';
 import { Badge } from '../ui/badge';
 import { formatDate } from '@/lib/ui/format';
-import { CopyValueButton } from '../copy-value-button';
 
 export interface CategoryRecord {
   id: string;
@@ -235,12 +234,6 @@ export function CategoryGrid({
                 <EyeOff className="size-3.5 text-ink-faint" aria-label="Internal only" />
               </span>
             )}
-            {/*
-              Inline utilities, always visible: a password list exists so somebody
-              can copy from it, and hiding the copy button until the pointer
-              arrives makes the list look like it has none.
-            */}
-            {r.record.secondary && <CopyValueButton value={r.record.secondary} label="Copy username" />}
             {r.record.hasTotp && (
               <Link
                 href={r.record.href ?? '#'}

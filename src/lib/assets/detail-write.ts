@@ -40,6 +40,25 @@ export function coerceDetail(field: DetailField, raw: unknown): unknown {
       // A NOT NULL list column (subject_alt_names) takes '{}' when cleared.
       return list.length === 0 ? (field.required ? [] : null) : list;
     }
+    /*
+     * Checked here, not left to Postgres: postgres.js serialises a parameter
+     * the server describes as a date with new Date(…).toISOString(), which
+     * THROWS on "next tuesday" — a 500 before the database could say 400.
+     */
+    case 'date': {
+      const s = String(raw).trim();
+      const ok = /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`))
+        && new Date(`${s}T00:00:00Z`).toISOString().startsWith(s);
+      if (!ok) throw ApiError.invalid(`${field.label} must be a date (YYYY-MM-DD)`, { fields: [field.key] });
+      return s;
+    }
+    case 'datetime': {
+      const s = String(raw).trim();
+      if (Number.isNaN(Date.parse(s))) {
+        throw ApiError.invalid(`${field.label} must be a date and time`, { fields: [field.key] });
+      }
+      return s;
+    }
     case 'select': {
       const s = String(raw);
       if (!field.options?.includes(s)) {

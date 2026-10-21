@@ -25,10 +25,10 @@ import { humanise } from '@/lib/ui/format';
 import { toDateTimeLocalInput, fromDateTimeLocalInput } from '@/lib/ui/format';
 import type { DetailField } from '@/lib/assets/detail-fields';
 
-type Draft = Record<string, string | boolean>;
+export type Draft = Record<string, string | boolean>;
 
 /** A stored value as the form holds it: text for everything but a checkbox. */
-function toDraft(fields: readonly DetailField[], values: Record<string, unknown>): Draft {
+export function toDraft(fields: readonly DetailField[], values: Record<string, unknown>): Draft {
   const draft: Draft = {};
   for (const f of fields) {
     const v = values[f.key];
@@ -59,7 +59,7 @@ function toDraft(fields: readonly DetailField[], values: Record<string, unknown>
 const host = (v: string) => v.replace(/\/(32|128)$/, '');
 
 /** The request value for a changed field. */
-function toPayload(f: DetailField, v: string | boolean): unknown {
+export function toPayload(f: DetailField, v: string | boolean): unknown {
   if (f.kind === 'boolean') return v === true;
   const s = String(v).trim();
   if (s === '') return null;
@@ -131,63 +131,7 @@ export function DetailEditForm({
         size="lg"
       >
         <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            {fields.map((f) => {
-              const id = `detail-${f.key}`;
-              const value = draft[f.key];
-              const wide = f.kind === 'textarea' || f.kind === 'text_list' || f.kind === 'inet_list';
-              return (
-                <div key={f.key} className={wide ? 'sm:col-span-2' : undefined}>
-                  {f.kind === 'boolean' ? (
-                    <label htmlFor={id} className="flex items-center gap-2 pt-5 text-sm text-ink">
-                      <input
-                        id={id}
-                        type="checkbox"
-                        checked={value === true}
-                        onChange={(e) => set(f.key, e.target.checked)}
-                      />
-                      {f.label}
-                    </label>
-                  ) : (
-                    <>
-                      <Label htmlFor={id}>{f.label}{f.required && ' *'}</Label>
-                      {f.kind === 'select' ? (
-                        <Select id={id} value={String(value ?? '')} onChange={(e) => set(f.key, e.target.value)}>
-                          {!f.required && <option value="">—</option>}
-                          {f.options?.map((o) => (
-                            <option key={o} value={o}>{humanise(o)}</option>
-                          ))}
-                        </Select>
-                      ) : wide ? (
-                        <Textarea
-                          id={id}
-                          rows={f.kind === 'textarea' ? 3 : 2}
-                          value={String(value ?? '')}
-                          onChange={(e) => set(f.key, e.target.value)}
-                        />
-                      ) : (
-                        <Input
-                          id={id}
-                          type={
-                            f.kind === 'number' ? 'number'
-                              : f.kind === 'date' ? 'date'
-                                : f.kind === 'datetime' ? 'datetime-local'
-                                  : 'text'
-                          }
-                          {...(f.min !== undefined ? { min: f.min } : {})}
-                          {...(f.max !== undefined ? { max: f.max } : {})}
-                          {...(f.kind === 'number' && f.pg === 'numeric' ? { step: 'any' } : {})}
-                          value={String(value ?? '')}
-                          onChange={(e) => set(f.key, e.target.value)}
-                        />
-                      )}
-                      {f.hint && <FieldHint>{f.hint}</FieldHint>}
-                    </>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <DetailFieldInputs fields={fields} draft={draft} set={set} />
 
           {error && (
             <p role="alert" className="text-sm text-danger">{error}</p>
@@ -205,5 +149,83 @@ export function DetailEditForm({
         </div>
       </Modal>
     </>
+  );
+}
+
+/**
+ * The inputs for a kind's detail fields, one per field, laid out in two
+ * columns. Shared by Edit details and by the create dialog for kinds that ask
+ * for everything up front (a domain), so a field looks and behaves the same in
+ * both — and a field added to the catalogue appears in both.
+ */
+export function DetailFieldInputs({
+  fields,
+  draft,
+  set,
+  idPrefix = 'detail',
+}: {
+  fields: readonly DetailField[];
+  draft: Draft;
+  set: (key: string, value: string | boolean) => void;
+  idPrefix?: string;
+}) {
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {fields.map((f) => {
+        const id = `${idPrefix}-${f.key}`;
+        const value = draft[f.key];
+        const wide = f.kind === 'textarea' || f.kind === 'text_list' || f.kind === 'inet_list';
+        return (
+          <div key={f.key} className={wide ? 'sm:col-span-2' : undefined}>
+            {f.kind === 'boolean' ? (
+              <label htmlFor={id} className="flex items-center gap-2 pt-5 text-sm text-ink">
+                <input
+                  id={id}
+                  type="checkbox"
+                  checked={value === true}
+                  onChange={(e) => set(f.key, e.target.checked)}
+                />
+                {f.label}
+              </label>
+            ) : (
+              <>
+                <Label htmlFor={id}>{f.label}{f.required && ' *'}</Label>
+                {f.kind === 'select' ? (
+                  <Select id={id} value={String(value ?? '')} onChange={(e) => set(f.key, e.target.value)}>
+                    {!f.required && <option value="">—</option>}
+                    {f.options?.map((o) => (
+                      <option key={o} value={o}>{humanise(o)}</option>
+                    ))}
+                  </Select>
+                ) : wide ? (
+                  <Textarea
+                    id={id}
+                    rows={f.kind === 'textarea' ? 3 : 2}
+                    value={String(value ?? '')}
+                    onChange={(e) => set(f.key, e.target.value)}
+                  />
+                ) : (
+                  <Input
+                    id={id}
+                    type={
+                      f.kind === 'number' ? 'number'
+                        : f.kind === 'date' ? 'date'
+                          : f.kind === 'datetime' ? 'datetime-local'
+                            : 'text'
+                    }
+                    {...(f.min !== undefined ? { min: f.min } : {})}
+                    {...(f.max !== undefined ? { max: f.max } : {})}
+                    {...(f.kind === 'number' && f.pg === 'numeric' ? { step: 'any' } : {})}
+                    value={String(value ?? '')}
+                    onChange={(e) => set(f.key, e.target.value)}
+                  />
+                )}
+                {f.hint && <FieldHint>{f.hint}</FieldHint>}
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }

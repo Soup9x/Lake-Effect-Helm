@@ -18,6 +18,7 @@ import { TotpPanel } from '@/components/totp-panel';
 import { TotpSeedControl } from '@/components/totp-seed-control';
 import { CopyValueButton } from '@/components/copy-value-button';
 import { ChangePasswordButton } from '@/components/change-password-button';
+import { CopyEntryButton } from '@/components/copy-entry-button';
 import { FieldLine, FieldList, FieldRow, iconActionClass } from '@/components/field-row';
 import { formatDate, formatDateTime, humanise } from '@/lib/ui/format';
 import { recordView } from '@/lib/workspace/queries';
@@ -646,7 +647,11 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             )}
             {isCredential && secrets.length === 0 && (
               <FieldRow label="Password">
-                <FieldLine>
+                <FieldLine
+                  actions={canWrite && canManageSeed
+                    ? <ChangePasswordButton mode="set" nodeId={node.id} label={node.name} />
+                    : undefined}
+                >
                   <span className="text-ink-faint">No password stored</span>
                 </FieldLine>
               </FieldRow>
@@ -729,6 +734,11 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             : []),
         ]}
         actions={
+          <div className="flex flex-wrap items-center gap-2">
+          {/* Not procedures or custom records: copy_asset() refuses both (1020). */}
+          {canWrite && node.node_type !== 'sop' && node.node_type !== 'flexible_asset' && (
+            <CopyEntryButton nodeId={node.id} name={node.name} nodeType={node.node_type} />
+          )}
           <AssetForm
             nodeId={node.id}
             canEdit={canWrite}
@@ -743,6 +753,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
               tags: node.tags,
             }}
           />
+          </div>
         }
       />
       <PageBody>
