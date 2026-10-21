@@ -21,6 +21,7 @@ import {
   IDS, buildHarness, connectPools, disconnectPools, resetDatabase, superuserSql, type Harness,
 } from './harness';
 import { POST as copyEntry } from '../../src/app/api/assets/[nodeId]/copy/route';
+import { POST as bulkCopy } from '../../src/app/api/bulk/copy/route';
 import { PUT as setPassword } from '../../src/app/api/assets/[nodeId]/password/route';
 import { POST as createAsset } from '../../src/app/api/assets/route';
 import { POST as createSecret } from '../../src/app/api/secrets/route';
@@ -51,6 +52,12 @@ async function su<T>(fn: (sql: ReturnType<typeof superuserSql>) => Promise<T>): 
   const sql = superuserSql();
   try { return await fn(sql); } finally { await sql.end({ timeout: 5 }); }
 }
+
+const viewAs = async (secretId: string) => {
+  const revealed = await h.secrets.reveal(
+    { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' }, secretId, { purpose: 'view', reason: 'checking the copy in a test' });
+  try { return revealed.value.expose(); } finally { revealed.value.dispose(); }
+};
 
 const copy = (nodeId: string, name: string) => copyEntry(req('POST', { name }), nodeParams(nodeId));
 
@@ -92,11 +99,6 @@ describe('copying an entry', () => {
     });
   });
 
-  const viewAs = async (secretId: string) => {
-    const revealed = await h.secrets.reveal(
-      { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' }, secretId, { purpose: 'view', reason: 'checking the copy in a test' });
-    try { return revealed.value.expose(); } finally { revealed.value.dispose(); }
-  };
 
   it('copies a credential with its password, as a new secret under the same rules', async () => {
     currentUser = ADMIN;
@@ -204,6 +206,75 @@ describe('copying an entry', () => {
 
     currentUser = VIEWER;
     expect((await copy(IDS.firewall, 'nope')).status).toBe(403);
+  });
+});
+
+describe('copying a selection', () => {
+  const batch = (ids: string[], reason?: string) => bulkCopy(req('POST', { ids, ...(reason ? { reason } : {}) }));
+  const countNamed = async (name: string) => {
+    const [row] = await su((sql) => sql<{ n: number }[]>`SELECT count(*)::int AS n FROM asset_node WHERE name = ${name}`);
+    return row!.n;
+  };
+
+  it('copies each entry as “<name> (copy)”, a credential with its password', async () => {
+    currentUser = ADMIN;
+    const made = await createSecret(req('POST', {
+      organizationId: IDS.orgAcme, label: 'Acme backup', value: 'backup-password-long-enough', credentialType: 'service_account',
+    }));
+    const { credentialId } = await json<{ credentialId: string }>(made);
+    const [network] = await su((sql) => sql<{ name: string }[]>`
+      SELECT name FROM asset_node WHERE id = ${IDS.network}::uuid`);
+    const networkName = network!.name;
+
+    const response = await batch([IDS.network, credentialId]);
+    expect(response.status, await response.clone().text()).toBe(200);
+    const { affected, copies } = await json<{ affected: number; copies: { id: string; sourceId: string; name: string }[] }>(response);
+    expect(affected).toBe(2);
+    expect(copies.map((c) => c.name).sort()).toEqual([`${networkName} (copy)`, 'Acme backup (copy)'].sort());
+
+    const credentialCopy = copies.find((c) => c.sourceId === credentialId)!;
+    const [row] = await su((sql) => sql<{ secret_id: string | null }[]>`
+      SELECT secret_id FROM credential WHERE id = ${credentialCopy.id}::uuid`);
+    expect(await viewAs(row!.secret_id!)).toBe('backup-password-long-enough');
+  });
+
+  it('copies all or none: a procedure or a domain in the batch, or an unknown entry, refuses it whole', async () => {
+    currentUser = ADMIN;
+    const [fw] = await su((sql) => sql<{ name: string }[]>`SELECT name FROM asset_node WHERE id = ${IDS.firewall}::uuid`);
+    const before = await countNamed(`${fw!.name} (copy)`);
+    const withProcedure = await batch([IDS.firewall, IDS.sopOffboard]);
+    expect(withProcedure.status).toBe(400);
+    expect(await message(withProcedure)).toMatch(/procedures and custom records cannot be copied/);
+
+    const withDomain = await batch([IDS.firewall, IDS.domain]);
+    expect(withDomain.status).toBe(400);
+    expect(await message(withDomain)).toMatch(/domain is copied one at a time/);
+
+    expect((await batch([IDS.firewall, '00000000-0000-4000-8000-000000000000'])).status).toBe(404);
+    expect(await countNamed(`${fw!.name} (copy)`)).toBe(before);
+  });
+
+  it('asks once for the reason a password requires, and applies it to the batch', async () => {
+    currentUser = ADMIN;
+    const made = await createSecret(req('POST', {
+      organizationId: IDS.orgAcme, label: 'Acme vault admin', value: 'vault-password-long-enough',
+      credentialType: 'domain_admin', requiresReason: true,
+    }));
+    const { credentialId } = await json<{ credentialId: string }>(made);
+
+    const refused = await batch([credentialId, IDS.crmApp]);
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('reason_required');
+    expect(await countNamed('Acme vault admin (copy)')).toBe(0);
+
+    const given = await batch([credentialId, IDS.crmApp], 'INC-77 standing up the DR tenant');
+    expect(given.status, await given.clone().text()).toBe(200);
+    expect(await countNamed('Acme vault admin (copy)')).toBe(1);
+  });
+
+  it('is asset:write', async () => {
+    currentUser = VIEWER;
+    expect((await batch([IDS.firewall])).status).toBe(403);
   });
 });
 

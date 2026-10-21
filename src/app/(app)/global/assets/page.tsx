@@ -52,6 +52,7 @@ export default async function GlobalAssetsPage({
     updatedAt: r.updated_at.toISOString(),
     updatedBy: r.updated_by_name,
     removeKind: 'node',
+    nodeType: r.node_type,
     archived: r.archived,
     permissions: { internalOnly: r.is_internal_only },
     cells: { location: r.site_name },

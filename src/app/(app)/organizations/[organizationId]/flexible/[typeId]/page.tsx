@@ -107,6 +107,7 @@ export default async function FlexibleAssetPage({
         updatedAt: r.updated_at.toISOString(),
         updatedBy: r.updated_by_name,
         removeKind: 'node',
+        nodeType: 'flexible_asset',
         permissions: { internalOnly: r.is_internal_only },
       })),
     };
