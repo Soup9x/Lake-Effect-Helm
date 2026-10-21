@@ -162,6 +162,7 @@ export default async function CategoryPage({
         secret_id: string | null; sensitivity: string | null;
         requires_step_up: boolean | null; requires_reason: boolean | null;
         min_role_rank: number | null; archived: boolean;
+        registered_at: string | null; expires_at: string | null;
       }[]>`
         SELECT n.id, n.name, n.status::text, n.archived_at IS NOT NULL AS archived,
                n.updated_at, u.name AS updated_by_name,
@@ -173,10 +174,15 @@ export default async function CategoryPage({
                -- from v_secret_metadata and are NULL on every category that is
                -- not a credential.
                m.id::text AS secret_id, m.sensitivity::text, m.requires_step_up,
-               m.requires_reason, m.min_role_rank
+               m.requires_reason, m.min_role_rank,
+               -- A domain's two dates, for the Domain Tracker's columns. ISO
+               -- text, so the grid sorts them as it sorts every other cell.
+               to_char(dm.registered_at, 'YYYY-MM-DD') AS registered_at,
+               to_char(dm.expires_at, 'YYYY-MM-DD') AS expires_at
         FROM asset_node n
         LEFT JOIN app_user u ON u.id = n.updated_by
         LEFT JOIN credential c ON c.id = n.id
+        LEFT JOIN domain dm ON dm.id = n.id
         LEFT JOIN v_secret_metadata m ON m.id = c.secret_id
         WHERE n.organization_id = ${organizationId}::uuid
           AND n.node_type = ${category.source}::node_type
@@ -227,6 +233,7 @@ export default async function CategoryPage({
           removeKind: 'node',
           nodeType: category.source,
           archived: r.archived,
+          cells: { registered: r.registered_at, expires: r.expires_at },
           permissions: {
             internalOnly: r.is_internal_only,
             ...(r.secret_id
@@ -644,8 +651,16 @@ export default async function CategoryPage({
                 { key: 'expires', header: 'Expires', secondary: true },
                 { key: 'location', header: 'Location', secondary: true },
               ]
-            : []
+            : category.source === 'domain'
+              ? [
+                  { key: 'registered', header: 'Registered' },
+                  { key: 'expires', header: 'Expires' },
+                ]
+              : []
         }
+        // A domain has no username or vault entry for those two columns to
+        // show, so they would be a dash on every row; its dates replace them.
+        omitColumns={category.source === 'domain' ? ['secondary', 'extra'] : undefined}
       />
     </>
   );

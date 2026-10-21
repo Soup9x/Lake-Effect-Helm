@@ -170,13 +170,15 @@ sudo ./deploy/init-secrets.sh
 ```
 
 The path is an example; the script operates on the repository it lives in and
-writes nothing outside it. It produces two files and refuses to overwrite
-either:
+writes nothing outside it. It produces three files and refuses to overwrite
+any of them:
 
 - **`deploy/secrets/master.key`** — a versioned key ring, mode `0400`, owned by
   the uid Helm runs as (10001 in the bundled images).
 - **`.env`** — every database password, `AUTH_SECRET`, and the blind-index key,
   mode `0600`.
+- **`deploy/secrets/backup.pass`** — the passphrase that seals every built-in
+  backup set, mode `0400`, owned by the same uid.
 
 The permissions are not cosmetic. **Helm refuses to start from a key file that
 is group- or world-readable**, which includes the `0444` that `docker secret`
@@ -197,7 +199,7 @@ key later is an operation instead of a data-loss event (§8).
 ```bash
 # Somewhere off this host, encrypted, that is not the same backup set
 # as the database.
-sudo tar czf - deploy/secrets/master.key .env | \
+sudo tar czf - deploy/secrets/master.key deploy/secrets/backup.pass .env | \
   gpg --symmetric --cipher-algo AES256 -o helm-keys-$(date +%F).tar.gz.gpg
 ```
 
@@ -687,10 +689,22 @@ monitoring. There is no queue broker in the stack and nothing to configure.
 
 ### Backups
 
+Turn on the built-in backups under **Administration → Backups**: the database
+and the `helm-documents`, `helm-passphrases`, `helm-anchors` and `caddy-data`
+volumes, sealed, on a schedule, with a weekly restore rehearsal. What they
+deliberately leave out — `master.key`, `backup.pass` and `.env` — you copy by
+hand to a different medium, as in §3. The full list, the separation rules and a
+restore walk-through are in `docker-on-prem.md` §7.
+
+By hand, the database alone is:
+
 ```bash
-docker compose exec -T postgres pg_dump -U postgres --format=custom helm \
-  > helm-$(date +%F).dump
+docker compose exec -T postgres sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U postgres -d helm -Fc' > helm-$(date +%F).dump
 ```
+
+and it is never enough on its own: documents live in `helm-documents`, with
+the database rows that open them.
 
 A database backup on its own is safe to store more cheaply than you might
 expect: without the master key it is ciphertext. That is the point of the

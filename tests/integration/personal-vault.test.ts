@@ -26,6 +26,7 @@ import { GET as listVault, POST as createEntry } from '../../src/app/api/persona
 import { DELETE as deleteEntry, PATCH as patchEntry } from '../../src/app/api/personal/vault/[entryId]/route';
 import { POST as reveal } from '../../src/app/api/personal/vault/[entryId]/reveal/route';
 import { POST as code } from '../../src/app/api/personal/vault/[entryId]/code/route';
+import { POST as importEntry } from '../../src/app/api/personal/vault/import/route';
 import { listVault as listVaultLib, reEncryptPersonalVault } from '../../src/lib/personal/vault';
 
 let h: Harness;
@@ -183,5 +184,46 @@ describe('leaving the tenant', () => {
     const [left] = await su((sql) => sql<{ n: number }[]>`
       SELECT count(*)::int AS n FROM personal_credential WHERE owner_user_id = ${IDS.tech1}::uuid`);
     expect(left!.n).toBe(0);
+  });
+});
+
+describe('importing an export', () => {
+  const importReq = (entries: unknown[]) =>
+    new NextRequest(new Request('https://helm.test/api/personal/vault/import', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ entries }),
+    }));
+
+  it('stores every entry encrypted, skips one already here, and keeps an entry whose code cannot be read', async () => {
+    currentUser = ADMIN;
+    const entries = [
+      { name: 'Imported bank', username: 'me', url: 'https://bank.example', password: 'imported-pw-1', totp: RFC_SEED },
+      { name: 'Steam', username: 'gamer', url: null, password: 'imported-pw-2', totp: 'steam://NOTAVALIDSEED' },
+    ];
+    const first = await importEntry(importReq(entries));
+    expect(first.status, await first.clone().text()).toBe(200);
+    expect(await json(first)).toEqual({ imported: 2, duplicates: 0, codesDropped: 1 });
+
+    const listed = (await json<{ entries: Entry[] }>(await listVault(req('GET')))).entries;
+    expect(listed.find((e) => e.name === 'Imported bank')).toMatchObject({ hasPassword: true, hasTotp: true });
+    expect(listed.find((e) => e.name === 'Steam')).toMatchObject({ hasPassword: true, hasTotp: false });
+    const raw = await su((sql) => sql<{ c: Buffer }[]>`
+      SELECT secret_ciphertext AS c FROM personal_credential WHERE owner_user_id = ${IDS.admin1}::uuid`);
+    expect(raw.every((r) => !r.c.toString('latin1').includes('imported-pw'))).toBe(true);
+
+    // The same file again adds nothing.
+    expect(await json(await importEntry(importReq(entries)))).toEqual({ imported: 0, duplicates: 2, codesDropped: 0 });
+
+    const [audit] = await su((sql) => sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata FROM audit_log WHERE action = 'personal_vault.imported' ORDER BY occurred_at LIMIT 1`);
+    expect(audit!.metadata).toMatchObject({ imported: 2, duplicates: 0, codesDropped: 1 });
+    expect(JSON.stringify(audit!.metadata)).not.toContain('Imported bank');
+  });
+
+  it('refuses the whole import when one entry has no name', async () => {
+    currentUser = ADMIN;
+    const before = (await json<{ entries: Entry[] }>(await listVault(req('GET')))).entries.length;
+    const refused = await importEntry(importReq([{ name: 'ok', password: 'x' }, { name: '', password: 'y' }]));
+    expect(refused.status).toBe(400);
+    expect((await json<{ entries: Entry[] }>(await listVault(req('GET')))).entries).toHaveLength(before);
   });
 });

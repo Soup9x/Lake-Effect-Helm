@@ -135,7 +135,7 @@ export function CategoryGrid({
   /** For a list that is not a client's. */
   emptyMessage?: string | undefined;
   /** Columns a list has nothing for, left out rather than shown as dashes. */
-  omitColumns?: readonly ('type' | 'extra' | 'updatedBy')[] | undefined;
+  omitColumns?: readonly ('secondary' | 'type' | 'extra' | 'updatedBy')[] | undefined;
   /** False where the rows have no archive, so Include archived would do nothing. */
   archivable?: boolean | undefined;
 }) {

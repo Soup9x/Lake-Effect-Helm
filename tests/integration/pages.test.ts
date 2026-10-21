@@ -1837,3 +1837,27 @@ describe('profile pictures (1040)', () => {
     expect(propsOf(layout, 'AppChrome')).toHaveProperty('avatarUrl', null);
   });
 });
+
+describe('the Domain Tracker grid', () => {
+  it('shows when each domain was registered and when it expires, and no Address column', async () => {
+    const [domain] = await withTenant(ADMIN, (tx) => tx<{ id: string }[]>`
+      INSERT INTO asset_node (tenant_id, organization_id, node_type, name, created_by, updated_by)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'domain', 'Primary Domain', ${IDS.admin1}::uuid, ${IDS.admin1}::uuid)
+      RETURNING id
+    `);
+    await withTenant(ADMIN, (tx) => tx`
+      INSERT INTO domain (id, tenant_id, domain_name, registered_at, expires_at)
+      VALUES (${domain!.id}::uuid, ${IDS.tenant1}::uuid, 'rendered-acme.test', '2019-03-04', '2027-03-04')
+    `);
+
+    const page = await (await import('../../src/app/(app)/organizations/[organizationId]/[category]/page')).default({
+      params: p({ organizationId: IDS.orgAcme, category: 'domains' }),
+      searchParams: p({}),
+    });
+    const grid = propsOf(page, 'CategoryGrid')!;
+    expect(grid.omitColumns).toEqual(['secondary', 'extra']);
+    expect((grid.extraColumns as { header: string }[]).map((c) => c.header)).toEqual(['Registered', 'Expires']);
+    const row = (grid.records as { id: string; cells: Record<string, string | null> }[]).find((r) => r.id === domain!.id);
+    expect(row!.cells).toEqual({ registered: '2019-03-04', expires: '2027-03-04' });
+  });
+});
