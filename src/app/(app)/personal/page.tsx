@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import {
-  Bell, CalendarClock, ClipboardList, KeyRound, UserCog,
+  Bell, CalendarClock, ClipboardList, KeyRound, Lock, UserCog,
 } from 'lucide-react';
+import { PersonalVault } from '@/components/personal-vault';
+import { listVault } from '@/lib/personal/vault';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
@@ -27,11 +29,10 @@ export const dynamic = 'force-dynamic';
  * earlier would have meant shipping a page with one card on it and revisiting
  * it three times.
  *
- * NO PERSONAL CREDENTIALS SECTION, and no placeholder or empty state for one
- * either. Group J is dropped (decision 14) and a card reading "personal
- * credentials are coming" is a promise the plan has stopped making — worse than
- * an absence, because somebody would wait for it. When the
- * Bitwarden/Vaultwarden integration happens it can add its own section.
+ * MY PASSWORDS, the personal vault (1030). Decision 14 had dropped it for a
+ * Bitwarden/Vaultwarden integration; it is native now, owner-only by RLS with
+ * no administrator override — see the migration's header for the answers to
+ * the three questions that decision recorded.
  *
  * ONE TRANSACTION. Four reads that all resolve the acting user from
  * helm.current_actor_id(), so they share a session context rather than opening
@@ -40,7 +41,7 @@ export const dynamic = 'force-dynamic';
 export default async function PersonalPage() {
   const identity = await getServerIdentity();
 
-  const { counts, tasks, notifications, unread } = await withTenant(
+  const { counts, tasks, notifications, unread, vault } = await withTenant(
     actorOf(identity),
     async (tx) => ({
       counts: await countMyOpenTasks(tx),
@@ -49,6 +50,9 @@ export default async function PersonalPage() {
       tasks: await listMyTasks(tx, { state: 'open', who: 'mine', limit: 5 }),
       notifications: (await listInbox(tx, 5)),
       unread: await unreadCount(tx),
+      // The owner policy returns this person's entries and nobody else's; an
+      // API token or service account has none (actor_type is not 'user').
+      vault: await listVault(tx),
     }),
   );
 
@@ -168,6 +172,18 @@ export default async function PersonalPage() {
             </CardContent>
           </Card>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Lock className="size-4 text-ink-faint" aria-hidden /> My passwords
+              {vault.length > 0 && <Badge tone="neutral">{vault.length}</Badge>}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <PersonalVault entries={vault} />
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>

@@ -89,6 +89,12 @@ Decision 14 has the reasoning; nothing is being built for it now.
 
 ### Personal Credentials is a security-model change, not a feature
 
+**SUPERSEDED BY 1030.** The vault was later built natively, on exactly the
+answers recorded below — owner-only with administrator access refused, the
+tenant data key, excluded from exports and search, deleted with the
+membership — see `db/sql/1030_personal_vault.sql`. The rest of this section is
+the reasoning as it stood.
+
 **BACKGROUND, NOT A PLAN. Group J is dropped — see decision 14.** Personal
 credentials will come from a Bitwarden/Vaultwarden integration rather than a
 native vault, and nothing in this section is being built. It is kept because

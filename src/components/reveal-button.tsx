@@ -80,11 +80,18 @@ export function RevealButton({
   label,
   requiresReason,
   requiresStepUp,
+  endpoints,
 }: {
   secretId: string;
   label: string;
   requiresReason: boolean;
   requiresStepUp: boolean;
+  /**
+   * Where to read from, for a secret that is not a client's: the personal
+   * vault's own reveal route. Without `copy`, copying the value already on
+   * screen records nothing further — opening it was the audited read.
+   */
+  endpoints?: { reveal: string; copy?: string } | undefined;
 }) {
   const stepUp = useStepUp();
   const [state, setState] = useState<RevealState>({ status: 'idle' });
@@ -117,7 +124,7 @@ export function RevealButton({
    * — the person may have typed a justification while the prompt was open.
    */
   const attemptReveal = (purpose: 'view' | 'copy') =>
-    apiFetch<RevealOk>(`/api/secrets/${secretId}/reveal`, {
+    apiFetch<RevealOk>(endpoints?.reveal ?? `/api/secrets/${secretId}/reveal`, {
       json: { purpose, ...(reason ? { reason } : {}) },
     });
 
@@ -190,7 +197,9 @@ export function RevealButton({
       // No `reason` is sent because there is nowhere for one to go —
       // helm.record_secret_copy() takes a field and no justification, and the
       // route's schema drops any other key.
-      record: async () => (await apiFetch(`/api/secrets/${secretId}/copy`, { json: {} })).ok,
+      record: endpoints && !endpoints.copy
+        ? async () => true
+        : async () => (await apiFetch(endpoints?.copy ?? `/api/secrets/${secretId}/copy`, { json: {} })).ok,
     });
 
     setCopyOutcome(outcome);

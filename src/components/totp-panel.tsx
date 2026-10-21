@@ -68,8 +68,11 @@ function groupDigits(code: string): string {
 export function TotpPanel({
   nodeId,
   canReveal,
+  codePath,
 }: {
   nodeId: string;
+  /** Where codes come from, for a seed that is not a credential's: the personal vault's route. */
+  codePath?: string | undefined;
   /** False for somebody without secret:reveal: the panel explains, not offers. */
   canReveal: boolean;
 }) {
@@ -114,8 +117,8 @@ export function TotpPanel({
    * sends whatever is in the box by then — the same reasoning as RevealButton.
    */
   const attempt = useCallback(
-    () => apiFetch<CodeOk>(`/api/assets/${nodeId}/totp/code`, { json: { ...(reason ? { reason } : {}) } }),
-    [nodeId, reason],
+    () => apiFetch<CodeOk>(codePath ?? `/api/assets/${nodeId}/totp/code`, { json: { ...(reason ? { reason } : {}) } }),
+    [nodeId, reason, codePath],
   );
 
   const load = useCallback(async (): Promise<string | null> => {
