@@ -163,6 +163,8 @@ export const topologyDeviceType = pgEnum('topology_device_type', [
 
 /** 0690 — the mail relay's transport security. */
 export const smtpSecurity = pgEnum('smtp_security', ['starttls', 'tls', 'plaintext']);
+/** 1010 — how mail leaves: the relay, or the MSP's own Microsoft 365. */
+export const emailDelivery = pgEnum('email_delivery', ['smtp', 'microsoft_graph']);
 
 /**
  * 0690 — how a notification destination is reached.

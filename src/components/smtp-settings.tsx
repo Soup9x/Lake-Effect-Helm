@@ -9,7 +9,7 @@ import { FieldHint, Input, Label, Select, Textarea } from './ui/field';
 import { Badge } from './ui/badge';
 import { formatDateTime } from '@/lib/ui/format';
 import { apiFetch, type Feedback } from '@/lib/ui/api';
-import type { SmtpSecurity, SmtpSettingView } from '@/lib/email/settings';
+import type { EmailDelivery, SendingConnection, SmtpSecurity, SmtpSettingView } from '@/lib/email/settings';
 
 /** The port each mode is normally on, for the nudge when the mode changes. */
 const CONVENTIONAL_PORT: Record<SmtpSecurity, number> = {
@@ -58,12 +58,19 @@ const SECURITY_COPY: Record<SmtpSecurity, string> = {
 export function SmtpSettingsCard({
   initial,
   canManage,
+  connections,
 }: {
   initial: SmtpSettingView;
   canManage: boolean;
+  /** The MSP's own Microsoft 365 connections, which mail can go out through. */
+  connections: SendingConnection[];
 }) {
   const router = useRouter();
   const [form, setForm] = useState<SmtpSettingView>(initial);
+  const [delivery, setDelivery] = useState<EmailDelivery>(initial.delivery);
+  const [connectionId, setConnectionId] = useState(
+    initial.graphConnectionId ?? connections[0]?.id ?? '',
+  );
   const [password, setPassword] = useState('');
   const [clearPassword, setClearPassword] = useState(false);
   const [pin, setPin] = useState('');
@@ -111,7 +118,17 @@ export function SmtpSettingsCard({
     setSaving(true);
     setFeedback(null);
     try {
-      const result = await apiFetch<SmtpSettingView | undefined>('/api/tenant/smtp', {
+      const result = delivery === 'microsoft_graph'
+        ? await apiFetch<SmtpSettingView | undefined>('/api/tenant/smtp/microsoft-365', {
+          method: 'PUT',
+          json: {
+            enabled: form.enabled,
+            connectionId,
+            fromAddress: form.fromAddress.trim(),
+            allowedRecipientDomains: domains,
+          },
+        })
+        : await apiFetch<SmtpSettingView | undefined>('/api/tenant/smtp', {
         method: 'PUT',
         json: {
           enabled: form.enabled,
@@ -129,7 +146,7 @@ export function SmtpSettingsCard({
           allowedRecipientDomains: domains,
           ...(form.security === 'plaintext' ? { acknowledgePlaintext: true } : {}),
         },
-      });
+        });
 
       if (!result.ok) {
         setFeedback({ ok: false, message: result.message });
@@ -139,6 +156,7 @@ export function SmtpSettingsCard({
       const payload = result.value;
       if (payload) {
         setForm(payload);
+        setDelivery(payload.delivery);
         setDomainText(payload.allowedRecipientDomains.join(', '));
       }
       setPassword('');
@@ -156,11 +174,44 @@ export function SmtpSettingsCard({
     }
   }
 
+  // Shared by both deliveries: who mail may go to does not depend on how it leaves.
+  const domainsField = (
+      <div className="space-y-1.5 sm:col-span-2">
+        <Label htmlFor="smtp-domains">Send notifications only to</Label>
+        <Input
+          id="smtp-domains"
+          value={domainText}
+          onChange={(e) => setDomainText(e.target.value)}
+          placeholder={
+            form.fromAddress.includes('@')
+              ? form.fromAddress.split('@')[1]
+              : 'example.com'
+          }
+        />
+        <FieldHint>
+          Domains, separated by commas. Empty means the sending address&rsquo;s own
+          domain and nothing else. This is a disclosure boundary rather than a
+          convenience: a notification names which client has which expiring
+          credential, so an address outside the business is a feed of that to
+          whoever owns it. Checked when a destination is added <em>and</em> again
+          when something is about to be sent, because this list can be narrowed
+          afterwards.
+        </FieldHint>
+        {domains.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {domains.map((domain) => (
+              <Badge key={domain} tone="neutral">{domain}</Badge>
+            ))}
+          </div>
+        )}
+      </div>
+  );
+
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Mail className="size-4 text-ink-faint" aria-hidden /> Mail relay
+          <Mail className="size-4 text-ink-faint" aria-hidden /> Sending mail
           {form.configured && (
             <Badge tone={form.enabled ? 'ok' : 'neutral'}>
               {form.enabled ? 'Enabled' : 'Off'}
@@ -173,10 +224,11 @@ export function SmtpSettingsCard({
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="max-w-3xl text-sm text-ink-muted">
-          Helm sends no mail until you point it at a relay of your own — there is no
-          hosted sender behind this, which is the same air-gapped default the external
-          checks have. Once configured it carries checklist reminders to whoever a step
-          is assigned to, and any notification destination you choose to send by email.
+          Helm sends no mail until you point it at a relay of your own or at your own
+          Microsoft 365 — there is no hosted sender behind this, which is the same
+          air-gapped default the external checks have. Once configured it carries
+          invitations, checklist reminders, and any notification destination you choose
+          to send by email.
         </p>
 
         {!canManage ? (
@@ -184,7 +236,9 @@ export function SmtpSettingsCard({
             {form.configured ? (
               <>
                 <div className="text-ink">
-                  {form.host}:{form.port} · {form.security}
+                  {form.delivery === 'microsoft_graph'
+                    ? 'Microsoft 365'
+                    : `${form.host}:${form.port} · ${form.security}`}
                 </div>
                 <div className="text-xs text-ink-faint">
                   Sending as {form.fromAddress}
@@ -201,6 +255,89 @@ export function SmtpSettingsCard({
           </div>
         ) : (
           <form onSubmit={save} className="space-y-4">
+            <fieldset className="space-y-1.5">
+              <legend className="text-sm font-medium text-ink">Send with</legend>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {([
+                  ['smtp', 'An SMTP relay', 'Your own relay, or a provider\u2019s SMTP service.'],
+                  ['microsoft_graph', 'Microsoft 365', 'A mailbox in your own tenant, through the Microsoft 365 connection.'],
+                ] as const).map(([value, title, hint]) => (
+                  <label
+                    key={value}
+                    className={
+                      'flex cursor-pointer items-start gap-2.5 rounded-md border p-3 text-sm '
+                      + (delivery === value ? 'border-brand bg-brand-tint' : 'border-border')
+                    }
+                  >
+                    <input
+                      type="radio"
+                      name="email-delivery"
+                      className="mt-0.5 size-4"
+                      checked={delivery === value}
+                      onChange={() => setDelivery(value)}
+                    />
+                    <span>
+                      <span className="text-ink">{title}</span>
+                      <FieldHint>{hint}</FieldHint>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            {delivery === 'microsoft_graph' ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="graph-connection">Microsoft 365 connection</Label>
+                {connections.length === 0 ? (
+                  <p className="text-sm text-ink-muted">
+                    Connect Microsoft 365 for your own organisation first, under{' '}
+                    <a className="text-brand underline-offset-4 hover:underline" href="/settings/integrations">
+                      Administration → Integrations
+                    </a>
+                    . Mail can only leave from your tenant, never a client&rsquo;s.
+                  </p>
+                ) : (
+                  <Select
+                    id="graph-connection"
+                    value={connectionId}
+                    onChange={(e) => setConnectionId(e.target.value)}
+                  >
+                    {connections.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.tenantName ?? c.organizationName} · {c.tenant}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+                <FieldHint>
+                  The same app registration the sync uses. Give it the <code>Mail.Send</code>{' '}
+                  application permission and grant admin consent. On its own that lets the app
+                  send as any mailbox, so limit it to this one with an Exchange application
+                  access policy.
+                </FieldHint>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="graph-from">Sending mailbox</Label>
+                <Input
+                  id="graph-from"
+                  type="email"
+                  value={form.fromAddress}
+                  onChange={(e) => set('fromAddress', e.target.value)}
+                  placeholder="helm@yourcompany.com"
+                  required
+                  maxLength={320}
+                />
+                <FieldHint>
+                  A licensed user or a shared mailbox in your tenant. Mail shows that
+                  mailbox&rsquo;s own display name, and is not kept in its Sent Items.
+                </FieldHint>
+              </div>
+
+              {domainsField}
+            </div>
+            ) : (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="smtp-host">Server</Label>
@@ -366,38 +503,11 @@ export function SmtpSettingsCard({
                 </div>
               )}
 
-              <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="smtp-domains">Send notifications only to</Label>
-                <Input
-                  id="smtp-domains"
-                  value={domainText}
-                  onChange={(e) => setDomainText(e.target.value)}
-                  placeholder={
-                    form.fromAddress.includes('@')
-                      ? form.fromAddress.split('@')[1]
-                      : 'example.com'
-                  }
-                />
-                <FieldHint>
-                  Domains, separated by commas. Empty means the sending address&rsquo;s own
-                  domain and nothing else. This is a disclosure boundary rather than a
-                  convenience: a notification names which client has which expiring
-                  credential, so an address outside the business is a feed of that to
-                  whoever owns it. Checked when a destination is added <em>and</em> again
-                  when something is about to be sent, because this list can be narrowed
-                  afterwards.
-                </FieldHint>
-                {domains.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {domains.map((domain) => (
-                      <Badge key={domain} tone="neutral">{domain}</Badge>
-                    ))}
-                  </div>
-                )}
-              </div>
+              {domainsField}
             </div>
+            )}
 
-            {form.security !== 'plaintext' && (
+            {delivery === 'smtp' && form.security !== 'plaintext' && (
               <label className="flex items-start gap-2.5 text-sm">
                 <input
                   type="checkbox"
@@ -416,7 +526,7 @@ export function SmtpSettingsCard({
               </label>
             )}
 
-            {form.security === 'plaintext' && (
+            {delivery === 'smtp' && form.security === 'plaintext' && (
               <div className="space-y-2 rounded-md border border-danger/30 bg-danger/5 p-3">
                 <p className="text-sm text-danger">
                   With no encryption, the relay password and the full text of every
@@ -454,14 +564,14 @@ export function SmtpSettingsCard({
               <span>
                 <span className="text-ink">Send mail</span>
                 <FieldHint>
-                  Off means nothing is sent and nothing is queued against this relay —
+                  Off means nothing is sent and nothing is queued against it —
                   reminders wait rather than failing once a minute, so turning it on later
                   delivers what has come due.
                 </FieldHint>
               </span>
             </label>
 
-            {pinOnPlaintext && (
+            {delivery === 'smtp' && pinOnPlaintext && (
               <p className="text-xs text-danger">
                 A pinned certificate cannot be checked on a plaintext connection, because
                 no certificate is ever presented. Remove the pin or choose an encrypted
@@ -469,7 +579,7 @@ export function SmtpSettingsCard({
               </p>
             )}
 
-            {unverifiedWithNoPin && (
+            {delivery === 'smtp' && unverifiedWithNoPin && (
               <p className="text-xs text-danger">
                 Turning verification off with no pinned certificate accepts any certificate
                 at all. Paste the relay&rsquo;s certificate above, or leave verification on.
@@ -498,7 +608,9 @@ export function SmtpSettingsCard({
               <p className="text-xs text-ink-faint">
                 Last send {formatDateTime(form.lastSendAt)} —{' '}
                 {form.lastSendOk ? (
-                  <span className="text-ok">accepted by the relay</span>
+                  <span className="text-ok">
+                    {form.delivery === 'microsoft_graph' ? 'accepted by Microsoft 365' : 'accepted by the relay'}
+                  </span>
                 ) : (
                   <span className="text-danger">{form.lastSendError ?? 'failed'}</span>
                 )}
@@ -509,12 +621,16 @@ export function SmtpSettingsCard({
               <Button
                 type="submit"
                 variant="primary"
-                disabled={saving || needsAcknowledgement || pinOnPlaintext || unverifiedWithNoPin}
+                disabled={
+                  saving
+                  || (delivery === 'smtp' && (needsAcknowledgement || pinOnPlaintext || unverifiedWithNoPin))
+                  || (delivery === 'microsoft_graph' && !connectionId)
+                }
               >
                 {saving && <Loader2 aria-hidden className="animate-spin" />}
                 Save
               </Button>
-              {needsAcknowledgement && (
+              {delivery === 'smtp' && needsAcknowledgement && (
                 <span className="text-xs text-ink-faint">
                   Tick the acknowledgement to save an unencrypted relay.
                 </span>
@@ -522,7 +638,7 @@ export function SmtpSettingsCard({
             </div>
 
             <FieldHint>
-              There is no test button here on purpose: a relay is proved by a real send.
+              There is no test button here on purpose: mail is proved by a real send.
               Add an email destination under Notifications and press its Test — the result
               appears above, because every send records its outcome here.
             </FieldHint>

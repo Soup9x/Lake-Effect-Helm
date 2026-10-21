@@ -13,6 +13,21 @@ export interface FakeGraphTenant {
   domains: Record<string, unknown>[];
   /** Graph paths answered 403, as an app missing a permission. */
   forbidden?: string[];
+  /** Mailboxes sendMail will send as; any other address is a 404. */
+  mailboxes?: string[];
+}
+
+/** A message the fake accepted through sendMail. */
+export interface FakeGraphSent {
+  tenant: string;
+  mailbox: string;
+  message: {
+    subject: string;
+    body: { contentType: string; content: string };
+    toRecipients: { emailAddress: { address: string } }[];
+    internetMessageHeaders?: { name: string; value: string }[];
+  };
+  saveToSentItems: boolean;
 }
 
 export interface FakeGraphRequest {
@@ -25,6 +40,7 @@ export interface FakeGraphRequest {
 export class FakeGraph {
   readonly tenants = new Map<string, FakeGraphTenant>();
   readonly requests: FakeGraphRequest[] = [];
+  readonly sent: FakeGraphSent[] = [];
   /** Users per page, to exercise nextLink. */
   pageSize = 999;
   /** When set, the users nextLink points here instead of Graph. */
@@ -33,13 +49,15 @@ export class FakeGraph {
   reset(): void {
     this.tenants.clear();
     this.requests.length = 0;
+    this.sent.length = 0;
     this.pageSize = 999;
     this.hostileNextLink = null;
   }
 
   transport(): GraphTransport {
     return async (url, request) => {
-      const form = request.body ? Object.fromEntries(new URLSearchParams(request.body)) : null;
+      const isJson = request.headers['content-type'] === 'application/json';
+      const form = request.body && !isJson ? Object.fromEntries(new URLSearchParams(request.body)) : null;
       this.requests.push({ method: request.method, url, authorization: request.headers.authorization ?? null, form });
       const parsed = new URL(url);
       const json = (status: number, payload: unknown) => ({ status, body: JSON.stringify(payload) });
@@ -63,6 +81,16 @@ export class FakeGraph {
       if (!tenant) return json(401, { error: { code: 'InvalidAuthenticationToken', message: 'Access token is empty.' } });
       if (tenant.forbidden?.some((p) => parsed.pathname.startsWith(p))) {
         return json(403, { error: { code: 'Authorization_RequestDenied', message: 'Insufficient privileges to complete the operation.' } });
+      }
+
+      const sendMail = parsed.pathname.match(/^\/v1\.0\/users\/([^/]+)\/sendMail$/);
+      if (sendMail && request.method === 'POST') {
+        const mailbox = decodeURIComponent(sendMail[1]!);
+        if (!tenant.mailboxes?.includes(mailbox)) {
+          return json(404, { error: { code: 'ErrorInvalidUser', message: `The requested user '${mailbox}' is invalid.` } });
+        }
+        this.sent.push({ tenant: tokenKey, mailbox, ...(JSON.parse(request.body ?? '{}') as Omit<FakeGraphSent, 'tenant' | 'mailbox'>) });
+        return { status: 202, body: '' };
       }
 
       switch (parsed.pathname) {

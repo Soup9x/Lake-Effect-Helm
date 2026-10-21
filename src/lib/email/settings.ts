@@ -17,9 +17,15 @@ import { fingerprintOfPem } from './transport';
 
 export type SmtpSecurity = 'starttls' | 'tls' | 'plaintext';
 
+/** How mail leaves (1010): the relay below, or the MSP's Microsoft 365. */
+export type EmailDelivery = 'smtp' | 'microsoft_graph';
+
 export interface SmtpSettingView {
   configured: boolean;
   enabled: boolean;
+  delivery: EmailDelivery;
+  /** The MSP's own Microsoft 365 connection, when delivery is microsoft_graph. */
+  graphConnectionId: string | null;
   host: string;
   port: number;
   security: SmtpSecurity;
@@ -42,6 +48,8 @@ export interface SmtpSettingView {
 const SMTP_DEFAULTS: SmtpSettingView = {
   configured: false,
   enabled: false,
+  delivery: 'smtp',
+  graphConnectionId: null,
   host: '',
   port: 587,
   security: 'starttls',
@@ -61,7 +69,7 @@ const SMTP_DEFAULTS: SmtpSettingView = {
 
 interface SettingRow {
   enabled: boolean;
-  host: string;
+  host: string | null;
   port: number;
   security: SmtpSecurity;
   tls_verify: boolean;
@@ -81,11 +89,17 @@ interface SettingRow {
 export async function readSmtpSetting(tx: HelmTx): Promise<SmtpSettingView> {
   const [row] = await tx<SettingRow[]>`SELECT * FROM helm.smtp_settings()`;
   if (!row) return { ...SMTP_DEFAULTS };
+  const [mode] = await tx<{ delivery: EmailDelivery; graph_connection_id: string | null }[]>`
+    SELECT delivery::text AS delivery, graph_connection_id FROM helm.email_delivery_setting()
+  `;
 
   return {
     configured: true,
     enabled: row.enabled,
-    host: row.host,
+    delivery: mode?.delivery ?? 'smtp',
+    graphConnectionId: mode?.graph_connection_id ?? null,
+    // Null when this tenant has only ever sent through Microsoft 365.
+    host: row.host ?? '',
     port: Number(row.port),
     security: row.security,
     tlsVerify: row.tls_verify,
@@ -211,11 +225,68 @@ export async function writeSmtpSetting(
       ${clearPassword}
     )
   `;
+  // Saving the relay is choosing it: set_smtp_setting() leaves `delivery` alone.
+  await tx`SELECT helm.use_smtp_delivery()`;
 
   // Read back rather than echoing the input: the function normalises domains to
   // lower case and decides what happened to the password, and a caller that
   // believes the input is what was stored will be wrong about both.
   return readSmtpSetting(tx);
+}
+
+export interface GraphEmailInput {
+  enabled: boolean;
+  connectionId: string;
+  fromAddress: string;
+  allowedRecipientDomains?: string[] | undefined;
+}
+
+/**
+ * Send through Microsoft 365. The function refuses a connection that is not
+ * on the MSP's own organisation, and leaves the relay's fields as they were.
+ */
+export async function writeGraphEmail(tx: HelmTx, input: GraphEmailInput): Promise<SmtpSettingView> {
+  await tx`
+    SELECT helm.set_graph_email(
+      ${input.enabled}, ${input.connectionId}::uuid, ${input.fromAddress},
+      ${input.allowedRecipientDomains ?? []}
+    )
+  `;
+  return readSmtpSetting(tx);
+}
+
+/** A Microsoft 365 connection mail can go out through: the MSP's own. */
+export interface SendingConnection {
+  id: string;
+  organizationName: string;
+  tenant: string;
+  tenantName: string | null;
+  secretSet: boolean;
+}
+
+/**
+ * The connections the settings page offers. Read under RLS, so only somebody
+ * who can see integrations sees any; the function checks the organisation
+ * again on save.
+ */
+export async function listSendingConnections(tx: HelmTx): Promise<SendingConnection[]> {
+  const rows = await tx<{
+    id: string; organization_name: string; tenant: string | null; tenant_name: string | null; secret_set: boolean;
+  }[]>`
+    SELECT c.id, o.name AS organization_name, c.config ->> 'tenant_id' AS tenant,
+           c.config ->> 'tenant_name' AS tenant_name, c.credential_secret_ids ? 'client_secret' AS secret_set
+    FROM integration_connection c
+    JOIN organization o ON o.id = c.organization_id
+    WHERE c.provider = 'microsoft_graph' AND o.is_msp_internal
+    ORDER BY c.created_at
+  `;
+  return rows.map((r) => ({
+    id: r.id,
+    organizationName: r.organization_name,
+    tenant: r.tenant ?? '',
+    tenantName: r.tenant_name,
+    secretSet: r.secret_set,
+  }));
 }
 
 /**
