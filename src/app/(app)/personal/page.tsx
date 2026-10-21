@@ -2,8 +2,7 @@ import Link from 'next/link';
 import {
   Bell, CalendarClock, ClipboardList, KeyRound, Lock, UserCog,
 } from 'lucide-react';
-import { PersonalVault } from '@/components/personal-vault';
-import { listVault } from '@/lib/personal/vault';
+import { countVault } from '@/lib/personal/vault';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
@@ -32,7 +31,8 @@ export const dynamic = 'force-dynamic';
  * MY PASSWORDS, the personal vault (1030). Decision 14 had dropped it for a
  * Bitwarden/Vaultwarden integration; it is native now, owner-only by RLS with
  * no administrator override — see the migration's header for the answers to
- * the three questions that decision recorded.
+ * the three questions that decision recorded. A card here opens it; the list
+ * and each entry have pages of their own, laid out as a client's credentials.
  *
  * ONE TRANSACTION. Four reads that all resolve the acting user from
  * helm.current_actor_id(), so they share a session context rather than opening
@@ -50,9 +50,9 @@ export default async function PersonalPage() {
       tasks: await listMyTasks(tx, { state: 'open', who: 'mine', limit: 5 }),
       notifications: (await listInbox(tx, 5)),
       unread: await unreadCount(tx),
-      // The owner policy returns this person's entries and nobody else's; an
+      // The owner policy counts this person's entries and nobody else's; an
       // API token or service account has none (actor_type is not 'user').
-      vault: await listVault(tx),
+      vault: await countVault(tx),
     }),
   );
 
@@ -177,11 +177,16 @@ export default async function PersonalPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Lock className="size-4 text-ink-faint" aria-hidden /> My passwords
-              {vault.length > 0 && <Badge tone="neutral">{vault.length}</Badge>}
+              {vault > 0 && <Badge tone="neutral">{vault}</Badge>}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <PersonalVault entries={vault} />
+            <AccountLink
+              href="/personal/passwords"
+              icon={Lock}
+              title={vault === 0 ? 'Open my passwords' : `Open my passwords (${vault} stored)`}
+              detail="Your own logins, kept apart from every client. Only you can see or open them, an administrator included."
+            />
           </CardContent>
         </Card>
 
@@ -218,7 +223,7 @@ function AccountLink({
   detail,
 }: {
   href: string;
-  icon: typeof KeyRound;
+  icon: typeof KeyRound | typeof Lock;
   title: string;
   detail: string;
 }) {
