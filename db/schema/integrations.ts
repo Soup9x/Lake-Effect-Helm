@@ -113,6 +113,8 @@ export const m365ContactLink = pgTable('m365_contact_link', {
   payloadSha256: bytea('payload_sha256'),
   applied: jsonb('applied').notNull().default({}),
   lastSyncedAt: tstz('last_synced_at').notNull().defaultNow(),
+  /** Department, office, address, aliases, groups: Microsoft 365's, shown read-only (1060). */
+  profile: jsonb('profile').notNull().default({}),
 }, (t) => [
   primaryKey({ columns: [t.connectionId, t.graphUserId] }),
   uniqueIndex('m365_contact_link_contact_uk').on(t.connectionId, t.contactId),

@@ -15,6 +15,8 @@ export interface FakeGraphTenant {
   forbidden?: string[];
   /** Mailboxes sendMail will send as; any other address is a 404. */
   mailboxes?: string[];
+  /** Groups, each with the ids of its direct members. None when absent. */
+  groups?: { group: Record<string, unknown>; members: { id: string; '@odata.type': string }[] }[];
 }
 
 /** A message the fake accepted through sendMail. */
@@ -93,7 +95,15 @@ export class FakeGraph {
         return { status: 202, body: '' };
       }
 
+      const members = parsed.pathname.match(/^\/v1\.0\/groups\/([^/]+)\/members$/);
+      if (members) {
+        const found = tenant.groups?.find((g) => g.group.id === decodeURIComponent(members[1]!));
+        return found ? json(200, { value: found.members }) : json(404, { error: { code: 'Request_ResourceNotFound', message: 'no group' } });
+      }
+
       switch (parsed.pathname) {
+        case '/v1.0/groups':
+          return json(200, { value: (tenant.groups ?? []).map((g) => g.group) });
         case '/v1.0/organization':
           return json(200, { value: [{ id: 'org-guid', displayName: tenant.displayName }] });
         case '/v1.0/subscribedSkus':

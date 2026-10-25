@@ -14,6 +14,7 @@ import { DocumentsActions } from '@/components/shell/documents-actions';
 import { maxUploadBytes } from '@/lib/documents/limits';
 import { importSpecFor, templateFor } from '@/lib/import/specs';
 import { isClientRole } from '@/lib/ui/roles';
+import { syncSourceLabel } from '@/lib/integrations/sync-source';
 
 export const dynamic = 'force-dynamic';
 
@@ -162,7 +163,7 @@ export default async function CategoryPage({
         secret_id: string | null; sensitivity: string | null;
         requires_step_up: boolean | null; requires_reason: boolean | null;
         min_role_rank: number | null; archived: boolean;
-        registered_at: string | null; expires_at: string | null;
+        registered_at: string | null; expires_at: string | null; synced_type: string | null;
       }[]>`
         SELECT n.id, n.name, n.status::text, n.archived_at IS NOT NULL AS archived,
                n.updated_at, u.name AS updated_by_name,
@@ -178,7 +179,12 @@ export default async function CategoryPage({
                -- A domain's two dates, for the Domain Tracker's columns. ISO
                -- text, so the grid sorts them as it sorts every other cell.
                to_char(dm.registered_at, 'YYYY-MM-DD') AS registered_at,
-               to_char(dm.expires_at, 'YYYY-MM-DD') AS expires_at
+               to_char(dm.expires_at, 'YYYY-MM-DD') AS expires_at,
+               -- The integration that keeps it current, if any (1060). Only
+               -- tenant-wide actors can read external_identity; for anybody
+               -- else this is NULL and the row says nothing.
+               (SELECT ei.external_type FROM external_identity ei
+                WHERE ei.node_id = n.id ORDER BY ei.last_synced_at DESC LIMIT 1) AS synced_type
         FROM asset_node n
         LEFT JOIN app_user u ON u.id = n.updated_by
         LEFT JOIN credential c ON c.id = n.id
@@ -222,6 +228,8 @@ export default async function CategoryPage({
           id: r.id,
           name: r.name,
           href: `/assets/${r.id}`,
+          subtext: r.synced_type && syncSourceLabel(r.synced_type)
+            ? `Synced from ${syncSourceLabel(r.synced_type)}` : null,
           secondary: r.username,
           type: r.status,
           extra: r.secret_label,
@@ -256,10 +264,12 @@ export default async function CategoryPage({
       const rows = await tx<({
         id: string; first_name: string; last_name: string | null; title: string | null;
         email: string | null; phone: string | null; updated_at: Date; archived: boolean; tags: string[];
+        from_m365: boolean;
       } & ContactFlags)[]>`
         SELECT id, first_name, last_name, title, email::text, phone, updated_at, tags,
                is_primary, is_technical, is_billing, is_emergency, is_authorised,
-               archived_at IS NOT NULL AS archived
+               archived_at IS NOT NULL AS archived,
+               EXISTS (SELECT 1 FROM m365_contact_link l WHERE l.contact_id = contact.id) AS from_m365
         FROM contact
         WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
           ${includeArchived ? tx`` : tx`AND archived_at IS NULL`}
@@ -276,7 +286,9 @@ export default async function CategoryPage({
           href: `/contacts/${r.id}`,
           // Primary · Technical · Billing — under the name, and matched by the
           // list's filter, so "technical" narrows to the technical people.
-          subtext: contactTags(r).join(' · ') || null,
+          // "Microsoft 365" when the sync keeps them current (1060), so the
+          // filter narrows to synced people too.
+          subtext: [...contactTags(r), ...(r.from_m365 ? ['Microsoft 365'] : [])].join(' · ') || null,
           archived: r.archived,
           secondary: r.email,
           type: r.title,

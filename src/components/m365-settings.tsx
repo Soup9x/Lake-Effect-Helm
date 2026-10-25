@@ -15,7 +15,7 @@ import { Modal } from './ui/modal';
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from './ui/table';
 import { formatDateTime } from '@/lib/ui/format';
 import { apiFetch, type Feedback } from '@/lib/ui/api';
-import { GRAPH_PERMISSIONS } from '@/lib/m365/client';
+import { GRAPH_PERMISSIONS, GROUP_PERMISSION } from '@/lib/m365/client';
 import type { M365Connection } from '@/lib/m365/queries';
 
 interface OrganizationOption {
@@ -291,8 +291,8 @@ export function M365SettingsCard({
           <form onSubmit={save} className="space-y-4">
             <FieldHint>
               Register an app in Entra ID (one multi-tenant app can serve every client), add the application
-              permissions {GRAPH_PERMISSIONS.join(', ')}, create a client secret, and grant admin consent in
-              the client&rsquo;s tenant.
+              permissions {GRAPH_PERMISSIONS.join(', ')} (and {GROUP_PERMISSION} to see which groups people are
+              in), create a client secret, and grant admin consent in the client&rsquo;s tenant.
             </FieldHint>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>

@@ -10,7 +10,8 @@
 import { z } from 'zod';
 import type { HelmTx } from '../db/client';
 
-export const EMAIL_LABELS = ['work', 'personal', 'other'] as const;
+/** 'alias' marks another address the same mailbox receives; the Microsoft 365 sync adds them (1060). */
+export const EMAIL_LABELS = ['work', 'personal', 'alias', 'other'] as const;
 export const PHONE_LABELS = ['work', 'mobile', 'home', 'fax', 'other'] as const;
 
 export const emailEntrySchema = z.object({

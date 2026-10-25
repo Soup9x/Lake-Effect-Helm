@@ -57,10 +57,12 @@ enforced by PostgreSQL itself rather than by application code.
   organisation is mapped to, with hostname, OS, hardware, address and check-in
   kept current — and any field somebody edited by hand left alone. Read-only;
   configured under Settings. Needs outbound HTTPS to your NinjaOne region.
-- **Microsoft 365.** Per client: licensed users as contacts, paid subscriptions
-  as licences with seats kept current, and verified domains — through one Entra
-  app (multi-tenant, or one per client) with read-only Graph permissions. Edits
-  made in Helm are kept; nothing is written back.
+- **Microsoft 365.** Per client: licensed users as contacts (with their
+  aliases, department, office, address and groups), paid subscriptions as
+  licences with seats kept current, and verified domains — through one Entra
+  app (multi-tenant, or one per client) with read-only Graph permissions. Synced
+  entries are marked as such. Edits made in Helm are kept; nothing is written
+  back.
 - **Sign-in.** Local passwords (the break-glass path), Microsoft Entra ID, any
   OpenID Connect provider, and RADIUS. All produce the same revocable session.
   Administrators add people from the People page with a local password they
