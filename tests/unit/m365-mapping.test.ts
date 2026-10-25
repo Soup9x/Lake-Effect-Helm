@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { domainsToImport, isPerson, mapSku, mapUser } from '../../src/lib/m365/mapping';
+import { aliasesOf, domainsToImport, groupKind, isPerson, mapProfile, mapSku, mapUser } from '../../src/lib/m365/mapping';
 
 const LICENSED = [{ skuId: 'sku-1' }];
 
@@ -76,5 +76,31 @@ describe('domains', () => {
       { id: 'acme.mail.onmicrosoft.com', isVerified: true },
       { id: 'pending.test', isVerified: false },
     ])).toEqual(['acme.test']);
+  });
+});
+
+describe('the rest of a person (1060)', () => {
+  it('takes aliases from smtp: proxy addresses, not the primary, routing or non-mail ones', () => {
+    expect(aliasesOf({
+      id: 'u', mail: 'Grace@Acme.test',
+      proxyAddresses: ['SMTP:grace@acme.test', 'smtp:G.Hopper@acme.test', 'smtp:gh@acme.test', 'smtp:gh@acme.test',
+        'smtp:grace@acme.onmicrosoft.com', 'SIP:grace@acme.test', 'X500:/o=ExchangeLabs'],
+    })).toEqual(['g.hopper@acme.test', 'gh@acme.test']);
+  });
+
+  it('calls groups what the admin center calls them', () => {
+    expect(groupKind({ id: '1', groupTypes: ['Unified'], mailEnabled: true, securityEnabled: false })).toBe('Microsoft 365');
+    expect(groupKind({ id: '2', groupTypes: [], mailEnabled: true, securityEnabled: true })).toBe('Mail-enabled security');
+    expect(groupKind({ id: '3', groupTypes: [], mailEnabled: false, securityEnabled: true })).toBe('Security');
+    expect(groupKind({ id: '4', groupTypes: [], mailEnabled: true, securityEnabled: false })).toBe('Distribution list');
+  });
+
+  it('leaves out what Microsoft 365 does not have, and groups it could not read', () => {
+    expect(mapProfile({ id: 'u', city: 'Buffalo', country: 'United States', businessPhones: [' '] }, null)).toEqual({
+      address: 'Buffalo, United States',
+    });
+    expect(mapProfile({ id: 'u' }, [{ name: 'Zeta', kind: 'Security' }, { name: 'Alpha', kind: 'Security' }]).groups)
+      .toEqual([{ name: 'Alpha', kind: 'Security' }, { name: 'Zeta', kind: 'Security' }]);
+    expect(mapProfile({ id: 'u' }, [])).toEqual({ groups: [] });
   });
 });
