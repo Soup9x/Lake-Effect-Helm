@@ -146,10 +146,9 @@ export function Sidebar({
       aria-label={`${org.name} records`}
     >
       {/*
-        The organization's own name, with the collapse toggle inline. Duplicated
-        from the top bar on purpose: this is the control's natural home, and the
-        one in the utility bar is for people who have already collapsed it and
-        need a way back that does not depend on finding a 14px drawer.
+        The organization's own name, with the collapse toggle inline. The only
+        copy of the control: the top bar's duplicate was removed, and this one
+        stays drawn when collapsed, so the way back is always where it went.
       */}
       <div
         className={cn(
