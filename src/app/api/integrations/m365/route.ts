@@ -91,7 +91,11 @@ export const PUT = tenantRoute(
       const [internal] = await tx<{ id: string }[]>`
         SELECT id FROM organization WHERE is_msp_internal AND deleted_at IS NULL LIMIT 1
       `;
-      if (!internal) throw ApiError.invalid('this MSP has no internal organisation to keep the secret in');
+      if (!internal) {
+        throw ApiError.invalid('this MSP has no internal organisation to keep the secret in', {
+          remedy: 'Mark your own organisation as the MSP\'s on the server; see docs/deployment/on-premises.md §6.',
+        });
+      }
 
       const created = await getSecretService().createInTransaction(
         tx,

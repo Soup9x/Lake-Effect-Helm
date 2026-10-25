@@ -27,8 +27,14 @@
  * deployment at all. More importantly it establishes the break-glass account on
  * day one, rather than on the morning somebody discovers they need one.
  *
+ * It also creates the MSP's own organisation (is_msp_internal), named after
+ * the tenant. Exactly one per tenant, and the API deliberately cannot set the
+ * flag, so a deployment that skipped it here had no way to get one: connecting
+ * Microsoft 365 or NinjaOne, which keep their secrets under it, failed with
+ * "this MSP has no internal organisation".
+ *
  * Refuses to run twice against the same tenant slug. Safe to read before
- * running: it writes five rows and mints one key.
+ * running: it writes six rows and mints one key.
  *
  * Usage:
  *   pnpm helm:bootstrap --tenant "Northwind Managed Services" \
@@ -206,6 +212,11 @@ async function main(): Promise<void> {
       await tx`
         INSERT INTO tenant (id, slug, name, status)
         VALUES (${tenantId}::uuid, ${options.slug}::citext, ${options.tenantName}, 'active')
+      `;
+
+      await tx`
+        INSERT INTO organization (tenant_id, slug, name, is_msp_internal, relationship)
+        VALUES (${tenantId}::uuid, ${options.slug}::citext, ${options.tenantName}, true, 'internal')
       `;
 
       await tx`
