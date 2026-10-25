@@ -18,7 +18,17 @@
  * is refused rather than followed. Redirects within https ARE followed, because
  * the whole point of a redirector like rdap.org is to forward to the
  * authoritative registry for the TLD.
+ *
+ * A NAMED USER-AGENT ON EVERY HOP. Node's fetch otherwise sends `node`, and
+ * public RDAP services sit behind bot filtering that can answer a generic
+ * client with 403 — which read on screen as "the registry answered 403" and was
+ * never retried, when the registry may not have been asked at all.
  */
+
+const HEADERS = {
+  accept: 'application/rdap+json, application/json',
+  'user-agent': 'lake-effect-helm/1 (+domain-expiry)',
+};
 
 export interface RdapExpiry {
   /** The registry's expiry, when it gave one. */
@@ -111,10 +121,13 @@ export async function lookupDomainExpiry(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
+  // Which host gave the final answer, so an error names the redirector or the
+  // registry rather than calling everything "the registry".
+  let answeredBy = base.host;
   try {
     response = await fetch(url, {
       signal: controller.signal,
-      headers: { accept: 'application/rdap+json, application/json' },
+      headers: HEADERS,
       // Followed manually, so a hop to http can be refused rather than taken.
       redirect: 'manual',
     });
@@ -132,9 +145,10 @@ export async function lookupDomainExpiry(
           'unreachable',
         );
       }
+      answeredBy = next.host;
       response = await fetch(next, {
         signal: controller.signal,
-        headers: { accept: 'application/rdap+json, application/json' },
+        headers: HEADERS,
         redirect: 'manual',
       });
     }
@@ -156,9 +170,18 @@ export async function lookupDomainExpiry(
   if (response.status === 404) {
     throw new RdapError(`the registry does not know ${domainName}`, 'not_found');
   }
+  // 403 and 429 are refusals of this client — blocked or rate-limited — not
+  // facts about the domain, so they are failures that get retried and shown in
+  // amber, not 'unsupported'.
+  if (response.status === 403 || response.status === 429) {
+    throw new RdapError(
+      `${answeredBy} refused the lookup for ${domainName} (${response.status})`,
+      'unreachable',
+    );
+  }
   if (!response.ok) {
     throw new RdapError(
-      `the registry answered ${response.status} for ${domainName}`,
+      `${answeredBy} answered ${response.status} for ${domainName}`,
       response.status >= 500 ? 'unreachable' : 'unsupported',
     );
   }
