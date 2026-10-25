@@ -109,12 +109,6 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
         {/* The role badges, then free-text tags (1050) — editable, as an entry's are. */}
         <div className="flex flex-wrap items-center gap-1.5">
           {archived && <Badge tone="warning">Archived {formatDateTime(row.archived_at!.toISOString())}</Badge>}
-          {m365 && (
-            <Badge tone="info" title="Kept current by the Microsoft 365 sync">
-              <Cloud className="size-3" aria-hidden />
-              Microsoft 365 · synced {formatDateTime(m365.last_synced_at.toISOString())}
-            </Badge>
-          )}
           {tags.map((tag) => <Badge key={tag} tone="brand">{tag}</Badge>)}
           <TagEditor target="contact" id={row.id} tags={row.free_tags} canWrite={canWrite && !archived} />
         </div>
@@ -180,6 +174,15 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
                   <>
                     <dt className="text-ink-muted">PSA contact</dt>
                     <dd className="font-mono text-xs text-ink">{row.psa_contact_id}</dd>
+                  </>
+                )}
+                {m365 && (
+                  <>
+                    <dt className="text-ink-muted">Microsoft 365</dt>
+                    <dd className="flex items-center gap-1.5 text-ink" title="Kept current by the Microsoft 365 sync">
+                      <Cloud className="size-3.5 text-ink-faint" aria-hidden />
+                      Synced {formatDateTime(m365.last_synced_at.toISOString())}
+                    </dd>
                   </>
                 )}
                 <dt className="text-ink-muted">Last updated</dt>

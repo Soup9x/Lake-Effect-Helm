@@ -145,6 +145,9 @@ export type RdapMode =
   | 'unreadable-date'
   | 'not-found'
   | 'server-error'
+  /** 403 unless the request names itself — what bot filtering in front of rdap.org does. */
+  | 'forbidden-anonymous'
+  | 'rate-limited'
   | 'not-json'
   /** Redirects once, to itself over https — what a redirector legitimately does. */
   | 'redirect-https'
@@ -186,6 +189,11 @@ export class FakeRdap {
           return;
         }
         if (mode === 'not-found') { res.writeHead(404); res.end('{}'); return; }
+        if (mode === 'forbidden-anonymous'
+          && !req.headers['user-agent']?.startsWith('lake-effect-helm/')) {
+          res.writeHead(403); res.end('forbidden'); return;
+        }
+        if (mode === 'rate-limited') { res.writeHead(429); res.end('slow down'); return; }
         if (mode === 'server-error') { res.writeHead(503); res.end('busy'); return; }
         if (mode === 'not-json') {
           res.writeHead(200, { 'content-type': 'text/html' });

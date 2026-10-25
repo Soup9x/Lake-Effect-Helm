@@ -166,6 +166,25 @@ describe('asking a registry', () => {
     }
   });
 
+  it('names itself, so a redirector with bot filtering does not answer 403', async () => {
+    const rdap = await service({ mode: 'forbidden-anonymous' });
+    const found = await lookupDomainExpiry(rdap.baseUrl, 'acme.test');
+    expect(found.expiresAt.getUTCFullYear()).toBe(2027);
+  });
+
+  it('reports a 403 or 429 as unreachable, naming the host that refused', async () => {
+    // A refusal of this client is not a fact about the domain: it must be
+    // retried and shown as a failure, not filed as 'unsupported'.
+    const rdap = await service({ mode: 'rate-limited' });
+    try {
+      await lookupDomainExpiry(rdap.baseUrl, 'acme.test');
+      expect.unreachable('a 429 should not resolve');
+    } catch (error) {
+      expect((error as RdapError).reason).toBe('unreachable');
+      expect((error as Error).message).toContain(new URL(rdap.baseUrl).host);
+    }
+  });
+
   it('reports a login page as unreadable rather than guessing', async () => {
     // A captive portal or a proxy answering 200 with HTML is the classic case,
     // and it is the one where a lenient parser invents a date.
