@@ -12,6 +12,8 @@
  *                 they removed is not put back.
  *   ADOPTION      somebody already documented with that address is linked.
  *   PARTIAL       a missing permission fails that part only.
+ *   PROFILE       department, office, address, aliases and groups (1060); a
+ *                 missing group permission keeps the groups recorded last time.
  */
 import { NextRequest } from 'next/server';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -349,6 +351,53 @@ describe('the sync worker', () => {
     expect(contacts[0]).toMatchObject({ id: existing!.id, first_name: 'G.', title: 'Office manager' });
     const [kept] = await su((sql) => sql<{ notes: string }[]>`SELECT notes FROM contact WHERE id = ${existing!.id}::uuid`);
     expect(kept?.notes).toBe('Prefers phone');
+  });
+
+  it('records department, office, address and groups, and adds aliases as addresses (1060)', async () => {
+    const member = (id: string, type = 'user') => ({ id, '@odata.type': `#microsoft.graph.${type}` });
+    const groups = [
+      { group: { id: 'g-all', displayName: 'All Staff', groupTypes: ['Unified'], mailEnabled: true, securityEnabled: false },
+        members: [member('user-grace'), member('user-alan'), member('dev-1', 'device')] },
+      { group: { id: 'g-vpn', displayName: 'VPN Users', groupTypes: [], mailEnabled: false, securityEnabled: true },
+        members: [member('user-grace')] },
+    ];
+    const grace = {
+      ...GRACE, department: 'Operations', officeLocation: 'HQ 2nd floor', companyName: 'Acme',
+      streetAddress: '1 Main St', city: 'Buffalo', state: 'NY', postalCode: '14201', country: 'United States',
+      proxyAddresses: ['SMTP:grace@acme.test', 'smtp:G.Hopper@acme.test', 'smtp:grace@acmecorp.onmicrosoft.com', 'X500:/o=x'],
+    };
+    graph.tenants.set('acmecorp.onmicrosoft.com', acmeTenant({ users: [grace, ALAN], groups }));
+    await connect();
+    await runSync();
+
+    const profiles = () => su((sql) => sql<{ graph_user_id: string; profile: Record<string, unknown> }[]>`
+      SELECT graph_user_id, profile FROM m365_contact_link ORDER BY graph_user_id`);
+    const [alan, graceProfile] = await profiles();
+    expect(graceProfile!.profile).toEqual({
+      department: 'Operations', office: 'HQ 2nd floor', company: 'Acme',
+      address: '1 Main St, Buffalo, NY 14201, United States',
+      phones: ['+1 555 0100'],
+      aliases: ['g.hopper@acme.test'],
+      groups: [{ name: 'All Staff', kind: 'Microsoft 365' }, { name: 'VPN Users', kind: 'Security' }],
+    });
+    expect(alan!.profile).toEqual({ groups: [{ name: 'All Staff', kind: 'Microsoft 365' }] });
+    const contact = (await linkedContacts()).find((c) => c.first_name === 'Grace')!;
+    expect(contact.emails).toEqual(['grace@acme.test', 'g.hopper@acme.test']);
+
+    // Somebody removes the alias; then the app loses GroupMember.Read.All.
+    await withTenant({ tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' }, async (tx) =>
+      tx`DELETE FROM contact_email WHERE contact_id = ${contact.id}::uuid AND address = 'g.hopper@acme.test'`);
+    graph.tenants.set('acmecorp.onmicrosoft.com', acmeTenant({ users: [grace, ALAN], groups, forbidden: ['/v1.0/groups'] }));
+    await makeDue();
+    await runSync();
+
+    expect((await linkedContacts()).find((c) => c.id === contact.id)!.emails).toEqual(['grace@acme.test']);
+    expect((await profiles())[1]!.profile.groups).toEqual(graceProfile!.profile.groups);
+    asAdmin();
+    const [row] = (await json<{ connections: M365Connection[] }>(await getM365(req('GET', '/x')))).connections;
+    expect(row!.lastRun).toMatchObject({ status: 'partial' });
+    expect(row!.lastRun!.error).toMatch(/GroupMember\.Read\.All/);
+    expect(row).toMatchObject({ contacts: 2 });
   });
 
   it('keeps going when one permission is missing, and says which', async () => {

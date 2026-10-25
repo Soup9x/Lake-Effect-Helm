@@ -9,6 +9,11 @@
  *   User.Read.All           users, for contacts
  *   Domain.Read.All         domains
  *
+ * And one that is optional: without it the rest of the sync still runs, and
+ * the run says what is missing.
+ *
+ *   GroupMember.Read.All    groups, and who is in each (1060)
+ *
  * WHAT IS READ — the sync writes nothing:
  *
  *   POST login.microsoftonline.com/{tenant}/oauth2/v2.0/token
@@ -16,6 +21,7 @@
  *   GET  /v1.0/users              paged by @odata.nextLink
  *   GET  /v1.0/subscribedSkus
  *   GET  /v1.0/domains
+ *   GET  /v1.0/groups              and /v1.0/groups/{id}/members, both paged
  *
  * AND ONE THING IS SENT, only from the MSP's own connection and only when
  * email is set to go through Microsoft 365 (1010):
@@ -34,6 +40,9 @@ const MAX_PAGES = 100;
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 export const GRAPH_PERMISSIONS = ['Organization.Read.All', 'User.Read.All', 'Domain.Read.All'] as const;
+
+/** Group memberships (1060). Optional: the rest of the sync runs without it. */
+export const GROUP_PERMISSION = 'GroupMember.Read.All';
 
 /** An Entra tenant: a GUID, or one of its domains. It goes into a URL path. */
 export const ENTRA_TENANT = /^[A-Za-z0-9][A-Za-z0-9.-]{1,252}$/;
@@ -70,6 +79,31 @@ export interface GraphUser {
   accountEnabled?: boolean | null;
   userType?: string | null;
   assignedLicenses?: { skuId?: string }[] | null;
+  department?: string | null;
+  officeLocation?: string | null;
+  companyName?: string | null;
+  streetAddress?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+  country?: string | null;
+  /** `SMTP:` the primary address, `smtp:` an alias; other prefixes are not email. */
+  proxyAddresses?: string[] | null;
+}
+
+export interface GraphGroup {
+  id: string;
+  displayName?: string | null;
+  mail?: string | null;
+  groupTypes?: string[] | null;
+  mailEnabled?: boolean | null;
+  securityEnabled?: boolean | null;
+}
+
+/** A group's member, which may be a user, a device, a contact or a group. */
+export interface GraphMember {
+  id: string;
+  '@odata.type'?: string;
 }
 
 export interface GraphSku {
@@ -243,6 +277,8 @@ export function listUsers(target: GraphTarget, token: string): Promise<GraphUser
   const select = [
     'id', 'displayName', 'givenName', 'surname', 'jobTitle', 'mail', 'userPrincipalName',
     'businessPhones', 'mobilePhone', 'accountEnabled', 'userType', 'assignedLicenses',
+    'department', 'officeLocation', 'companyName', 'streetAddress', 'city', 'state', 'postalCode', 'country',
+    'proxyAddresses',
   ].join(',');
   return collect<GraphUser>(target, token, `/v1.0/users?$select=${select}&$top=999`, 'users', 'User.Read.All');
 }
@@ -253,6 +289,17 @@ export function listSubscribedSkus(target: GraphTarget, token: string): Promise<
 
 export function listDomains(target: GraphTarget, token: string): Promise<GraphDomain[]> {
   return collect<GraphDomain>(target, token, '/v1.0/domains', 'domains', 'Domain.Read.All');
+}
+
+export function listGroups(target: GraphTarget, token: string): Promise<GraphGroup[]> {
+  const select = 'id,displayName,mail,groupTypes,mailEnabled,securityEnabled';
+  return collect<GraphGroup>(target, token, `/v1.0/groups?$select=${select}&$top=999`, 'groups', GROUP_PERMISSION);
+}
+
+/** Direct members only: a person in a nested group is shown in the group they were added to. */
+export function listGroupMembers(target: GraphTarget, token: string, groupId: string): Promise<GraphMember[]> {
+  return collect<GraphMember>(target, token, `/v1.0/groups/${encodeURIComponent(groupId)}/members?$select=id&$top=999`,
+    'group members', GROUP_PERMISSION);
 }
 
 /** One plain-text message, as EmailBatch hands it over. */

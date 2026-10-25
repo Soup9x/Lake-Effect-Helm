@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { isUuid } from '@/lib/ids';
-import { ExternalLink, Network } from 'lucide-react';
+import { Cloud, ExternalLink, Network } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
@@ -38,6 +38,7 @@ import { categoryBySource } from '@/lib/nav/org-categories';
 import { DetailEditForm } from '@/components/detail-edit-form';
 import { ConfigurationEdit } from '@/components/configuration-edit';
 import { listInterfaces } from '@/lib/assets/devices';
+import { syncSourceLabel } from '@/lib/integrations/sync-source';
 import { detailFieldsFor, subnetMaskOf } from '@/lib/assets/detail-fields';
 import { ExternalCheckNote, type ExternalCheckState } from '@/components/external-check-note';
 import { readExternalCheckSetting } from '@/lib/external/settings';
@@ -321,7 +322,15 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         }
       : null;
 
+    // Which integrations keep this entry current (1060). RLS shows these to
+    // tenant-wide actors only; everybody else simply sees no badge.
+    const synced = await tx<{ external_type: string; last_synced_at: Date }[]>`
+      SELECT external_type, max(last_synced_at) AS last_synced_at FROM external_identity
+      WHERE node_id = ${node.id}::uuid GROUP BY external_type ORDER BY external_type
+    `;
+
     return {
+      synced,
       node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams,
       attachments, device,
       canDeleteAttachments: session.permissions.includes('asset:delete'),
@@ -340,6 +349,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   if (!data) notFound();
   const {
+    synced,
     node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams, totp, canReveal, canManageSeed, canChangePassword,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
     attachments, canDeleteAttachments, device, history,
@@ -770,6 +780,15 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
               <Badge tone="neutral">{node.site_name}</Badge>
             </Link>
           )}
+          {synced.map((s) => {
+            const source = syncSourceLabel(s.external_type);
+            return source ? (
+              <Badge key={s.external_type} tone="info" title={`Kept current by the ${source} sync`}>
+                <Cloud className="size-3" aria-hidden />
+                {source} · synced {formatDateTime(s.last_synced_at.toISOString())}
+              </Badge>
+            ) : null;
+          })}
           {/* Editable rather than decorative: same control, same endpoint. */}
           <TagEditor target="node" id={node.id} tags={node.tags} canWrite={canWrite} />
           {expiries.map((expiry) => (

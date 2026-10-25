@@ -4,7 +4,7 @@
  * a SKU is called — is a unit test.
  */
 import { createHash } from 'node:crypto';
-import type { GraphDomain, GraphSku, GraphUser } from './client';
+import type { GraphDomain, GraphGroup, GraphSku, GraphUser } from './client';
 
 export interface MappedUser {
   graphId: string;
@@ -61,6 +61,85 @@ export function mapUser(user: GraphUser): MappedUser {
     .digest();
 
   return { graphId: user.id, values, sha256 };
+}
+
+/** A group as the contact page lists it. */
+export type ProfileGroup = {
+  name: string;
+  kind: string;
+};
+
+/**
+ * What Microsoft 365 knows about a person beyond the contact's own fields
+ * (1060): shown read-only on the contact, and the aliases added as addresses.
+ *
+ * `groups` is left out, not empty, when the groups could not be read, so the
+ * groups recorded last time are kept rather than wiped by a missing permission.
+ * A type rather than an interface, so it is plain JSON to tx.json().
+ */
+export type MappedProfile = {
+  department?: string;
+  office?: string;
+  company?: string;
+  address?: string;
+  phones?: string[];
+  aliases?: string[];
+  groups?: ProfileGroup[];
+};
+
+/** What kind of group, in the words the Microsoft 365 admin center uses. */
+export function groupKind(group: GraphGroup): string {
+  if (group.groupTypes?.includes('Unified')) return 'Microsoft 365';
+  if (group.securityEnabled && group.mailEnabled) return 'Mail-enabled security';
+  if (group.securityEnabled) return 'Security';
+  if (group.mailEnabled) return 'Distribution list';
+  return 'Group';
+}
+
+/**
+ * Every other address the person receives mail at. Not the primary, which is
+ * the contact's own email already, and not the *.onmicrosoft.com routing
+ * address every mailbox has and nobody writes to.
+ */
+export function aliasesOf(user: GraphUser): string[] {
+  const primary = (text(user.mail, 254) ?? '').toLowerCase();
+  const aliases = new Set<string>();
+  for (const proxy of user.proxyAddresses ?? []) {
+    if (typeof proxy !== 'string' || !/^smtp:/i.test(proxy)) continue;
+    const address = proxy.slice(5).trim().toLowerCase();
+    if (!address || address.length > 254 || address === primary) continue;
+    if (/\.onmicrosoft\.(com|de|us)$/.test(address)) continue;
+    aliases.add(address);
+  }
+  return [...aliases].sort();
+}
+
+export function mapProfile(user: GraphUser, groups: ProfileGroup[] | null): MappedProfile {
+  const profile: MappedProfile = {};
+  const department = text(user.department);
+  const office = text(user.officeLocation);
+  const company = text(user.companyName);
+  if (department) profile.department = department;
+  if (office) profile.office = office;
+  if (company) profile.company = company;
+
+  const locality = [text(user.city), [text(user.state), text(user.postalCode)].filter(Boolean).join(' ')]
+    .filter(Boolean).join(', ');
+  const address = [text(user.streetAddress), locality, text(user.country)].filter(Boolean).join(', ');
+  if (address) profile.address = address.slice(0, 500);
+
+  const phones = (user.businessPhones ?? []).map((p) => text(p, 60)).filter((p): p is string => p !== null);
+  if (phones.length > 0) profile.phones = phones.slice(0, 10);
+
+  const aliases = aliasesOf(user);
+  if (aliases.length > 0) profile.aliases = aliases.slice(0, 50);
+
+  if (groups) {
+    profile.groups = [...groups]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 200);
+  }
+  return profile;
 }
 
 /**

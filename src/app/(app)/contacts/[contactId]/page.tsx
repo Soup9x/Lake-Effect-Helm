@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { Mail, Phone } from 'lucide-react';
+import { Cloud, Mail, Phone } from 'lucide-react';
 import { isUuid } from '@/lib/ids';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -17,6 +17,7 @@ import { contactTags, type ContactFlags } from '@/lib/contacts/tags';
 import { isClientRole } from '@/lib/ui/roles';
 import { formatDateTime } from '@/lib/ui/format';
 import { TagEditor } from '@/components/tag-editor';
+import type { MappedProfile } from '@/lib/m365/mapping';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,14 +66,21 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
       WHERE n.organization_id = ${row.organization_id}::uuid AND n.archived_at IS NULL
       ORDER BY lower(n.name)
     `;
+    // Whether the Microsoft 365 sync keeps this person current, and what it
+    // knows beyond the contact's own fields (1060).
+    const [m365] = await tx<{ profile: MappedProfile; last_synced_at: Date }[]>`
+      SELECT profile, last_synced_at FROM m365_contact_link
+      WHERE contact_id = ${contactId}::uuid ORDER BY last_synced_at DESC LIMIT 1
+    `;
     return {
-      row, channels: await readChannels(tx, contactId), configurations,
+      row, channels: await readChannels(tx, contactId), configurations, m365: m365 ?? null,
       history: await listHistory(tx, 'contact', contactId),
     };
   });
   if (!data) notFound();
 
-  const { row, channels, configurations, history } = data;
+  const { row, channels, configurations, history, m365 } = data;
+  const m365Phones = (m365?.profile.phones ?? []).filter((n) => !channels.phones.some((p) => p.number === n));
   const name = `${row.first_name} ${row.last_name}`.trim();
   const tags = contactTags(row);
   const canWrite = !isClientRole(identity.roleKey);
@@ -101,6 +109,12 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
         {/* The role badges, then free-text tags (1050) — editable, as an entry's are. */}
         <div className="flex flex-wrap items-center gap-1.5">
           {archived && <Badge tone="warning">Archived {formatDateTime(row.archived_at!.toISOString())}</Badge>}
+          {m365 && (
+            <Badge tone="info" title="Kept current by the Microsoft 365 sync">
+              <Cloud className="size-3" aria-hidden />
+              Microsoft 365 · synced {formatDateTime(m365.last_synced_at.toISOString())}
+            </Badge>
+          )}
           {tags.map((tag) => <Badge key={tag} tone="brand">{tag}</Badge>)}
           <TagEditor target="contact" id={row.id} tags={row.free_tags} canWrite={canWrite && !archived} />
         </div>
@@ -175,6 +189,8 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
           </Card>
         </div>
 
+        {m365 && <M365ProfileCard profile={m365.profile} phones={m365Phones} />}
+
         <NotesCard endpoint={`/api/contacts/${row.id}`} notes={row.notes} canEdit={canWrite} />
 
         <ContactForCard
@@ -189,5 +205,61 @@ export default async function ContactPage({ params }: { params: Promise<{ contac
         <HistoryCard entries={history} />
       </PageBody>
     </>
+  );
+}
+
+/**
+ * What Microsoft 365 says about the person beyond the contact's own fields
+ * (1060). Read-only: the sync rewrites it every run, so it is changed in
+ * Microsoft 365. Aliases are listed here and also added to the addresses above.
+ */
+function M365ProfileCard({ profile, phones }: { profile: MappedProfile; phones: string[] }) {
+  const rows: [string, string | undefined][] = [
+    ['Department', profile.department],
+    ['Office', profile.office],
+    ['Company', profile.company],
+    ['Address', profile.address],
+    ['Other business phones', phones.length > 0 ? phones.join(', ') : undefined],
+    ['Aliases', profile.aliases?.length ? profile.aliases.join(', ') : undefined],
+  ];
+  const shown = rows.filter(([, value]) => value);
+  const groups = profile.groups;
+  if (shown.length === 0 && groups === undefined) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>From Microsoft 365</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 text-sm">
+        {shown.length > 0 && (
+          <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2">
+            {shown.map(([label, value]) => (
+              <div key={label} className="contents">
+                <dt className="text-ink-muted">{label}</dt>
+                <dd className="break-words text-ink">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {groups !== undefined && (
+          <div className="space-y-1.5">
+            <p className="text-ink-muted">Groups</p>
+            {groups.length === 0 ? (
+              <p className="text-ink-faint">Not a member of any group.</p>
+            ) : (
+              <ul className="flex flex-wrap gap-1.5">
+                {groups.map((g) => (
+                  <li key={`${g.kind}:${g.name}`}>
+                    <Badge tone="neutral" title={g.kind}>{g.name}</Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        <p className="text-xs text-ink-faint">Kept current by the Microsoft 365 sync. Change these in Microsoft 365.</p>
+      </CardContent>
+    </Card>
   );
 }

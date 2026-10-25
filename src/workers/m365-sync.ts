@@ -7,6 +7,11 @@
  * independently: an app missing User.Read.All still imports licences and
  * domains, and the run says "partial" with the permission it lacked.
  *
+ * Each person's department, office, address, aliases and groups (1060) ride
+ * along with the users part. Groups need GroupMember.Read.All; without it the
+ * people still import, the groups recorded last time stay, and the run says
+ * "partial" with the permission it lacked.
+ *
  * NOTHING HERE OVERWRITES A PERSON'S EDIT, deletes, or archives: the upsert
  * functions name only what they may change and compare with what they last
  * wrote. A user who leaves stays a contact until somebody archives them.
@@ -16,9 +21,12 @@ import type { Job, JobContext, JobResult } from './runtime';
 import { describeError } from './runtime';
 import { getSecretService } from '../lib/services';
 import {
-  GraphError, fetchToken, listDomains, listSubscribedSkus, listUsers, type GraphTarget,
+  GraphError, fetchToken, listDomains, listGroupMembers, listGroups, listSubscribedSkus, listUsers,
+  type GraphTarget,
 } from '../lib/m365/client';
-import { domainsToImport, isPerson, mapSku, mapUser } from '../lib/m365/mapping';
+import {
+  domainsToImport, groupKind, isPerson, mapProfile, mapSku, mapUser, type ProfileGroup,
+} from '../lib/m365/mapping';
 
 interface DueRow {
   tenant_id: string;
@@ -169,14 +177,21 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
 
     await part('users', connection.sync_users, async () => {
       const users = (await listUsers(target, token)).filter(isPerson);
+      const groups = await groupsByUser(target, token, new Set(users.map((u) => u.id)), errors, log);
       for (const user of users) {
         const mapped = mapUser(user);
+        const profile = mapProfile(user, groups ? groups.get(user.id) ?? [] : null);
         await upsert(parts.users, log, () => withTenant(actor, async (tx) => {
           const [r] = await tx<{ outcome: string }[]>`
             SELECT outcome FROM helm.upsert_m365_user(
               ${connectionId}::uuid, ${mapped.graphId}, ${mapped.sha256}, ${tx.json(mapped.values)})
           `;
-          return r?.outcome ?? 'unchanged';
+          const outcome = r?.outcome ?? 'unchanged';
+          if (outcome === 'skipped') return outcome;
+          const [p] = await tx<{ set_m365_contact_profile: string }[]>`
+            SELECT helm.set_m365_contact_profile(${connectionId}::uuid, ${mapped.graphId}, ${tx.json(profile)})
+          `;
+          return outcome === 'unchanged' && p?.set_m365_contact_profile === 'updated' ? 'updated' : outcome;
         }, { role: 'worker' }));
       }
     });
@@ -227,6 +242,37 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
     errors,
     details: { users: parts.users, licences: parts.licences, domains: parts.domains },
   };
+}
+
+/**
+ * Each person's groups, or null when they could not be read. A missing
+ * GroupMember.Read.All is recorded with the run's errors rather than failing
+ * the users part, so the people still import.
+ */
+async function groupsByUser(
+  target: GraphTarget, token: string, people: Set<string>, errors: string[], log: JobContext['log'],
+): Promise<Map<string, ProfileGroup[]> | null> {
+  try {
+    const byUser = new Map<string, ProfileGroup[]>();
+    for (const group of await listGroups(target, token)) {
+      const entry = { name: group.displayName?.trim() || group.mail?.trim() || group.id, kind: groupKind(group) };
+      for (const member of await listGroupMembers(target, token, group.id)) {
+        if (member['@odata.type'] && member['@odata.type'] !== '#microsoft.graph.user') continue;
+        if (!people.has(member.id)) continue;
+        const list = byUser.get(member.id) ?? [];
+        list.push(entry);
+        byUser.set(member.id, list);
+      }
+    }
+    return byUser;
+  } catch (error) {
+    const message = error instanceof GraphError
+      ? `${error.message}${error.remedy ? ` — ${error.remedy}` : ''}`
+      : String(describeError(error).error ?? 'groups failed');
+    errors.push(message);
+    log.warn('groups failed', describeError(error));
+    return null;
+  }
 }
 
 /** One record, in its own transaction, counted by outcome. */
