@@ -21,9 +21,7 @@
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { SearchBox } from './search-box';
-import { useShell } from './shell-context';
 import { cn } from '@/lib/ui/cn';
 import { HelmMark } from '../ui/helm-mark';
 
@@ -96,14 +94,6 @@ export function TopNav({
   const pathname = usePathname() ?? '';
   const current = activeTab(pathname);
   const tabs = isClient ? allTabs.filter((t) => !t.adminOnly) : allTabs;
-  const { sidebarCollapsed, toggleSidebar } = useShell();
-  /*
-   * Is there a drawer to collapse? True inside one organization — two segments
-   * past /organizations — and false on the organization LIST, which has no
-   * drawer. Derived from the route rather than from context so the toggle is
-   * correct on the first paint instead of appearing a render later.
-   */
-  const hasDrawer = /^\/organizations\/[^/]+/.test(pathname);
 
   return (
     <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-1 bg-nav-top px-3 text-sm">
@@ -158,27 +148,6 @@ export function TopNav({
         */}
         <SearchBox />
         {utilities}
-        {/*
-          Only rendered inside an organization: there is no drawer to collapse
-          anywhere else, and a control that does nothing is worse than no
-          control. Same reason it carries aria-expanded rather than just an icon.
-        */}
-        {hasDrawer && (
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            aria-expanded={!sidebarCollapsed}
-            aria-label={sidebarCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}
-            title={sidebarCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}
-            className="ml-1 flex size-8 items-center justify-center rounded-md text-nav-ink transition-colors hover:bg-white/10 hover:text-nav-ink-active"
-          >
-            {sidebarCollapsed ? (
-              <ChevronRight className="size-4" aria-hidden />
-            ) : (
-              <ChevronLeft className="size-4" aria-hidden />
-            )}
-          </button>
-        )}
       </div>
     </header>
   );

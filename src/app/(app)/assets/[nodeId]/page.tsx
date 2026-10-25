@@ -11,7 +11,7 @@ import { TagEditor } from '@/components/tag-editor';
 import { isClientRole } from '@/lib/ui/roles';
 import { isWeakStrength, strengthLabel } from '@/lib/ui/strength';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge, severityTone } from '@/components/ui/badge';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { RevealButton } from '@/components/reveal-button';
 import { TotpPanel } from '@/components/totp-panel';
@@ -71,10 +71,6 @@ interface TotpRow {
   totp_account: string | null;
 }
 
-interface ExpiryRow {
-  id: string; kind: string; label: string; expires_at: Date; severity: string;
-}
-
 /**
  * One asset, its details, its dependencies and its credentials.
  *
@@ -106,7 +102,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     // appears in somebody's recent list.
     await recordView(tx, { nodeId });
 
-    const [detailRows, edges, secrets, expiries] = await Promise.all([
+    const [detailRows, edges, secrets] = await Promise.all([
       // The subtype row, as a flat object. The table name is derived from the
       // node_type enum, never from user input.
       detailFor(tx, node.node_type, node.id),
@@ -178,10 +174,6 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
             JOIN flexible_asset_type t ON t.id = r.type_id
            WHERE f.record_id = ${nodeId}::uuid
         )
-      `,
-      tx<ExpiryRow[]>`
-        SELECT id, kind::text, label, expires_at, severity::text
-        FROM v_expiration_dashboard WHERE node_id = ${nodeId}::uuid ORDER BY expires_at
       `,
     ]);
 
@@ -331,7 +323,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
     return {
       synced,
-      node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams,
+      node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, sites, record, template, schedules, runs, diagrams,
       attachments, device,
       canDeleteAttachments: session.permissions.includes('asset:delete'),
       totp: totp ?? null,
@@ -350,7 +342,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
   if (!data) notFound();
   const {
     synced,
-    node, detail, detailRaw, edges, secrets, expiries, sites, record, template, schedules, runs, diagrams, totp, canReveal, canManageSeed, canChangePassword,
+    node, detail, detailRaw, edges, secrets, sites, record, template, schedules, runs, diagrams, totp, canReveal, canManageSeed, canChangePassword,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
     attachments, canDeleteAttachments, device, history,
   } = data;
@@ -443,6 +435,21 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
   const isCredential = node.node_type === 'credential';
   const wideDetails = node.node_type === 'network' || node.node_type === 'device';
 
+  // Which integrations keep this entry current: a row in Details, beside the
+  // facts the sync writes, rather than a badge among the tags.
+  const syncedRows = synced.flatMap((s) => {
+    const source = syncSourceLabel(s.external_type);
+    return source
+      ? [{ key: s.external_type, source, at: formatDateTime(s.last_synced_at.toISOString()) }]
+      : [];
+  });
+  const syncedBadges = syncedRows.map(({ key, source, at }) => (
+    <Badge key={key} tone="info" title={`Kept current by the ${source} sync`}>
+      <Cloud className="size-3" aria-hidden />
+      {source} · synced {at}
+    </Badge>
+  ));
+
   const detailsCard = (
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-2">
@@ -531,6 +538,19 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
                   {key === 'cidr' && subnetMask && (
                     <span className="ml-2 text-xs text-ink-faint">mask {subnetMask}</span>
                   )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {syncedRows.length > 0 && (
+          <dl className="mt-2 grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
+            {syncedRows.map(({ key, source, at }) => (
+              <div key={key} className="contents">
+                <dt className="truncate text-ink-muted">{source}</dt>
+                <dd className="flex items-center gap-1.5 text-ink" title={`Kept current by the ${source} sync`}>
+                  <Cloud className="size-3.5 text-ink-faint" aria-hidden />
+                  Synced {at}
                 </dd>
               </div>
             ))}
@@ -780,22 +800,10 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
               <Badge tone="neutral">{node.site_name}</Badge>
             </Link>
           )}
-          {synced.map((s) => {
-            const source = syncSourceLabel(s.external_type);
-            return source ? (
-              <Badge key={s.external_type} tone="info" title={`Kept current by the ${source} sync`}>
-                <Cloud className="size-3" aria-hidden />
-                {source} · synced {formatDateTime(s.last_synced_at.toISOString())}
-              </Badge>
-            ) : null;
-          })}
+          {/* A password entry has no Details card, so its sync stays here. */}
+          {isCredential && syncedBadges}
           {/* Editable rather than decorative: same control, same endpoint. */}
           <TagEditor target="node" id={node.id} tags={node.tags} canWrite={canWrite} />
-          {expiries.map((expiry) => (
-            <Badge key={expiry.id} tone={severityTone(expiry.severity)}>
-              {humanise(expiry.kind)} {formatDate(expiry.expires_at)}
-            </Badge>
-          ))}
         </div>
 
         {/* A credential's notes land here too: a credential IS an asset_node,
