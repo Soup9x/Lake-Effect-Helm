@@ -82,15 +82,20 @@ async function assertNotSubjectToForcedRls(sql: postgres.Sql<Record<string, neve
   let visible: boolean;
 
   try {
-    await sql.unsafe(`
-      CREATE TEMP TABLE helm_rls_probe (id integer) ON COMMIT DROP;
-      INSERT INTO helm_rls_probe VALUES (1);
-      ALTER TABLE helm_rls_probe ENABLE ROW LEVEL SECURITY;
-      ALTER TABLE helm_rls_probe FORCE ROW LEVEL SECURITY;
-    `);
-    const [row] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM helm_rls_probe`;
-    visible = (row?.n ?? 0) === 1;
-    await sql.unsafe('DROP TABLE IF EXISTS helm_rls_probe');
+    // One explicit transaction for all of it. Sent on its own, the multi-
+    // statement string is its own implicit transaction, so ON COMMIT DROP
+    // removed the table before the SELECT could see it — the probe always
+    // failed, logged an ERROR in Postgres, and fell through to the catalog.
+    visible = await sql.begin(async (tx) => {
+      await tx.unsafe(`
+        CREATE TEMP TABLE helm_rls_probe (id integer) ON COMMIT DROP;
+        INSERT INTO helm_rls_probe VALUES (1);
+        ALTER TABLE helm_rls_probe ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE helm_rls_probe FORCE ROW LEVEL SECURITY;
+      `);
+      const [row] = await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM helm_rls_probe`;
+      return (row?.n ?? 0) === 1;
+    });
   } catch {
     // The probe needs TEMP on this database. If it is unavailable the guard
     // must not become its own failure mode, so fall back to asking the catalog
