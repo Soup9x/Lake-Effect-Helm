@@ -49,16 +49,16 @@
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.3",
     "lucide-react": "^1.52.0",
-    "next": "^16.3.8",
+    "next": "^16.4.3",
     "next-auth": "5.0.0-beta.32",
-    "nodemailer": "^10.1.1",
+    "nodemailer": "^10.2.1",
     "postgres": "^3.4.7",
     "qrcode-generator": "2.0.4",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "tailwind-merge": "^3.7.0",
     "tsx": "^4.23.15",
-    "zod": "^4.1.12"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
@@ -73,7 +73,7 @@
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^7.3.7",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
