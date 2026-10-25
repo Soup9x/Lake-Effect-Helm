@@ -383,6 +383,12 @@ describe('the sync worker', () => {
     expect(alan!.profile).toEqual({ groups: [{ name: 'All Staff', kind: 'Microsoft 365' }] });
     const contact = (await linkedContacts()).find((c) => c.first_name === 'Grace')!;
     expect(contact.emails).toEqual(['grace@acme.test', 'g.hopper@acme.test']);
+    const labels = await su((sql) => sql<{ address: string; label: string; is_primary: boolean }[]>`
+      SELECT address::text, label, is_primary FROM contact_email WHERE contact_id = ${contact.id}::uuid ORDER BY position`);
+    expect(labels).toEqual([
+      { address: 'grace@acme.test', label: 'work', is_primary: true },
+      { address: 'g.hopper@acme.test', label: 'alias', is_primary: false },
+    ]);
 
     // Somebody removes the alias; then the app loses GroupMember.Read.All.
     await withTenant({ tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' }, async (tx) =>

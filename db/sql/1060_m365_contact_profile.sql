@@ -11,9 +11,10 @@
 --             next sync would either undo the edit or have to ignore Microsoft.
 --
 --   ALIASES   every other smtp: proxy address, added to the contact's email
---             addresses the way 0990 adds the primary one: added once, never
---             put back after somebody removes it, never deleted here because
---             it is gone there.
+--             addresses under a new label, 'alias', so nobody mistakes one for
+--             a second mailbox. Added once, never primary, never put back
+--             after somebody removes it, never deleted here because it is
+--             gone there.
 --
 --   GROUPS    the groups the person is a direct member of, with what kind
 --             each is. Reading them needs GroupMember.Read.All, which an app
@@ -26,6 +27,10 @@
 -- =============================================================================
 
 SET search_path = public, extensions;
+
+ALTER TABLE contact_email DROP CONSTRAINT contact_email_label_ck;
+ALTER TABLE contact_email ADD CONSTRAINT contact_email_label_ck
+  CHECK (label IN ('work', 'personal', 'alias', 'other'));
 
 ALTER TABLE m365_contact_link
   ADD COLUMN profile jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -76,8 +81,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM contact_email e
                    WHERE e.contact_id = v_link.contact_id AND lower(e.address::text) = v_alias) THEN
       INSERT INTO contact_email (tenant_id, contact_id, address, label, is_primary, position)
-      VALUES (v_tenant, v_link.contact_id, v_alias::citext, 'work',
-              NOT EXISTS (SELECT 1 FROM contact_email e WHERE e.contact_id = v_link.contact_id AND e.is_primary),
+      VALUES (v_tenant, v_link.contact_id, v_alias::citext, 'alias', false,
               (SELECT coalesce(max(position) + 1, 0) FROM contact_email e WHERE e.contact_id = v_link.contact_id));
       v_changed := true;
     END IF;
