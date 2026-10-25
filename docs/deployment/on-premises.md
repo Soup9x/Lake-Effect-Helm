@@ -439,6 +439,11 @@ provider**. A `tenant_data_key` row inserted by hand is a wrapped key nothing
 can unwrap, and that failure only surfaces the first time someone stores a
 password.
 
+It also creates **your own organisation**, named after the tenant and flagged
+as the MSP's (`is_msp_internal`). Internal documentation lives there, and the
+Microsoft 365 and NinjaOne connections keep their secrets under it. Rename it
+in the app if you like; the flag is what matters, and the app cannot set it.
+
 It also sets a **local password** on that administrator and prints it once:
 
 ```
@@ -470,6 +475,25 @@ account-takeover primitive).
 Background worker identities are provisioned automatically by trigger when the
 tenant is created. You should see four in **Settings → Background worker
 identities** after signing in.
+
+### Installs bootstrapped before the internal organisation was created
+
+Earlier versions of bootstrap did not create it, so connecting Microsoft 365
+or NinjaOne stops with *"this MSP has no internal organisation to keep the
+secret in"*. Mark the organisation that is you, once, on the server:
+
+```bash
+docker compose exec -T postgres sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" psql -U postgres -d helm -v ON_ERROR_STOP=1' <<'SQL'
+UPDATE organization SET is_msp_internal = true, relationship = 'internal'
+WHERE name = 'Your MSP name' AND deleted_at IS NULL
+RETURNING id, name;
+SQL
+```
+
+It should print exactly one row. If you never created an organisation for
+yourself, add one in the app first. At most one organisation per tenant can
+carry the flag; a second `UPDATE` fails rather than replacing the first.
 
 ---
 
