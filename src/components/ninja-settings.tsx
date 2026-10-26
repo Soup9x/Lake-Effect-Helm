@@ -222,7 +222,8 @@ export function NinjaSettingsCard({
           <p className="text-ink-muted">
             Imports the devices NinjaOne manages as configurations of the client you choose for each
             NinjaOne organisation, and keeps their hostname, operating system, hardware, address and
-            last check-in current. Names, notes, status, location and contact are yours, and so is any
+            last check-in current. NinjaOne locations become the client&rsquo;s sites, each device is
+            put at its site, and disks, last user, antivirus and pending patches show on the device. Names, notes, status, location and contact are yours, and so is any
             field somebody edits by hand — the sync leaves those alone. Nothing is written to NinjaOne,
             and a device removed there stays documented here.
           </p>

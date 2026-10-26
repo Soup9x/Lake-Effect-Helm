@@ -1,5 +1,5 @@
 /**
- * A stub NinjaOne, answering the three requests Helm makes.
+ * A stub NinjaOne, answering the requests Helm makes.
  *
  * Plain HTTP on loopback, reached through useNinjaTransport(): the request
  * Helm builds still names https://app.ninjarmm.com (which the database insists
@@ -24,6 +24,11 @@ export class FakeNinja {
   mode: FakeNinjaMode = 'ok';
   organizations: Record<string, unknown>[] = [];
   devices: Record<string, unknown>[] = [];
+  locations: Record<string, unknown>[] = [];
+  antivirus: Record<string, unknown>[] = [];
+  patches: Record<string, unknown>[] = [];
+  /** Paths answered 403, as an app without the right scope would be. */
+  readonly refuse = new Set<string>();
   readonly requests: FakeNinjaRequest[] = [];
   readonly clientSecret: string;
 
@@ -86,16 +91,43 @@ export class FakeNinja {
       return;
     }
 
+    if (this.refuse.has(parsed.pathname)) {
+      json(403, { error: 'forbidden' });
+      return;
+    }
+
+    const byId = (rows: Record<string, unknown>[]) => {
+      const pageSize = Number(parsed.searchParams.get('pageSize') ?? 1000);
+      const after = parsed.searchParams.get('after');
+      const sorted = [...rows].sort((a, b) => Number(a.id) - Number(b.id));
+      const start = after === null ? 0 : sorted.findIndex((d) => Number(d.id) > Number(after));
+      return start < 0 ? [] : sorted.slice(start, start + pageSize);
+    };
+    const query = (rows: Record<string, unknown>[]) => {
+      const pageSize = Number(parsed.searchParams.get('pageSize') ?? 1000);
+      const offset = Number(parsed.searchParams.get('cursor') ?? 0);
+      const results = rows.slice(offset, offset + pageSize);
+      return { cursor: { name: String(offset + results.length), offset, count: results.length }, results };
+    };
+
+    if (parsed.pathname === '/api/v2/locations') {
+      json(200, byId(this.locations));
+      return;
+    }
+    if (parsed.pathname === '/api/v2/queries/antivirus-status') {
+      json(200, query(this.antivirus));
+      return;
+    }
+    if (parsed.pathname === '/api/v2/queries/os-patches') {
+      json(200, query(this.patches));
+      return;
+    }
     if (parsed.pathname === '/api/v2/organizations') {
       json(200, this.organizations);
       return;
     }
     if (parsed.pathname === '/api/v2/devices-detailed') {
-      const pageSize = Number(parsed.searchParams.get('pageSize') ?? 1000);
-      const after = parsed.searchParams.get('after');
-      const sorted = [...this.devices].sort((a, b) => Number(a.id) - Number(b.id));
-      const start = after === null ? 0 : sorted.findIndex((d) => Number(d.id) > Number(after));
-      json(200, start < 0 ? [] : sorted.slice(start, start + pageSize));
+      json(200, byId(this.devices));
       return;
     }
     json(404, { error: 'not found' });

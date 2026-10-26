@@ -78,6 +78,8 @@ export const externalIdentity = pgTable('external_identity', {
   isAuthoritative: boolean('is_authoritative').notNull().default(false),
   /** Field -> what the sync last wrote (0980); a field that differs was edited by a person. */
   applied: jsonb('applied').notNull().default({}),
+  /** What the integration reports beyond the record's own columns, shown read-only (1080). */
+  profile: jsonb('profile'),
 }, (t) => [
   uniqueIndex('external_identity_external_uk').on(t.connectionId, t.externalType, t.externalId),
   uniqueIndex('external_identity_node_uk').on(t.connectionId, t.nodeId, t.externalType),
@@ -100,6 +102,25 @@ export const ninjaOrganization = pgTable('ninja_organization', {
   excludedAt: tstz('excluded_at'),
 }, (t) => [
   primaryKey({ columns: [t.connectionId, t.ninjaOrgId] }),
+]);
+
+/**
+ * NinjaOne's locations and the site each became (1080). applied is what the
+ * sync last wrote to the site, so a field somebody edited is left alone.
+ */
+export const ninjaLocation = pgTable('ninja_location', {
+  tenantId: uuid('tenant_id').notNull(),
+  connectionId: uuid('connection_id').notNull(),
+  ninjaLocationId: text('ninja_location_id').notNull(),
+  ninjaOrgId: text('ninja_org_id'),
+  name: text('name').notNull(),
+  siteId: uuid('site_id'),
+  applied: jsonb('applied').notNull().default({}),
+  seenAt: tstz('seen_at').notNull().defaultNow(),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.connectionId, t.ninjaLocationId] }),
+  index('ninja_location_site_idx').on(t.siteId),
 ]);
 
 /**

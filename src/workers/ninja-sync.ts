@@ -17,7 +17,12 @@
  *   is a client somebody archived: archiving one is how a person stops it.
  *
  *   DELETE DOCUMENTATION. A device gone from NinjaOne stays in Helm. Its
- *   check-in time stops moving, which is what says so.
+ *   check-in time stops moving, which is what says so. A location gone from
+ *   NinjaOne leaves its site, and a site somebody removed is not brought back.
+ *
+ *   FAIL OVER SOMETHING OPTIONAL. Locations and the antivirus and patch
+ *   reports enrich the devices; an app or instance that cannot read one of
+ *   them still syncs every device. What was missing is said in the run.
  *
  *   SEND THE SECRET ANYWHERE BUT NINJAONE. The connection's address is held to
  *   NinjaOne's regional hosts by a trigger, and the secret is revealed through
@@ -27,8 +32,11 @@ import { withTenant, db } from '../lib/db/client';
 import type { Job, JobContext, JobResult } from './runtime';
 import { describeError } from './runtime';
 import { getSecretService } from '../lib/services';
-import { NinjaError, fetchToken, listDevices, listOrganizations } from '../lib/ninja/client';
-import { mapDevice } from '../lib/ninja/devices';
+import {
+  NinjaError, fetchToken, listDevices, listLocations, listOrganizations, listQuery,
+  type NinjaLocation, type NinjaQueryRow, type NinjaTarget,
+} from '../lib/ninja/client';
+import { byDevice, mapDevice, mapLocation, mapProfile, type NinjaReports } from '../lib/ninja/devices';
 
 interface DueRow {
   tenant_id: string;
@@ -89,17 +97,24 @@ async function syncNinja(ctx: JobContext): Promise<JobResult> {
       totals.updated += counts.updated;
       totals.unchanged += counts.unchanged;
       totals.skipped += counts.skipped;
+      const missing = counts.missing.length > 0
+        ? `NinjaOne would not give Helm ${counts.missing.join(', ')}; everything else synced.`
+        : null;
 
       await withTenant(
         actor,
         async (tx) => tx`
           SELECT helm.finish_sync_run(
             ${runId}::uuid,
-            ${counts.failed > 0 ? 'partial' : 'success'}::sync_run_status,
+            ${counts.failed > 0 || missing ? 'partial' : 'success'}::sync_run_status,
             ${counts.seen}, ${counts.created}, ${counts.updated}, ${counts.skipped}, ${counts.failed},
             NULL,
-            ${counts.failed > 0 ? `${counts.failed} device(s) could not be saved: ${counts.firstError}` : null},
-            ${tx.json({ unchanged: counts.unchanged, organizations: counts.organizations, unmapped: counts.skipped })})
+            ${[counts.failed > 0 ? `${counts.failed} device(s) could not be saved: ${counts.firstError}` : null, missing]
+              .filter(Boolean).join(' ') || null},
+            ${tx.json({
+              unchanged: counts.unchanged, organizations: counts.organizations, unmapped: counts.skipped,
+              sites: counts.sites, missing: counts.missing,
+            })})
         `,
         { role: 'worker' },
       );
@@ -135,7 +150,31 @@ interface SyncCounts {
   skipped: number;
   failed: number;
   organizations: number;
+  /** Locations that have a site. */
+  sites: number;
+  /** Optional reports NinjaOne refused, by name. */
+  missing: string[];
   firstError: string | null;
+}
+
+/**
+ * An optional read. NinjaOne refusing it, or not having it, is recorded and
+ * the sync goes on; NinjaOne being down is still a failure, as it would fail
+ * the devices next anyway.
+ */
+async function optional<T>(
+  what: string, missing: string[], log: JobContext['log'], read: () => Promise<T>,
+): Promise<T | undefined> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof NinjaError && error.kind !== 'unreachable' && error.kind !== 'unauthorized') {
+      missing.push(what);
+      log.warn('optional NinjaOne read refused', { what, kind: error.kind, status: error.status });
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 async function syncOne(connectionId: string, actor: Actor, log: JobContext['log']): Promise<SyncCounts> {
@@ -163,8 +202,12 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
 
   let organizations;
   let devices;
+  const missing: string[] = [];
+  let locations: NinjaLocation[] | undefined;
+  let antivirus: NinjaQueryRow[] | undefined;
+  let patches: NinjaQueryRow[] | undefined;
   try {
-    const target = {
+    const target: NinjaTarget = {
       baseUrl: connection.base_url,
       clientId: connection.client_id,
       // Lives for the requests below and is disposed in the finally.
@@ -173,6 +216,9 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
     const token = await fetchToken(target);
     organizations = await listOrganizations(target, token);
     devices = await listDevices(target, token);
+    locations = await optional('locations', missing, log, () => listLocations(target, token));
+    antivirus = await optional('the antivirus report', missing, log, () => listQuery(target, token, 'antivirus-status'));
+    patches = await optional('the patch report', missing, log, () => listQuery(target, token, 'os-patches'));
   } finally {
     revealed.value.dispose();
   }
@@ -208,7 +254,43 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
 
   const counts: SyncCounts = {
     seen: devices.length, created: 0, updated: 0, unchanged: 0, skipped: 0, failed: 0,
-    organizations: organizations.length, firstError: null,
+    organizations: organizations.length, sites: 0, missing, firstError: null,
+  };
+
+  // Locations first, so each device can be put at its site.
+  const siteOf = new Map<string, string>();
+  for (const location of locations ?? []) {
+    const ninjaOrgId = location.organizationId === undefined || location.organizationId === null
+      ? null : String(location.organizationId);
+    const organizationId = ninjaOrgId ? mapping.get(ninjaOrgId) : undefined;
+    if (!organizationId) continue;
+    const mapped = mapLocation(location);
+    try {
+      const siteId = await withTenant(
+        actor,
+        async (tx) => {
+          const [row] = await tx<{ upsert_ninja_location: string | null }[]>`
+            SELECT helm.upsert_ninja_location(
+              ${connectionId}::uuid, ${organizationId}::uuid, ${mapped.externalId}, ${ninjaOrgId},
+              ${mapped.name}, ${mapped.address})
+          `;
+          return row?.upsert_ninja_location ?? null;
+        },
+        { role: 'worker' },
+      );
+      if (siteId) {
+        siteOf.set(mapped.externalId, siteId);
+        counts.sites += 1;
+      }
+    } catch (error) {
+      // A site is not worth failing devices over; they are just not placed.
+      log.warn('location not saved', { location: mapped.externalId, ...describeError(error) });
+    }
+  }
+
+  const reports: NinjaReports = {
+    ...(antivirus ? { antivirus: byDevice(antivirus) } : {}),
+    ...(patches ? { patches: byDevice(patches) } : {}),
   };
 
   for (const device of devices) {
@@ -230,7 +312,15 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
               ${mapped.sha256}, ${mapped.name}, ${mapped.deviceType}::device_type,
               ${tx.json(mapped.values)})
           `;
-          return result?.outcome ?? 'unchanged';
+          const locationId = device.locationId === undefined || device.locationId === null ? null : String(device.locationId);
+          const [placed] = await tx<{ annotate_ninja_device: boolean }[]>`
+            SELECT helm.annotate_ninja_device(
+              ${connectionId}::uuid, ${mapped.externalId},
+              ${(locationId && siteOf.get(locationId)) ?? null}::uuid,
+              ${tx.json(mapProfile(device, reports, connection.base_url) as never)})
+          `;
+          const outcome = result?.outcome ?? 'unchanged';
+          return outcome === 'unchanged' && placed?.annotate_ninja_device ? 'updated' : outcome;
         },
         { role: 'worker' },
       );
