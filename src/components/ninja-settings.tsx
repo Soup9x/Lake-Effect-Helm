@@ -76,6 +76,7 @@ export function NinjaSettingsCard({
   const [baseUrl, setBaseUrl] = useState<string>(connection?.baseUrl ?? NINJA_REGIONS[0].url);
   const [clientId, setClientId] = useState(connection?.clientId ?? '');
   const [clientSecret, setClientSecret] = useState('');
+  const [portalUrl, setPortalUrl] = useState(connection?.portalUrl ?? '');
   const [syncEnabled, setSyncEnabled] = useState(connection?.syncEnabled ?? true);
   const [interval, setIntervalMinutes] = useState(String(connection?.intervalMinutes ?? 60));
   const [saving, setSaving] = useState(false);
@@ -127,6 +128,7 @@ export function NinjaSettingsCard({
           ...(clientSecret.trim() ? { clientSecret: clientSecret.trim() } : {}),
           syncEnabled,
           intervalMinutes: Number(interval),
+          portalUrl: portalUrl.trim() || null,
         },
       });
       if (!result.ok) {
@@ -262,6 +264,16 @@ export function NinjaSettingsCard({
                 <Input id="ninja-interval" type="number" inputMode="numeric" min={15} max={1440} required
                   value={interval} onChange={(e) => setIntervalMinutes(e.target.value)} />
                 <FieldHint>15 to 1440.</FieldHint>
+              </div>
+              <div className="sm:col-span-2">
+                <Label htmlFor="ninja-portal-url">Your NinjaOne address (optional)</Label>
+                <Input id="ninja-portal-url" type="url" inputMode="url" autoComplete="off"
+                  placeholder="https://yourcompany.rmmservices.net"
+                  value={portalUrl} onChange={(e) => setPortalUrl(e.target.value)} />
+                <FieldHint>
+                  Where your team signs in, if it is not the region&rsquo;s address. &ldquo;Open in NinjaOne&rdquo;
+                  links go here; the sync itself always uses the region.
+                </FieldHint>
               </div>
               <div>
                 <Label htmlFor="ninja-client-id">Client ID</Label>

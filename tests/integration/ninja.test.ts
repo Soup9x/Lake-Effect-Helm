@@ -722,7 +722,6 @@ describe('locations and what NinjaOne says about a device', () => {
     const [row] = await su((sql) => sql<{ profile: Record<string, unknown> }[]>`
       SELECT profile FROM external_identity WHERE external_type = 'ninja_device' AND external_id = '501'`);
     expect(row?.profile).toEqual({
-      ninjaUrl: 'https://app.ninjarmm.com/#/deviceDashboard/501/overview',
       lastLoggedInUser: 'ACME\\jsmith',
       lastBootAt: new Date(1_759_990_000_000).toISOString(),
       needsReboot: true,
@@ -756,5 +755,41 @@ describe('locations and what NinjaOne says about a device', () => {
     // Not known, rather than none.
     expect(row?.profile).not.toHaveProperty('antivirus');
     expect(row?.profile).toHaveProperty('pendingPatches', { total: 0, critical: 0 });
+  });
+});
+
+describe('the address people sign in at', () => {
+  it('is kept for links, checked, and cleared with null', async () => {
+    await configure();
+    asAdmin();
+    const { clientSecret: _omit, ...rest } = CONNECTION;
+    let response = await putNinja(req('PUT', '/api/integrations/ninja', { ...rest, portalUrl: 'https://lakeeffect.rmmservices.net/' }));
+    expect(response.status).toBe(200);
+    expect((await json<NinjaSettings>(response)).connection?.portalUrl).toBe('https://lakeeffect.rmmservices.net');
+
+    asAdmin();
+    response = await putNinja(req('PUT', '/api/integrations/ninja', { ...rest, portalUrl: 'http://evil.example/x' }));
+    expect(response.status).toBe(400);
+    // Nor by going round the route.
+    await expect(withTenant(
+      { tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' },
+      async (tx) => tx`SELECT helm.set_ninja_portal_url('javascript:alert(1)')`,
+    )).rejects.toThrow(/not an https address/);
+
+    // Absent leaves it alone; null clears it.
+    asAdmin();
+    response = await putNinja(req('PUT', '/api/integrations/ninja', rest));
+    expect((await json<NinjaSettings>(response)).connection?.portalUrl).toBe('https://lakeeffect.rmmservices.net');
+    asAdmin();
+    response = await putNinja(req('PUT', '/api/integrations/ninja', { ...rest, portalUrl: null }));
+    expect((await json<NinjaSettings>(response)).connection?.portalUrl).toBeNull();
+  });
+
+  it('cannot be set without integration:rmm:manage', async () => {
+    await configure();
+    await expect(withTenant(
+      { tenantId: IDS.tenant1, actorId: IDS.tech1, actorType: 'user' },
+      async (tx) => tx`SELECT helm.set_ninja_portal_url('https://lakeeffect.rmmservices.net')`,
+    )).rejects.toThrow(/requires integration:rmm:manage/);
   });
 });

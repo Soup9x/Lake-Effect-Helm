@@ -11,7 +11,12 @@ import { Badge } from './ui/badge';
 import { formatDate, formatDateTime } from '@/lib/ui/format';
 import type { NinjaProfile } from '@/lib/ninja/devices';
 
-export function NinjaProfileCard({ profile, syncedAt }: { profile: NinjaProfile; syncedAt: string }) {
+export function NinjaProfileCard({ profile, syncedAt, ninjaUrl }: {
+  profile: NinjaProfile;
+  syncedAt: string;
+  /** The device in NinjaOne, at the address people sign in at (1090). */
+  ninjaUrl: string | null;
+}) {
   const rows: [string, ReactNode][] = [];
   const push = (label: string, value: ReactNode | undefined | null) => {
     if (value !== undefined && value !== null && value !== '') rows.push([label, value]);
@@ -68,8 +73,8 @@ export function NinjaProfileCard({ profile, syncedAt }: { profile: NinjaProfile;
         <CardTitle>From NinjaOne</CardTitle>
         <div className="flex items-center gap-3 text-xs text-ink-faint">
           <span>As of {formatDateTime(syncedAt)}</span>
-          {profile.ninjaUrl && (
-            <a href={profile.ninjaUrl} target="_blank" rel="noopener noreferrer"
+          {ninjaUrl && (
+            <a href={ninjaUrl} target="_blank" rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-brand hover:underline">
               Open in NinjaOne <ExternalLink className="size-3" aria-hidden />
             </a>

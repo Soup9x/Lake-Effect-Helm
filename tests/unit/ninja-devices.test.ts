@@ -4,6 +4,7 @@ import {
   byDevice, mapLocation, mapProfile,
 } from '../../src/lib/ninja/devices';
 import type { NinjaDevice } from '../../src/lib/ninja/client';
+import { ninjaDeviceUrl, ninjaOrganizationUrl, ninjaPortal } from '../../src/lib/ninja/links';
 
 const LAPTOP: NinjaDevice = {
   id: 1042,
@@ -117,18 +118,16 @@ describe('mapProfile', () => {
     const profile = mapProfile(
       { id: 7, warranty: { startDate: 1_700_000_000, endDate: '2027-03-01T00:00:00Z' } },
       {},
-      'https://eu.ninjarmm.com',
     );
     expect(profile).toEqual({
-      ninjaUrl: 'https://eu.ninjarmm.com/#/deviceDashboard/7/overview',
       warranty: { startsAt: new Date(1_700_000_000_000).toISOString(), endsAt: '2027-03-01T00:00:00.000Z' },
     });
-    expect(mapProfile({ id: 'x', warrantyEndDate: 1_800_000_000_000 }, {}, 'https://app.ninjarmm.com'))
+    expect(mapProfile({ id: 'x', warrantyEndDate: 1_800_000_000_000 }, {}))
       .toEqual({ warranty: { endsAt: new Date(1_800_000_000_000).toISOString() } });
   });
 
   it('says none when a report has nothing for the device', () => {
-    const profile = mapProfile({ id: 1 }, { antivirus: byDevice([]), patches: byDevice([]) }, 'https://app.ninjarmm.com');
+    const profile = mapProfile({ id: 1 }, { antivirus: byDevice([]), patches: byDevice([]) });
     expect(profile.antivirus).toEqual([]);
     expect(profile.pendingPatches).toEqual({ total: 0, critical: 0 });
   });
@@ -139,5 +138,15 @@ describe('mapLocation', () => {
     expect(mapLocation({ id: 3, name: ' HQ ', address: '1 Main St\n  Suite 2\nTown' }))
       .toEqual({ externalId: '3', name: 'HQ', address: '1 Main St, Suite 2, Town' });
     expect(mapLocation({ id: 4 })).toEqual({ externalId: '4', name: 'NinjaOne location 4', address: null });
+  });
+});
+
+describe('links into NinjaOne', () => {
+  it('goes to the address people sign in at, and only for a numeric id', () => {
+    const portal = ninjaPortal({ baseUrl: 'https://us2.ninjarmm.com', portalUrl: 'https://lakeeffect.rmmservices.net' });
+    expect(ninjaDeviceUrl(portal, '501')).toBe('https://lakeeffect.rmmservices.net/#/deviceDashboard/501/overview');
+    expect(ninjaOrganizationUrl(portal, '11')).toBe('https://lakeeffect.rmmservices.net/#/customerDashboard/11/overview');
+    expect(ninjaPortal({ baseUrl: 'https://us2.ninjarmm.com', portalUrl: null })).toBe('https://us2.ninjarmm.com');
+    expect(ninjaDeviceUrl(portal, '../x')).toBeNull();
   });
 });

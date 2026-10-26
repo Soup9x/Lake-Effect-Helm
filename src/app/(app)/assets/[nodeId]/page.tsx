@@ -40,6 +40,7 @@ import { ConfigurationEdit } from '@/components/configuration-edit';
 import { listInterfaces } from '@/lib/assets/devices';
 import { NinjaProfileCard } from '@/components/ninja-profile-card';
 import type { NinjaProfile } from '@/lib/ninja/devices';
+import { ninjaDeviceUrl } from '@/lib/ninja/links';
 import { syncSourceLabel } from '@/lib/integrations/sync-source';
 import { detailFieldsFor, subnetMaskOf } from '@/lib/assets/detail-fields';
 import { ExternalCheckNote, type ExternalCheckState } from '@/components/external-check-note';
@@ -323,10 +324,13 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       WHERE node_id = ${node.id}::uuid GROUP BY external_type ORDER BY external_type
     `;
     // What NinjaOne reports beyond the device's own fields (1080).
-    const [ninjaProfile] = await tx<{ profile: NinjaProfile; last_synced_at: Date }[]>`
-      SELECT profile, last_synced_at FROM external_identity
-      WHERE node_id = ${node.id}::uuid AND external_type = 'ninja_device' AND profile IS NOT NULL
-      ORDER BY last_synced_at DESC LIMIT 1
+    const [ninjaProfile] = await tx<{ profile: NinjaProfile; last_synced_at: Date; external_id: string; portal: string }[]>`
+      SELECT ei.profile, ei.last_synced_at, ei.external_id,
+             coalesce(c.config ->> 'portal_url', c.base_url) AS portal
+      FROM external_identity ei
+      JOIN integration_connection c ON c.id = ei.connection_id
+      WHERE ei.node_id = ${node.id}::uuid AND ei.external_type = 'ninja_device' AND ei.profile IS NOT NULL
+      ORDER BY ei.last_synced_at DESC LIMIT 1
     `;
 
     return {
@@ -831,7 +835,11 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           <>
             {detailsCard}
             {ninjaProfile && (
-              <NinjaProfileCard profile={ninjaProfile.profile} syncedAt={ninjaProfile.last_synced_at.toISOString()} />
+              <NinjaProfileCard
+                profile={ninjaProfile.profile}
+                syncedAt={ninjaProfile.last_synced_at.toISOString()}
+                ninjaUrl={ninjaDeviceUrl(ninjaProfile.portal, ninjaProfile.external_id)}
+              />
             )}
             {checkNote}
             {dependenciesCard}
