@@ -520,3 +520,51 @@ describe('the sync worker', () => {
     expect(await devices()).toHaveLength(1);
   });
 });
+
+describe('a client per NinjaOne organisation', () => {
+  it('uses the client of the same name, or creates one, and imports into it', async () => {
+    ninja.organizations = [{ id: 11, name: 'acme manufacturing' }, { id: 12, name: 'Globex' }, { id: 13, name: 'Globex ' }];
+    ninja.devices = [SERVER, GLOBEX_PC];
+    await configure();
+
+    asAdmin();
+    const response = await putOrganizations(req('PUT', '/api/integrations/ninja/organizations', {
+      mappings: [
+        { ninjaOrgId: '11', organizationId: 'new' },
+        { ninjaOrgId: '12', organizationId: 'new' },
+        { ninjaOrgId: '13', organizationId: 'new' },
+      ],
+    }));
+    expect(response.status).toBe(200);
+    const settings = await json<NinjaSettings>(response);
+    const byId = new Map(settings.organizations.map((o) => [o.ninjaOrgId, o]));
+    expect(byId.get('11')?.organizationId).toBe(IDS.orgAcme);
+    expect(byId.get('12')?.organizationName).toBe('Globex');
+    // Same name, so the same client: not a second Globex.
+    expect(byId.get('13')?.organizationId).toBe(byId.get('12')?.organizationId);
+
+    const created = await su((sql) => sql<{ slug: string; relationship: string; is_msp_internal: boolean }[]>`
+      SELECT slug, relationship::text AS relationship, is_msp_internal FROM organization
+      WHERE id = ${byId.get('12')!.organizationId!}::uuid
+    `);
+    // The fixtures' Globex Corporation already has 'globex'.
+    expect(created).toEqual([{ slug: 'globex-2', relationship: 'client', is_msp_internal: false }]);
+
+    const counts = await runSync();
+    expect(counts).toMatchObject({ created: 2, skipped: 0, failed: 0 });
+    const rows = await devices();
+    expect(rows.find((d) => d.name === 'GLOBEX-PC-01')?.organization_id).toBe(byId.get('12')!.organizationId);
+  });
+
+  it('gives a new client a slug nobody has', async () => {
+    ninja.organizations = [{ id: 21, name: 'Acme' }];
+    await configure();
+    await su((sql) => sql`UPDATE organization SET slug = 'acme' WHERE id = ${IDS.orgAcme}::uuid`);
+
+    const settings = await mapOrg('21', 'new');
+    const id = settings.organizations[0]!.organizationId!;
+    expect(id).not.toBe(IDS.orgAcme);
+    const [row] = await su((sql) => sql<{ slug: string }[]>`SELECT slug FROM organization WHERE id = ${id}::uuid`);
+    expect(row?.slug).toBe('acme-2');
+  });
+});
