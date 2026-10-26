@@ -11,6 +11,11 @@
  * "New client" maps an organisation to a client of the same name, created on
  * save if Helm has none yet, so an MSP starting out does not have to type in
  * every client first.
+ *
+ * An MSP can have hundreds of NinjaOne organisations, so the table filters by
+ * where each stands (not decided, importing, not importing), searches by
+ * either name, and sorts by name or device count. All of it in the browser:
+ * the whole list is already here.
  */
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
@@ -38,12 +43,22 @@ const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
   disabled: { label: 'Off', tone: 'neutral' },
 };
 
+type OrgFilter = 'all' | 'undecided' | 'importing' | 'excluded';
+type OrgSort = 'name' | 'devices';
+
+/** Where an organisation stands, by what is saved rather than what is being edited. */
+function standingOf(org: NinjaSettings['organizations'][number]): Exclude<OrgFilter, 'all'> {
+  if (org.organizationId && !org.organizationArchived) return 'importing';
+  return org.organizationId || org.excludedAt ? 'excluded' : 'undecided';
+}
+
 const RUN_TONE: Record<string, BadgeTone> = {
   success: 'ok', partial: 'warning', failed: 'danger', running: 'brand', queued: 'neutral', cancelled: 'neutral',
 };
 
 /** The mapping value that asks for a client named like the NinjaOne organisation. */
 const NEW_CLIENT = 'new';
+const DONT_IMPORT = 'none';
 
 export function NinjaSettingsCard({
   initial, organizations: organizationOptions, canManage, canCreateClients, internalOrganizationId,
@@ -67,12 +82,18 @@ export function NinjaSettingsCard({
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [remedy, setRemedy] = useState<string | null>(null);
 
+  // '' is nobody has decided; DONT_IMPORT is somebody chose not to.
   const mappingOf = (s: NinjaSettings) =>
-    Object.fromEntries(s.organizations.map((o) => [o.ninjaOrgId, o.organizationId ?? '']));
+    Object.fromEntries(s.organizations.map((o) =>
+      [o.ninjaOrgId, o.organizationId ?? (o.excludedAt ? DONT_IMPORT : '')]));
   const [mapping, setMapping] = useState<Record<string, string>>(mappingOf(initial));
   const [mappingBusy, setMappingBusy] = useState(false);
   const [mappingFeedback, setMappingFeedback] = useState<Feedback>(null);
   const [syncBusy, setSyncBusy] = useState(false);
+  const [orgFilter, setOrgFilter] = useState<OrgFilter>(() =>
+    initial.organizations.some((o) => standingOf(o) === 'undecided') ? 'undecided' : 'all');
+  const [orgQuery, setOrgQuery] = useState('');
+  const [orgSort, setOrgSort] = useState<OrgSort>('name');
 
   // Clients created by the last save are mapped before the page's list is
   // refreshed; without them a select would show a value it has no option for.
@@ -135,7 +156,7 @@ export function NinjaSettingsCard({
     try {
       const changed = Object.keys(mapping)
         .filter((k) => mapping[k] !== savedMapping[k])
-        .map((k) => ({ ninjaOrgId: k, organizationId: mapping[k] || null }));
+        .map((k) => ({ ninjaOrgId: k, organizationId: mapping[k] === DONT_IMPORT ? null : mapping[k] || null }));
       const result = await apiFetch<NinjaSettings>('/api/integrations/ninja/organizations', {
         method: 'PUT',
         json: { mappings: changed },
@@ -152,10 +173,15 @@ export function NinjaSettingsCard({
     }
   }
 
-  /** Every organisation not yet importing to a client of its own: unmapped, or mapped to the MSP's. */
+  /**
+   * Every organisation shown that nobody has decided on, or that imports to the
+   * MSP's own. Not one somebody chose not to import: that is a decision, and
+   * this would quietly undo it — or recreate a client they deleted.
+   */
   function newClientForEach() {
+    const target = new Set(shownOrgs.map((o) => o.ninjaOrgId));
     setMapping((m) => Object.fromEntries(Object.entries(m).map(([k, v]) =>
-      [k, v === '' || v === internalOrganizationId ? NEW_CLIENT : v])));
+      [k, target.has(k) && (v === '' || v === internalOrganizationId) ? NEW_CLIENT : v])));
   }
 
   async function syncNow() {
@@ -172,7 +198,16 @@ export function NinjaSettingsCard({
   }
 
   const status = connection ? STATUS[connection.status] ?? { label: connection.status, tone: 'neutral' as BadgeTone } : null;
-  const mappedCount = settings.organizations.filter((o) => o.organizationId).length;
+  const counts = { all: settings.organizations.length, undecided: 0, importing: 0, excluded: 0 };
+  for (const org of settings.organizations) counts[standingOf(org)] += 1;
+  const query = orgQuery.trim().toLowerCase();
+  const shownOrgs = settings.organizations
+    .filter((o) => orgFilter === 'all' || standingOf(o) === orgFilter)
+    .filter((o) => !query || o.name.toLowerCase().includes(query)
+      || (o.organizationName ?? '').toLowerCase().includes(query))
+    .sort((a, b) => orgSort === 'devices'
+      ? (b.deviceCount ?? -1) - (a.deviceCount ?? -1) || a.name.localeCompare(b.name)
+      : a.name.localeCompare(b.name));
 
   return (
     <Card>
@@ -187,7 +222,8 @@ export function NinjaSettingsCard({
           <p className="text-ink-muted">
             Imports the devices NinjaOne manages as configurations of the client you choose for each
             NinjaOne organisation, and keeps their hostname, operating system, hardware, address and
-            last check-in current. Names, notes, status, location and contact are yours, and so is any
+            last check-in current. NinjaOne locations become the client&rsquo;s sites, each device is
+            put at its site, and disks, last user, antivirus and pending patches show on the device. Names, notes, status, location and contact are yours, and so is any
             field somebody edits by hand — the sync leaves those alone. Nothing is written to NinjaOne,
             and a device removed there stays documented here.
           </p>
@@ -273,7 +309,8 @@ export function NinjaSettingsCard({
               <h3 className="text-sm font-medium text-ink">
                 Organisations
                 <span className="ml-2 text-xs font-normal text-ink-faint">
-                  {mappedCount} of {settings.organizations.length} imported
+                  {counts.importing} of {counts.all} imported
+                  {counts.undecided > 0 && ` · ${counts.undecided} not decided`}
                 </span>
               </h3>
               {canManage && (
@@ -297,6 +334,22 @@ export function NinjaSettingsCard({
                 </div>
               )}
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select aria-label="Show" className="w-auto" value={orgFilter}
+                onChange={(e) => setOrgFilter(e.target.value as OrgFilter)}>
+                <option value="all">All ({counts.all})</option>
+                <option value="undecided">Not decided ({counts.undecided})</option>
+                <option value="importing">Importing ({counts.importing})</option>
+                <option value="excluded">Not importing ({counts.excluded})</option>
+              </Select>
+              <Input type="search" aria-label="Search organisations" placeholder="Search NinjaOne or client name"
+                className="w-64 max-w-full" value={orgQuery} onChange={(e) => setOrgQuery(e.target.value)} />
+              <Select aria-label="Sort by" className="w-auto" value={orgSort}
+                onChange={(e) => setOrgSort(e.target.value as OrgSort)}>
+                <option value="name">Sort by name</option>
+                <option value="devices">Sort by devices</option>
+              </Select>
+            </div>
             {mappingFeedback && (
               <p role={mappingFeedback.ok ? undefined : 'alert'} className={mappingFeedback.ok ? 'text-sm text-ok' : 'text-sm text-danger'}>
                 {mappingFeedback.message}
@@ -314,15 +367,23 @@ export function NinjaSettingsCard({
                 {settings.organizations.length === 0 && (
                   <TableEmpty colSpan={3}>None yet. They are listed when the connection is saved and on every sync.</TableEmpty>
                 )}
-                {settings.organizations.map((org) => (
+                {settings.organizations.length > 0 && shownOrgs.length === 0 && (
+                  <TableEmpty colSpan={3}>No organisations match.</TableEmpty>
+                )}
+                {shownOrgs.map((org) => (
                   <TableRow key={org.ninjaOrgId}>
-                    <TableCell className="font-medium">{org.name}</TableCell>
+                    <TableCell className="font-medium">
+                      {org.name}
+                      {standingOf(org) === 'undecided' && <Badge tone="brand" className="ml-2">Not decided</Badge>}
+                      {org.organizationArchived && <Badge tone="neutral" className="ml-2">Client archived</Badge>}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums text-ink-muted">{org.deviceCount ?? '—'}</TableCell>
                     <TableCell>
                       {canManage ? (
                         <Select aria-label={`Client for ${org.name}`} value={mapping[org.ninjaOrgId] ?? ''}
                           onChange={(e) => setMapping((m) => ({ ...m, [org.ninjaOrgId]: e.target.value }))}>
-                          <option value="">Don&rsquo;t import</option>
+                          {(mapping[org.ninjaOrgId] ?? '') === '' && <option value="">Not decided</option>}
+                          <option value={DONT_IMPORT}>Don&rsquo;t import</option>
                           {canCreateClients && <option value={NEW_CLIENT}>New client: {org.name}</option>}
                           {organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                         </Select>

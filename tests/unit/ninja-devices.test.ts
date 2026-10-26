@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   deviceTypeFor, mapDevice, primaryIpFor, primaryMacFor, serialFor,
+  byDevice, mapLocation, mapProfile,
 } from '../../src/lib/ninja/devices';
 import type { NinjaDevice } from '../../src/lib/ninja/client';
 
@@ -108,5 +109,35 @@ describe('addresses', () => {
   it('normalises a MAC and skips empty ones', () => {
     expect(primaryMacFor(['00:00:00:00:00:00', 'AABBCCDDEEFF'])).toBe('aa:bb:cc:dd:ee:ff');
     expect(primaryMacFor(['not a mac'])).toBeNull();
+  });
+});
+
+describe('mapProfile', () => {
+  it('reads warranty dates in either spelling and leaves unknown reports out', () => {
+    const profile = mapProfile(
+      { id: 7, warranty: { startDate: 1_700_000_000, endDate: '2027-03-01T00:00:00Z' } },
+      {},
+      'https://eu.ninjarmm.com',
+    );
+    expect(profile).toEqual({
+      ninjaUrl: 'https://eu.ninjarmm.com/#/deviceDashboard/7/overview',
+      warranty: { startsAt: new Date(1_700_000_000_000).toISOString(), endsAt: '2027-03-01T00:00:00.000Z' },
+    });
+    expect(mapProfile({ id: 'x', warrantyEndDate: 1_800_000_000_000 }, {}, 'https://app.ninjarmm.com'))
+      .toEqual({ warranty: { endsAt: new Date(1_800_000_000_000).toISOString() } });
+  });
+
+  it('says none when a report has nothing for the device', () => {
+    const profile = mapProfile({ id: 1 }, { antivirus: byDevice([]), patches: byDevice([]) }, 'https://app.ninjarmm.com');
+    expect(profile.antivirus).toEqual([]);
+    expect(profile.pendingPatches).toEqual({ total: 0, critical: 0 });
+  });
+});
+
+describe('mapLocation', () => {
+  it('folds a multi-line address onto one line', () => {
+    expect(mapLocation({ id: 3, name: ' HQ ', address: '1 Main St\n  Suite 2\nTown' }))
+      .toEqual({ externalId: '3', name: 'HQ', address: '1 Main St, Suite 2, Town' });
+    expect(mapLocation({ id: 4 })).toEqual({ externalId: '4', name: 'NinjaOne location 4', address: null });
   });
 });

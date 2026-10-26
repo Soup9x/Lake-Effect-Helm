@@ -15,6 +15,13 @@
  *   GET  /api/v2/devices-detailed     every device, paged by id: `after` is the
  *                                     last id of the previous page, and a page
  *                                     shorter than asked for is the last one
+ *   GET  /api/v2/locations            every location, paged the same way; they
+ *                                     become the clients' sites
+ *   GET  /api/v2/queries/antivirus-status
+ *   GET  /api/v2/queries/os-patches   per-device reports for the device's
+ *                                     "From NinjaOne" card, paged by cursor.
+ *                                     Optional: an instance or app that cannot
+ *                                     read them still syncs everything else
  *
  * Read-only, and the Monitoring scope cannot do anything else. Helm never
  * writes to NinjaOne.
@@ -71,6 +78,20 @@ export interface NinjaOrganization {
 }
 
 /** The parts of a devices-detailed record Helm reads. Everything is optional: NinjaOne omits what it does not know. */
+export interface NinjaLocation {
+  id: number | string;
+  organizationId?: number | string;
+  name?: string;
+  address?: string;
+  description?: string;
+}
+
+/** One row of a /queries/ report. Every report names its device. */
+export interface NinjaQueryRow {
+  deviceId?: number | string;
+  [key: string]: unknown;
+}
+
 export interface NinjaDevice {
   id: number | string;
   organizationId?: number | string;
@@ -83,8 +104,12 @@ export interface NinjaDevice {
   lastContact?: number;
   ipAddresses?: string[];
   macAddresses?: string[];
-  os?: { name?: string; buildNumber?: string; releaseId?: string; manufacturer?: string };
+  os?: {
+    name?: string; buildNumber?: string; releaseId?: string; manufacturer?: string;
+    architecture?: string; lastBootTime?: number; needsReboot?: boolean;
+  };
   system?: {
+    domain?: string;
     manufacturer?: string;
     model?: string;
     serialNumber?: string;
@@ -94,6 +119,9 @@ export interface NinjaDevice {
   };
   processors?: { name?: string }[];
   memory?: { capacity?: number };
+  volumes?: { name?: string; label?: string; capacity?: number; freeSpace?: number; deviceType?: string }[];
+  lastLoggedInUser?: string;
+  publicIP?: string;
   [key: string]: unknown;
 }
 
@@ -218,22 +246,56 @@ export async function listOrganizations(target: NinjaTarget, token: string): Pro
 }
 
 export async function listDevices(target: NinjaTarget, token: string): Promise<NinjaDevice[]> {
-  const all: NinjaDevice[] = [];
+  return listPagedById<NinjaDevice>(target, token, '/api/v2/devices-detailed', 'devices');
+}
+
+export async function listLocations(target: NinjaTarget, token: string): Promise<NinjaLocation[]> {
+  return listPagedById<NinjaLocation>(target, token, '/api/v2/locations', 'locations');
+}
+
+async function listPagedById<T extends { id: number | string }>(
+  target: NinjaTarget, token: string, path: string, what: string,
+): Promise<T[]> {
+  const all: T[] = [];
   let after: string | number | null = null;
 
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const query = new URLSearchParams({ pageSize: String(PAGE_SIZE) });
     if (after !== null) query.set('after', String(after));
-    const payload = await get(target, token, `/api/v2/devices-detailed?${query}`);
-    if (!Array.isArray(payload)) throw new NinjaError('NinjaOne returned devices in a shape Helm does not read', 'malformed');
+    const payload = await get(target, token, `${path}?${query}`);
+    if (!Array.isArray(payload)) throw new NinjaError(`NinjaOne returned ${what} in a shape Helm does not read`, 'malformed');
 
-    const devices = payload.filter((d): d is NinjaDevice => d !== null && typeof d === 'object' && 'id' in d);
-    all.push(...devices);
-    if (payload.length < PAGE_SIZE || devices.length === 0) return all;
+    const rows = payload.filter((d): d is T => d !== null && typeof d === 'object' && 'id' in d);
+    all.push(...rows);
+    if (payload.length < PAGE_SIZE || rows.length === 0) return all;
 
-    const last = devices[devices.length - 1]!.id;
+    const last = rows[rows.length - 1]!.id;
     if (last === after) return all;
     after = last;
   }
-  throw new NinjaError(`NinjaOne kept paging past ${MAX_PAGES * PAGE_SIZE} devices`, 'malformed');
+  throw new NinjaError(`NinjaOne kept paging past ${MAX_PAGES * PAGE_SIZE} ${what}`, 'malformed');
+}
+
+/**
+ * Every row of a /queries/ report. These page by a cursor NinjaOne names in
+ * each answer, and a page shorter than asked for is the last one.
+ */
+export async function listQuery(target: NinjaTarget, token: string, report: string): Promise<NinjaQueryRow[]> {
+  const all: NinjaQueryRow[] = [];
+  let cursor: string | null = null;
+
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const query = new URLSearchParams({ pageSize: String(PAGE_SIZE) });
+    if (cursor !== null) query.set('cursor', cursor);
+    const payload = await get(target, token, `/api/v2/queries/${report}?${query}`) as
+      { results?: unknown; cursor?: { name?: unknown } } | null;
+    const results = payload?.results;
+    if (!Array.isArray(results)) throw new NinjaError(`NinjaOne returned ${report} in a shape Helm does not read`, 'malformed');
+
+    all.push(...results.filter((r): r is NinjaQueryRow => r !== null && typeof r === 'object'));
+    const next = typeof payload?.cursor?.name === 'string' && payload.cursor.name !== '' ? payload.cursor.name : null;
+    if (results.length < PAGE_SIZE || next === null || next === cursor) return all;
+    cursor = next;
+  }
+  throw new NinjaError(`NinjaOne kept paging past ${MAX_PAGES * PAGE_SIZE} rows of ${report}`, 'malformed');
 }

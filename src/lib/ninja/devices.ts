@@ -7,7 +7,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { DEVICE_TYPES } from '@/lib/assets/detail-fields';
-import type { NinjaDevice } from './client';
+import type { NinjaDevice, NinjaQueryRow } from './client';
 
 export type DeviceType = (typeof DEVICE_TYPES)[number];
 
@@ -155,5 +155,130 @@ export function mapDevice(device: NinjaDevice): MappedDevice {
     deviceType: deviceTypeFor(device),
     values,
     sha256,
+  };
+}
+
+/**
+ * What NinjaOne says about a machine beyond the device's own columns, shown on
+ * it as a read-only "From NinjaOne" card. Rewritten every run, so it is never
+ * edited in Helm: free space and the last user change by the hour.
+ *
+ * Every field is optional. `antivirus` and `pendingPatches` are absent, rather
+ * than empty, when NinjaOne would not give Helm that report, so the card can
+ * tell "none" from "not known".
+ */
+export interface NinjaProfile {
+  ninjaUrl?: string;
+  offline?: boolean;
+  lastLoggedInUser?: string;
+  lastBootAt?: string;
+  needsReboot?: boolean;
+  publicIp?: string;
+  domain?: string;
+  architecture?: string;
+  volumes?: { name: string; label?: string; capacityGb: number; freeGb: number }[];
+  antivirus?: { product: string; state?: string; definitions?: string }[];
+  pendingPatches?: { total: number; critical: number };
+  warranty?: { startsAt?: string; endsAt?: string };
+}
+
+function epochOrIso(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    // Seconds, sometimes with a fraction; milliseconds from a few endpoints.
+    return new Date(Math.round(value > 1e11 ? value : value * 1000)).toISOString();
+  }
+  if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Date.parse(value))) {
+    return new Date(value).toISOString();
+  }
+  return undefined;
+}
+
+const gb = (bytes: number) => Math.round((bytes / 1024 ** 3) * 10) / 10;
+
+export interface NinjaReports {
+  /** Absent when NinjaOne would not give Helm the report at all. */
+  antivirus?: Map<string, NinjaQueryRow[]>;
+  patches?: Map<string, NinjaQueryRow[]>;
+}
+
+/** Rows of a /queries/ report, by the device they are about. */
+export function byDevice(rows: NinjaQueryRow[]): Map<string, NinjaQueryRow[]> {
+  const out = new Map<string, NinjaQueryRow[]>();
+  for (const row of rows) {
+    if (row.deviceId === undefined || row.deviceId === null) continue;
+    const key = String(row.deviceId);
+    out.set(key, [...(out.get(key) ?? []), row]);
+  }
+  return out;
+}
+
+export function mapProfile(device: NinjaDevice, reports: NinjaReports, baseUrl: string): NinjaProfile {
+  const profile: NinjaProfile = {};
+  const id = String(device.id);
+
+  if (/^\d+$/.test(id)) profile.ninjaUrl = `${baseUrl}/#/deviceDashboard/${id}/overview`;
+  if (typeof device.offline === 'boolean') profile.offline = device.offline;
+  const user = text(device.lastLoggedInUser, 200);
+  if (user) profile.lastLoggedInUser = user;
+  const boot = epochOrIso(device.os?.lastBootTime);
+  if (boot) profile.lastBootAt = boot;
+  if (typeof device.os?.needsReboot === 'boolean') profile.needsReboot = device.os.needsReboot;
+  const publicIp = text(device.publicIP, 64);
+  if (publicIp) profile.publicIp = publicIp;
+  const domain = text(device.system?.domain, 253);
+  if (domain) profile.domain = domain;
+  const arch = text(device.os?.architecture, 60);
+  if (arch) profile.architecture = arch;
+
+  const volumes = (Array.isArray(device.volumes) ? device.volumes : [])
+    .filter((v) => typeof v?.capacity === 'number' && v.capacity > 0 && typeof v.freeSpace === 'number')
+    // Removable drives and optical discs come and go; they are not the machine.
+    .filter((v) => !/removable|cd|optical/i.test(v.deviceType ?? ''))
+    .slice(0, 26)
+    .map((v) => ({
+      name: text(v.name, 100) ?? '?',
+      ...(text(v.label, 100) ? { label: text(v.label, 100)! } : {}),
+      capacityGb: gb(v.capacity!),
+      freeGb: gb(Math.max(0, v.freeSpace!)),
+    }));
+  if (volumes.length > 0) profile.volumes = volumes;
+
+  if (reports.antivirus) {
+    profile.antivirus = (reports.antivirus.get(id) ?? []).slice(0, 10).flatMap((row) => {
+      const product = text(row.productName, 200);
+      if (!product) return [];
+      const state = text(row.productState, 60);
+      const definitions = text(row.definitionStatus, 60);
+      return [{ product, ...(state ? { state } : {}), ...(definitions ? { definitions } : {}) }];
+    });
+  }
+
+  if (reports.patches) {
+    // os-patches lists what is not installed yet; installed ones are another report.
+    const pending = (reports.patches.get(id) ?? [])
+      .filter((p) => !/^(installed|rejected)$/i.test(String(p.status ?? '')));
+    profile.pendingPatches = {
+      total: pending.length,
+      critical: pending.filter((p) => /critical/i.test(String(p.severity ?? ''))).length,
+    };
+  }
+
+  const w = (device.warranty ?? {}) as Record<string, unknown>;
+  const startsAt = epochOrIso(w.startDate ?? device.warrantyStartDate);
+  const endsAt = epochOrIso(w.endDate ?? device.warrantyEndDate);
+  if (startsAt || endsAt) profile.warranty = { ...(startsAt ? { startsAt } : {}), ...(endsAt ? { endsAt } : {}) };
+
+  return profile;
+}
+
+/** A NinjaOne location as the site it becomes. NinjaOne keeps its address as one free-text field. */
+export function mapLocation(location: { id: number | string; name?: string; address?: string }): {
+  externalId: string; name: string; address: string | null;
+} {
+  const address = text(location.address, 500);
+  return {
+    externalId: String(location.id),
+    name: text(location.name, 200) ?? `NinjaOne location ${location.id}`,
+    address: address ? address.replace(/\s*\n\s*/g, ', ') : null,
   };
 }

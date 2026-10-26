@@ -38,6 +38,8 @@ import { categoryBySource } from '@/lib/nav/org-categories';
 import { DetailEditForm } from '@/components/detail-edit-form';
 import { ConfigurationEdit } from '@/components/configuration-edit';
 import { listInterfaces } from '@/lib/assets/devices';
+import { NinjaProfileCard } from '@/components/ninja-profile-card';
+import type { NinjaProfile } from '@/lib/ninja/devices';
 import { syncSourceLabel } from '@/lib/integrations/sync-source';
 import { detailFieldsFor, subnetMaskOf } from '@/lib/assets/detail-fields';
 import { ExternalCheckNote, type ExternalCheckState } from '@/components/external-check-note';
@@ -320,9 +322,15 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       SELECT external_type, max(last_synced_at) AS last_synced_at FROM external_identity
       WHERE node_id = ${node.id}::uuid GROUP BY external_type ORDER BY external_type
     `;
+    // What NinjaOne reports beyond the device's own fields (1080).
+    const [ninjaProfile] = await tx<{ profile: NinjaProfile; last_synced_at: Date }[]>`
+      SELECT profile, last_synced_at FROM external_identity
+      WHERE node_id = ${node.id}::uuid AND external_type = 'ninja_device' AND profile IS NOT NULL
+      ORDER BY last_synced_at DESC LIMIT 1
+    `;
 
     return {
-      synced,
+      synced, ninjaProfile: ninjaProfile ?? null,
       node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, sites, record, template, schedules, runs, diagrams,
       attachments, device,
       canDeleteAttachments: session.permissions.includes('asset:delete'),
@@ -341,7 +349,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   if (!data) notFound();
   const {
-    synced,
+    synced, ninjaProfile,
     node, detail, detailRaw, edges, secrets, sites, record, template, schedules, runs, diagrams, totp, canReveal, canManageSeed, canChangePassword,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
     attachments, canDeleteAttachments, device, history,
@@ -822,6 +830,9 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         ) : wideDetails ? (
           <>
             {detailsCard}
+            {ninjaProfile && (
+              <NinjaProfileCard profile={ninjaProfile.profile} syncedAt={ninjaProfile.last_synced_at.toISOString()} />
+            )}
             {checkNote}
             {dependenciesCard}
             {(diagrams.length > 0 || node.node_type === 'network') && (

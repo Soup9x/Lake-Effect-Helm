@@ -22,6 +22,7 @@ import {
 } from './harness';
 import { GET as getNinja, PUT as putNinja } from '../../src/app/api/integrations/ninja/route';
 import { PUT as putOrganizations } from '../../src/app/api/integrations/ninja/organizations/route';
+import { DELETE as deleteOrganization } from '../../src/app/api/organizations/[organizationId]/route';
 import { POST as syncNow } from '../../src/app/api/integrations/ninja/sync/route';
 import { ninjaSyncJob } from '../../src/workers/ninja-sync';
 import { useNinjaTransport } from '../../src/lib/ninja/client';
@@ -169,8 +170,14 @@ afterEach(async () => {
   ninja.mode = 'ok';
   ninja.organizations = [];
   ninja.devices = [];
+  ninja.locations = [];
+  ninja.antivirus = [];
+  ninja.patches = [];
+  ninja.refuse.clear();
   ninja.requests.length = 0;
   await su(async (sql) => {
+    await sql`DELETE FROM site WHERE id IN (SELECT site_id FROM ninja_location)
+                OR name IN ('Grand Rapids HQ', 'Old name')`;
     await sql`DELETE FROM asset_node WHERE id IN (
       SELECT node_id FROM external_identity WHERE external_type = 'ninja_device')`;
     await sql`DELETE FROM asset_node WHERE name = 'Hand-documented file server'`;
@@ -566,5 +573,188 @@ describe('a client per NinjaOne organisation', () => {
     expect(id).not.toBe(IDS.orgAcme);
     const [row] = await su((sql) => sql<{ slug: string }[]>`SELECT slug FROM organization WHERE id = ${id}::uuid`);
     expect(row?.slug).toBe('acme-2');
+  });
+});
+
+describe('deciding what not to import', () => {
+  const standing = (settings: NinjaSettings, id: string) => {
+    const org = settings.organizations.find((o) => o.ninjaOrgId === id)!;
+    return { organizationId: org.organizationId, excluded: org.excludedAt !== null };
+  };
+
+  it('tells "nobody has decided" from "somebody chose not to"', async () => {
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }, { id: 12, name: 'Globex' }];
+    let settings = await configure();
+    expect(standing(settings, '11')).toEqual({ organizationId: null, excluded: false });
+
+    settings = await mapOrg('11', null);
+    expect(standing(settings, '11')).toEqual({ organizationId: null, excluded: true });
+    expect(standing(settings, '12')).toEqual({ organizationId: null, excluded: false });
+
+    settings = await mapOrg('11', IDS.orgAcme);
+    expect(standing(settings, '11')).toEqual({ organizationId: IDS.orgAcme, excluded: false });
+
+    settings = await mapOrg('11', null);
+    expect(standing(settings, '11')).toEqual({ organizationId: null, excluded: true });
+
+    // A sync re-lists organisations without forgetting the decision.
+    await runSync();
+    asAdmin();
+    settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(standing(settings, '11')).toEqual({ organizationId: null, excluded: true });
+  });
+
+  it('stops importing to an archived client, and counts a deleted one as not importing', async () => {
+    ninja.organizations = [{ id: 21, name: 'Short-lived' }];
+    ninja.devices = [{ ...GLOBEX_PC, organizationId: 21 }];
+    await configure();
+    let settings = await mapOrg('21', 'new');
+    const clientId = settings.organizations[0]!.organizationId!;
+    expect((await runSync())).toMatchObject({ created: 1 });
+
+    await su((sql) => sql`UPDATE organization SET archived_at = now() WHERE id = ${clientId}::uuid`);
+    await makeDue();
+    expect((await runSync())).toMatchObject({ created: 0, updated: 0, unchanged: 0, skipped: 1 });
+    asAdmin();
+    settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(settings.organizations[0]).toMatchObject({ organizationId: clientId, organizationArchived: true });
+
+    asAdmin();
+    const deleted = await deleteOrganization(
+      new NextRequest(new Request(`https://helm.test/api/organizations/${clientId}`, { method: 'DELETE' })),
+      { params: Promise.resolve({ organizationId: clientId }) } as never,
+    );
+    expect(deleted.status).toBe(200);
+
+    asAdmin();
+    settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(standing(settings, '21')).toEqual({ organizationId: null, excluded: true });
+    await makeDue();
+    expect((await runSync())).toMatchObject({ created: 0, skipped: 1 });
+  });
+});
+
+describe('locations and what NinjaOne says about a device', () => {
+  const HQ = { id: 71, organizationId: 11, name: 'Grand Rapids HQ', address: '100 Main St\nGrand Rapids, MI' };
+  const siteOf = (nodeName: string) => su(async (sql) => (await sql<{ site_id: string | null }[]>`
+    SELECT site_id FROM asset_node WHERE name = ${nodeName}`)[0]?.site_id ?? null);
+  const site = (id: string) => su(async (sql) => (await sql<{ name: string; address_line1: string | null; organization_id: string }[]>`
+    SELECT name, address_line1, organization_id FROM site WHERE id = ${id}::uuid`)[0]);
+
+  it('makes each location a site of the client and puts its devices there', async () => {
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }, { id: 12, name: 'Globex' }];
+    ninja.locations = [HQ, { id: 72, organizationId: 12, name: 'Globex Plant' }];
+    ninja.devices = [{ ...SERVER, locationId: 71 }, { ...GLOBEX_PC, locationId: 72 }];
+    await configure();
+    await mapOrg('11', IDS.orgAcme);
+
+    const counts = await runSync();
+    expect(counts).toMatchObject({ created: 1, skipped: 1, failed: 0 });
+
+    const siteId = await siteOf('ACME-FS01');
+    expect(siteId).not.toBeNull();
+    expect(await site(siteId!)).toEqual({
+      name: 'Grand Rapids HQ', address_line1: '100 Main St, Grand Rapids, MI', organization_id: IDS.orgAcme,
+    });
+    // Globex is not mapped: no site for its plant.
+    expect(await su((sql) => sql`SELECT 1 FROM site WHERE name = 'Globex Plant'`)).toHaveLength(0);
+  });
+
+  it('adopts a site of the same name, keeps what a person edited, and does not bring back a removed one', async () => {
+    const [existing] = await su((sql) => sql<{ id: string }[]>`
+      INSERT INTO site (tenant_id, organization_id, name, main_phone)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'grand rapids hq', '616-555-0100') RETURNING id`);
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }];
+    ninja.locations = [HQ];
+    ninja.devices = [{ ...SERVER, locationId: 71 }];
+    await configure();
+    await mapOrg('11', IDS.orgAcme);
+    await runSync();
+    expect(await siteOf('ACME-FS01')).toBe(existing!.id);
+    // Filled in where empty; the name and phone somebody typed stay.
+    expect(await site(existing!.id)).toMatchObject({ name: 'grand rapids hq', address_line1: '100 Main St, Grand Rapids, MI' });
+
+    // A person edits the address, then moves the device: both stay.
+    const [other] = await su(async (sql) => {
+      await sql`UPDATE site SET address_line1 = '100 Main Street NW' WHERE id = ${existing!.id}::uuid`;
+      const rows = await sql<{ id: string }[]>`
+        INSERT INTO site (tenant_id, organization_id, name) VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'Old name')
+        RETURNING id`;
+      await sql`UPDATE asset_node SET site_id = ${rows[0]!.id}::uuid WHERE name = 'ACME-FS01'`;
+      return rows;
+    });
+    ninja.locations = [{ ...HQ, address: '200 New Rd' }];
+    await makeDue();
+    await runSync();
+    expect((await site(existing!.id))?.address_line1).toBe('100 Main Street NW');
+    expect(await siteOf('ACME-FS01')).toBe(other!.id);
+
+    // Deleted by a person: not recreated.
+    await su((sql) => sql`DELETE FROM site WHERE id = ${existing!.id}::uuid`);
+    await makeDue();
+    await runSync();
+    expect(await su((sql) => sql`SELECT 1 FROM site WHERE lower(name) = 'grand rapids hq'`)).toHaveLength(0);
+  });
+
+  it('records disks, the last user, antivirus and pending patches on the device', async () => {
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }];
+    ninja.devices = [{
+      ...SERVER,
+      lastLoggedInUser: 'ACME\\jsmith',
+      publicIP: '203.0.113.7',
+      os: { ...SERVER.os, lastBootTime: 1_759_990_000, needsReboot: true },
+      system: { ...SERVER.system, domain: 'acme.local' },
+      volumes: [
+        { name: 'C:', label: 'OS', capacity: 107_374_182_400, freeSpace: 5_368_709_120, deviceType: 'Local Disk' },
+        { name: 'E:', capacity: 4_000_000_000, freeSpace: 1_000_000_000, deviceType: 'Removable Disk' },
+      ],
+    }];
+    ninja.antivirus = [{ deviceId: 501, productName: 'Bitdefender', productState: 'ON', definitionStatus: 'UP_TO_DATE' }];
+    ninja.patches = [
+      { deviceId: 501, name: 'KB1', severity: 'CRITICAL', status: 'MANUAL' },
+      { deviceId: 501, name: 'KB2', severity: 'IMPORTANT', status: 'APPROVED' },
+      { deviceId: 999, name: 'KB3', severity: 'CRITICAL', status: 'MANUAL' },
+    ];
+    await configure();
+    await mapOrg('11', IDS.orgAcme);
+    await runSync();
+
+    const [row] = await su((sql) => sql<{ profile: Record<string, unknown> }[]>`
+      SELECT profile FROM external_identity WHERE external_type = 'ninja_device' AND external_id = '501'`);
+    expect(row?.profile).toEqual({
+      ninjaUrl: 'https://app.ninjarmm.com/#/deviceDashboard/501/overview',
+      lastLoggedInUser: 'ACME\\jsmith',
+      lastBootAt: new Date(1_759_990_000_000).toISOString(),
+      needsReboot: true,
+      publicIp: '203.0.113.7',
+      domain: 'acme.local',
+      volumes: [{ name: 'C:', label: 'OS', capacityGb: 100, freeGb: 5 }],
+      antivirus: [{ product: 'Bitdefender', state: 'ON', definitions: 'UP_TO_DATE' }],
+      pendingPatches: { total: 2, critical: 1 },
+    });
+  });
+
+  it('still syncs every device when NinjaOne will not give the optional reports', async () => {
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }];
+    ninja.locations = [HQ];
+    ninja.devices = [{ ...SERVER, locationId: 71 }];
+    ninja.refuse.add('/api/v2/locations');
+    ninja.refuse.add('/api/v2/queries/antivirus-status');
+    await configure();
+    await mapOrg('11', IDS.orgAcme);
+
+    expect(await runSync()).toMatchObject({ created: 1, failed: 0 });
+    expect(await siteOf('ACME-FS01')).toBeNull();
+
+    asAdmin();
+    const settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(settings.runs[0]).toMatchObject({ status: 'partial', created: 1 });
+    expect(settings.runs[0]!.error).toMatch(/locations, the antivirus report/);
+
+    const [row] = await su((sql) => sql<{ profile: Record<string, unknown> }[]>`
+      SELECT profile FROM external_identity WHERE external_type = 'ninja_device' AND external_id = '501'`);
+    // Not known, rather than none.
+    expect(row?.profile).not.toHaveProperty('antivirus');
+    expect(row?.profile).toHaveProperty('pendingPatches', { total: 0, critical: 0 });
   });
 });
