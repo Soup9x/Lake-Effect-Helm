@@ -26,8 +26,9 @@ export default async function IntegrationSettingsPage() {
 
   const {
     tenant, unifi, organizations, externalChecks, ninja, m365, canManageNetwork, canManageRmm, canManageM365,
+    canCreateClients, internalOrganizationId,
   } = await withTenant(actorOf(identity), async (tx, session) => {
-    const [tenant, unifi, organizations, networkRows, externalChecks, ninja, m365] = await Promise.all([
+    const [tenant, unifi, organizations, networkRows, externalChecks, ninja, m365, internal] = await Promise.all([
       readTenantSummary(tx, identity.actorId),
       listUnifiMappings(tx),
       listOrganizationOptions(tx),
@@ -46,12 +47,15 @@ export default async function IntegrationSettingsPage() {
       readExternalCheckSetting(tx),
       readNinjaSettings(tx),
       listM365Connections(tx),
+      tx<{ id: string }[]>`SELECT id FROM organization WHERE is_msp_internal AND deleted_at IS NULL LIMIT 1`,
     ]);
     return {
       tenant, unifi, organizations, externalChecks, ninja, m365,
       canManageNetwork: networkRows[0]?.permitted ?? false,
       canManageRmm: session.permissions.includes('integration:rmm:manage'),
       canManageM365: session.permissions.includes('integration:m365:manage'),
+      canCreateClients: session.permissions.includes('organization:write'),
+      internalOrganizationId: internal[0]?.id ?? null,
     };
   });
 
@@ -65,7 +69,13 @@ export default async function IntegrationSettingsPage() {
       <PageBody>
         <AdminNav />
 
-        <NinjaSettingsCard initial={ninja} organizations={organizations} canManage={canManageRmm} />
+        <NinjaSettingsCard
+          initial={ninja}
+          organizations={organizations}
+          canManage={canManageRmm}
+          canCreateClients={canCreateClients}
+          internalOrganizationId={internalOrganizationId}
+        />
 
         <M365SettingsCard initial={m365} organizations={organizations} canManage={canManageM365} />
 

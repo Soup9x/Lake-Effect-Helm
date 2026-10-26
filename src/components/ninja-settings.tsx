@@ -7,6 +7,10 @@
  * Three steps, in the order they have to happen: save the API app's details
  * (tried against NinjaOne before anything is stored, which also fetches the
  * organisation list), choose a client for each organisation, then sync.
+ *
+ * "New client" maps an organisation to a client of the same name, created on
+ * save if Helm has none yet, so an MSP starting out does not have to type in
+ * every client first.
  */
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
@@ -38,12 +42,17 @@ const RUN_TONE: Record<string, BadgeTone> = {
   success: 'ok', partial: 'warning', failed: 'danger', running: 'brand', queued: 'neutral', cancelled: 'neutral',
 };
 
+/** The mapping value that asks for a client named like the NinjaOne organisation. */
+const NEW_CLIENT = 'new';
+
 export function NinjaSettingsCard({
-  initial, organizations, canManage,
+  initial, organizations: organizationOptions, canManage, canCreateClients, internalOrganizationId,
 }: {
   initial: NinjaSettings;
   organizations: OrganizationOption[];
   canManage: boolean;
+  canCreateClients: boolean;
+  internalOrganizationId: string | null;
 }) {
   const router = useRouter();
   const [settings, setSettings] = useState(initial);
@@ -64,6 +73,16 @@ export function NinjaSettingsCard({
   const [mappingBusy, setMappingBusy] = useState(false);
   const [mappingFeedback, setMappingFeedback] = useState<Feedback>(null);
   const [syncBusy, setSyncBusy] = useState(false);
+
+  // Clients created by the last save are mapped before the page's list is
+  // refreshed; without them a select would show a value it has no option for.
+  const organizations = [
+    ...organizationOptions,
+    ...settings.organizations
+      .filter((o) => o.organizationId && o.organizationName
+        && !organizationOptions.some((opt) => opt.id === o.organizationId))
+      .map((o) => ({ id: o.organizationId!, name: o.organizationName! })),
+  ].filter((o, i, all) => all.findIndex((x) => x.id === o.id) === i);
 
   const savedMapping = mappingOf(settings);
   const mappingDirty = Object.keys(mapping).some((k) => mapping[k] !== savedMapping[k]);
@@ -127,9 +146,16 @@ export function NinjaSettingsCard({
       }
       adopt(result.value);
       setMappingFeedback({ ok: true, message: 'Saved. Devices import on the next sync.' });
+      if (changed.some((c) => c.organizationId === NEW_CLIENT)) router.refresh();
     } finally {
       setMappingBusy(false);
     }
+  }
+
+  /** Every organisation not yet importing to a client of its own: unmapped, or mapped to the MSP's. */
+  function newClientForEach() {
+    setMapping((m) => Object.fromEntries(Object.entries(m).map(([k, v]) =>
+      [k, v === '' || v === internalOrganizationId ? NEW_CLIENT : v])));
   }
 
   async function syncNow() {
@@ -252,6 +278,11 @@ export function NinjaSettingsCard({
               </h3>
               {canManage && (
                 <div className="flex items-center gap-2">
+                  {canCreateClients && (
+                    <Button variant="secondary" size="sm" onClick={newClientForEach} disabled={mappingBusy}>
+                      New client for each
+                    </Button>
+                  )}
                   {mappingDirty && (
                     <Button variant="primary" size="sm" onClick={saveMapping} disabled={mappingBusy}>
                       {mappingBusy && <Loader2 className="size-4 animate-spin" aria-hidden />}
@@ -292,6 +323,7 @@ export function NinjaSettingsCard({
                         <Select aria-label={`Client for ${org.name}`} value={mapping[org.ninjaOrgId] ?? ''}
                           onChange={(e) => setMapping((m) => ({ ...m, [org.ninjaOrgId]: e.target.value }))}>
                           <option value="">Don&rsquo;t import</option>
+                          {canCreateClients && <option value={NEW_CLIENT}>New client: {org.name}</option>}
                           {organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                         </Select>
                       ) : (
