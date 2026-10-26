@@ -23,6 +23,7 @@
  *                                                       0f  ninja.sync
  *                                                       10  m365.sync
  *                                                       11  accounts.email
+ *                                                       12  proxmox.sync
  *
  * 03 belonged to integration.sync, the generic RMM/PSA adapter, removed because
  * nothing could configure a connection for it. Do not reuse it: an old worker
@@ -40,6 +41,7 @@ import { scheduleChecklistsJob } from './schedules';
 import { ninjaSyncJob } from './ninja-sync';
 import { m365SyncJob } from './m365-sync';
 import { accountEmailJob } from './account-email';
+import { proxmoxSyncJob } from './proxmox-sync';
 import type { Job } from './runtime';
 
 export function allJobs(): Job[] {
@@ -85,5 +87,7 @@ export function allJobs(): Job[] {
     m365SyncJob(),
     // Invitations and password links (1000), through the tenant's relay.
     accountEmailJob(),
+    // Proxmox per cluster (1110). Idle until a cluster is connected.
+    proxmoxSyncJob(),
   ];
 }

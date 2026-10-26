@@ -131,10 +131,18 @@ export default async function OrganizationPage({
       ORDER BY lower(n.name)
     `;
 
+    // The Proxmox clusters that import here (1110). integration_connection is
+    // tenant-wide actors' only, so anybody else gets none.
+    const proxmox = await tx<{ id: string; display_name: string; base_url: string; last_success_at: Date | null }[]>`
+      SELECT id, display_name, base_url, last_success_at FROM integration_connection
+      WHERE provider = 'proxmox' AND organization_id = ${organizationId}::uuid
+      ORDER BY lower(display_name)
+    `;
+
     return {
       organization, sites, contacts, assets, credentials, expiries,
       health, pinned, folders, documents, pages,
-      recentlyUpdated, recentlyViewed, activity, runs, documentationHealth, ninja,
+      recentlyUpdated, recentlyViewed, activity, runs, documentationHealth, ninja, proxmox,
       canWriteOrganization: session.permissions.includes('organization:write'),
       canDeleteDocuments: session.permissions.includes('asset:delete'),
       canReadAudit: session.permissions.includes('audit:read'),
@@ -168,7 +176,7 @@ export default async function OrganizationPage({
     organization, sites, contacts, assets, credentials, expiries, health, pinned,
     folders, documents, pages, recentlyUpdated, recentlyViewed, activity, runs,
     canDeleteDocuments, canReadAudit, canSeeAccessCounts,
-    documentationHealth, canWriteOrganization, ninja,
+    documentationHealth, canWriteOrganization, ninja, proxmox,
   } = data;
 
   // Which image the avatar loads, and the same rule the clients list and the
@@ -321,6 +329,24 @@ export default async function OrganizationPage({
                 </a>
               ) : null;
             })}
+          </p>
+        )}
+        {proxmox.length > 0 && (
+          <p className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-muted"
+            title="Kept current by the Proxmox sync">
+            <span className="flex items-center gap-1.5 text-ink">
+              <Cloud className="size-3.5 text-ink-faint" aria-hidden />
+              Proxmox · {(() => {
+                const times = proxmox.flatMap((p) => (p.last_success_at ? [p.last_success_at.getTime()] : []));
+                return times.length > 0 ? `synced ${formatDateTime(new Date(Math.max(...times)).toISOString())}` : 'not synced yet';
+              })()}
+            </span>
+            {proxmox.map((p) => (
+              <a key={p.id} href={p.base_url} target="_blank"
+                rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-brand hover:underline">
+                {proxmox.length === 1 ? 'Open in Proxmox' : p.display_name} <ExternalLink className="size-3" aria-hidden />
+              </a>
+            ))}
           </p>
         )}
         <div className="mb-4">

@@ -41,6 +41,9 @@ import { listInterfaces } from '@/lib/assets/devices';
 import { NinjaProfileCard } from '@/components/ninja-profile-card';
 import type { NinjaProfile } from '@/lib/ninja/devices';
 import { ninjaDeviceUrl } from '@/lib/ninja/links';
+import { ProxmoxProfileCard } from '@/components/proxmox-profile-card';
+import type { ProxmoxProfile } from '@/lib/proxmox/machines';
+import { proxmoxResourceUrl } from '@/lib/proxmox/links';
 import { syncSourceLabel } from '@/lib/integrations/sync-source';
 import { detailFieldsFor, subnetMaskOf } from '@/lib/assets/detail-fields';
 import { ExternalCheckNote, type ExternalCheckState } from '@/components/external-check-note';
@@ -333,8 +336,18 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       ORDER BY ei.last_synced_at DESC LIMIT 1
     `;
 
+    // What Proxmox reports for a host or guest (1110).
+    const [proxmoxProfile] = await tx<{ profile: ProxmoxProfile; last_synced_at: Date; base_url: string }[]>`
+      SELECT ei.profile, ei.last_synced_at, c.base_url
+      FROM external_identity ei
+      JOIN integration_connection c ON c.id = ei.connection_id
+      WHERE ei.node_id = ${node.id}::uuid AND ei.external_type IN ('proxmox_node', 'proxmox_guest')
+        AND ei.profile IS NOT NULL
+      ORDER BY ei.last_synced_at DESC LIMIT 1
+    `;
+
     return {
-      synced, ninjaProfile: ninjaProfile ?? null,
+      synced, ninjaProfile: ninjaProfile ?? null, proxmoxProfile: proxmoxProfile ?? null,
       node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, sites, record, template, schedules, runs, diagrams,
       attachments, device,
       canDeleteAttachments: session.permissions.includes('asset:delete'),
@@ -353,7 +366,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   if (!data) notFound();
   const {
-    synced, ninjaProfile,
+    synced, ninjaProfile, proxmoxProfile,
     node, detail, detailRaw, edges, secrets, sites, record, template, schedules, runs, diagrams, totp, canReveal, canManageSeed, canChangePassword,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
     attachments, canDeleteAttachments, device, history,
@@ -839,6 +852,15 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
                 profile={ninjaProfile.profile}
                 syncedAt={ninjaProfile.last_synced_at.toISOString()}
                 ninjaUrl={ninjaDeviceUrl(ninjaProfile.portal, ninjaProfile.external_id)}
+              />
+            )}
+            {proxmoxProfile && (
+              <ProxmoxProfileCard
+                profile={proxmoxProfile.profile}
+                syncedAt={proxmoxProfile.last_synced_at.toISOString()}
+                proxmoxUrl={proxmoxProfile.profile.kind === 'node'
+                  ? proxmoxResourceUrl(proxmoxProfile.base_url, 'node', proxmoxProfile.profile.node)
+                  : proxmoxResourceUrl(proxmoxProfile.base_url, proxmoxProfile.profile.kind, proxmoxProfile.profile.vmid)}
               />
             )}
             {checkNote}
