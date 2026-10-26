@@ -85,7 +85,8 @@ export const externalIdentity = pgTable('external_identity', {
 
 /**
  * NinjaOne's organisations and the client each imports to (0980). A null
- * organization is listed and not imported.
+ * organization is listed and not imported; excludedAt says whether somebody
+ * chose that or nobody has decided yet (1070).
  */
 export const ninjaOrganization = pgTable('ninja_organization', {
   tenantId: uuid('tenant_id').notNull(),
@@ -96,6 +97,7 @@ export const ninjaOrganization = pgTable('ninja_organization', {
   deviceCount: integer('device_count'),
   seenAt: tstz('seen_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
+  excludedAt: tstz('excluded_at'),
 }, (t) => [
   primaryKey({ columns: [t.connectionId, t.ninjaOrgId] }),
 ]);

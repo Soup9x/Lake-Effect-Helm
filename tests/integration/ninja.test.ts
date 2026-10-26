@@ -22,6 +22,7 @@ import {
 } from './harness';
 import { GET as getNinja, PUT as putNinja } from '../../src/app/api/integrations/ninja/route';
 import { PUT as putOrganizations } from '../../src/app/api/integrations/ninja/organizations/route';
+import { DELETE as deleteOrganization } from '../../src/app/api/organizations/[organizationId]/route';
 import { POST as syncNow } from '../../src/app/api/integrations/ninja/sync/route';
 import { ninjaSyncJob } from '../../src/workers/ninja-sync';
 import { useNinjaTransport } from '../../src/lib/ninja/client';
@@ -566,5 +567,63 @@ describe('a client per NinjaOne organisation', () => {
     expect(id).not.toBe(IDS.orgAcme);
     const [row] = await su((sql) => sql<{ slug: string }[]>`SELECT slug FROM organization WHERE id = ${id}::uuid`);
     expect(row?.slug).toBe('acme-2');
+  });
+});
+
+describe('deciding what not to import', () => {
+  const standing = (settings: NinjaSettings, id: string) => {
+    const org = settings.organizations.find((o) => o.ninjaOrgId === id)!;
+    return { organizationId: org.organizationId, excluded: org.excludedAt !== null };
+  };
+
+  it('tells "nobody has decided" from "somebody chose not to"', async () => {
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }, { id: 12, name: 'Globex' }];
+    let settings = await configure();
+    expect(standing(settings, '11')).toEqual({ organizationId: null, excluded: false });
+
+    settings = await mapOrg('11', null);
+    expect(standing(settings, '11')).toEqual({ organizationId: null, excluded: true });
+    expect(standing(settings, '12')).toEqual({ organizationId: null, excluded: false });
+
+    settings = await mapOrg('11', IDS.orgAcme);
+    expect(standing(settings, '11')).toEqual({ organizationId: IDS.orgAcme, excluded: false });
+
+    settings = await mapOrg('11', null);
+    expect(standing(settings, '11')).toEqual({ organizationId: null, excluded: true });
+
+    // A sync re-lists organisations without forgetting the decision.
+    await runSync();
+    asAdmin();
+    settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(standing(settings, '11')).toEqual({ organizationId: null, excluded: true });
+  });
+
+  it('stops importing to an archived client, and counts a deleted one as not importing', async () => {
+    ninja.organizations = [{ id: 21, name: 'Short-lived' }];
+    ninja.devices = [{ ...GLOBEX_PC, organizationId: 21 }];
+    await configure();
+    let settings = await mapOrg('21', 'new');
+    const clientId = settings.organizations[0]!.organizationId!;
+    expect((await runSync())).toMatchObject({ created: 1 });
+
+    await su((sql) => sql`UPDATE organization SET archived_at = now() WHERE id = ${clientId}::uuid`);
+    await makeDue();
+    expect((await runSync())).toMatchObject({ created: 0, updated: 0, unchanged: 0, skipped: 1 });
+    asAdmin();
+    settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(settings.organizations[0]).toMatchObject({ organizationId: clientId, organizationArchived: true });
+
+    asAdmin();
+    const deleted = await deleteOrganization(
+      new NextRequest(new Request(`https://helm.test/api/organizations/${clientId}`, { method: 'DELETE' })),
+      { params: Promise.resolve({ organizationId: clientId }) } as never,
+    );
+    expect(deleted.status).toBe(200);
+
+    asAdmin();
+    settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(standing(settings, '21')).toEqual({ organizationId: null, excluded: true });
+    await makeDue();
+    expect((await runSync())).toMatchObject({ created: 0, skipped: 1 });
   });
 });

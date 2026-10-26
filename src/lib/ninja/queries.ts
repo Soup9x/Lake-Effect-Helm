@@ -27,6 +27,10 @@ export interface NinjaOrganizationRow {
   name: string;
   organizationId: string | null;
   organizationName: string | null;
+  /** The client is archived, so nothing imports to it until it is restored. */
+  organizationArchived: boolean;
+  /** Somebody chose "Don't import", or deleted the client (1070). Null and unmapped: undecided. */
+  excludedAt: string | null;
   deviceCount: number | null;
   seenAt: string;
 }
@@ -75,9 +79,11 @@ export async function readNinjaSettings(tx: Tx): Promise<NinjaSettings> {
   const [organizations, runs] = await Promise.all([
     tx<{
       ninja_org_id: string; name: string; organization_id: string | null;
-      organization_name: string | null; device_count: number | null; seen_at: Date;
+      organization_name: string | null; organization_archived: boolean; excluded_at: Date | null;
+      device_count: number | null; seen_at: Date;
     }[]>`
       SELECT n.ninja_org_id, n.name, n.organization_id, o.name AS organization_name,
+             coalesce(o.archived_at IS NOT NULL, false) AS organization_archived, n.excluded_at,
              n.device_count, n.seen_at
       FROM ninja_organization n
       LEFT JOIN organization o ON o.id = n.organization_id
@@ -118,6 +124,8 @@ export async function readNinjaSettings(tx: Tx): Promise<NinjaSettings> {
       name: o.name,
       organizationId: o.organization_id,
       organizationName: o.organization_name,
+      organizationArchived: o.organization_archived,
+      excludedAt: iso(o.excluded_at),
       deviceCount: o.device_count,
       seenAt: o.seen_at.toISOString(),
     })),

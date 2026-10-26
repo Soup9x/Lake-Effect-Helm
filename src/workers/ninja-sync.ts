@@ -13,7 +13,8 @@
  *   changed since the sync last wrote it. This file could not do otherwise.
  *
  *   IMPORT INTO THE WRONG CLIENT. A device is imported only when a person has
- *   mapped its NinjaOne organisation to a client. Unmapped is skipped.
+ *   mapped its NinjaOne organisation to a client. Unmapped is skipped, and so
+ *   is a client somebody archived: archiving one is how a person stops it.
  *
  *   DELETE DOCUMENTATION. A device gone from NinjaOne stays in Helm. Its
  *   check-in time stops moving, which is what says so.
@@ -195,8 +196,10 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
         )})
       `;
       const rows = await tx<{ ninja_org_id: string; organization_id: string }[]>`
-        SELECT ninja_org_id, organization_id FROM ninja_organization
-        WHERE connection_id = ${connectionId}::uuid AND organization_id IS NOT NULL
+        SELECT n.ninja_org_id, n.organization_id FROM ninja_organization n
+        JOIN organization o ON o.id = n.organization_id
+        WHERE n.connection_id = ${connectionId}::uuid
+          AND o.archived_at IS NULL AND o.deleted_at IS NULL
       `;
       return new Map(rows.map((r) => [r.ninja_org_id, r.organization_id]));
     },
