@@ -317,7 +317,7 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
             SELECT helm.annotate_ninja_device(
               ${connectionId}::uuid, ${mapped.externalId},
               ${(locationId && siteOf.get(locationId)) ?? null}::uuid,
-              ${tx.json(mapProfile(device, reports, connection.base_url) as never)})
+              ${tx.json(mapProfile(device, reports) as never)})
           `;
           const outcome = result?.outcome ?? 'unchanged';
           return outcome === 'unchanged' && placed?.annotate_ninja_device ? 'updated' : outcome;

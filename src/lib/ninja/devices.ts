@@ -168,7 +168,6 @@ export function mapDevice(device: NinjaDevice): MappedDevice {
  * tell "none" from "not known".
  */
 export interface NinjaProfile {
-  ninjaUrl?: string;
   offline?: boolean;
   lastLoggedInUser?: string;
   lastBootAt?: string;
@@ -212,11 +211,11 @@ export function byDevice(rows: NinjaQueryRow[]): Map<string, NinjaQueryRow[]> {
   return out;
 }
 
-export function mapProfile(device: NinjaDevice, reports: NinjaReports, baseUrl: string): NinjaProfile {
+/** The link to the device in NinjaOne is not kept here: it is built when shown, from the address set then (1090). */
+export function mapProfile(device: NinjaDevice, reports: NinjaReports): NinjaProfile {
   const profile: NinjaProfile = {};
   const id = String(device.id);
 
-  if (/^\d+$/.test(id)) profile.ninjaUrl = `${baseUrl}/#/deviceDashboard/${id}/overview`;
   if (typeof device.offline === 'boolean') profile.offline = device.offline;
   const user = text(device.lastLoggedInUser, 200);
   if (user) profile.lastLoggedInUser = user;

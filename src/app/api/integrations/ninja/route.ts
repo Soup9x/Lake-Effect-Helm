@@ -34,6 +34,14 @@ const schema = z.object({
   clientSecret: z.string().trim().min(8).max(500).optional(),
   syncEnabled: z.boolean(),
   intervalMinutes: z.number().int().min(15).max(1440),
+  /**
+   * Where people sign in, for links (1090): an https origin, or null for the
+   * regional host. Absent leaves it as it is.
+   */
+  portalUrl: z.string().trim()
+    .transform((v) => v.replace(/\/+$/, ''))
+    .pipe(z.string().regex(/^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/, 'an https address with no path, like https://yourcompany.rmmservices.net'))
+    .nullable().optional(),
 });
 
 export const GET = tenantRoute(async ({ tx }) => readNinjaSettings(tx));
@@ -112,6 +120,9 @@ export const PUT = tenantRoute(
       await tx`
         SELECT helm.record_ninja_organizations(${saved.set_ninja_connection}::uuid, ${tx.json(organizations)})
       `;
+    }
+    if (body.portalUrl !== undefined) {
+      await tx`SELECT helm.set_ninja_portal_url(${body.portalUrl})`;
     }
 
     return {

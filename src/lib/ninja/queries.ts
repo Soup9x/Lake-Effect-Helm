@@ -9,6 +9,8 @@ import type { HelmTx as Tx } from '@/lib/db/client';
 export interface NinjaConnection {
   id: string;
   baseUrl: string;
+  /** Where people sign in, for links (1090). Null: the regional host. */
+  portalUrl: string | null;
   clientId: string;
   /** Whether a secret is stored. Never the secret. */
   secretSet: boolean;
@@ -59,12 +61,12 @@ const iso = (d: Date | null) => d?.toISOString() ?? null;
 
 export async function readNinjaSettings(tx: Tx): Promise<NinjaSettings> {
   const [row] = await tx<{
-    id: string; base_url: string; client_id: string | null; secret_set: boolean;
+    id: string; base_url: string; portal_url: string | null; client_id: string | null; secret_set: boolean;
     sync_enabled: boolean; sync_interval_minutes: number; status: string;
     last_sync_at: Date | null; last_success_at: Date | null; consecutive_failures: number;
     last_error: string | null; device_count: number;
   }[]>`
-    SELECT c.id, c.base_url, c.config ->> 'client_id' AS client_id,
+    SELECT c.id, c.base_url, c.config ->> 'portal_url' AS portal_url, c.config ->> 'client_id' AS client_id,
            c.credential_secret_ids ? 'client_secret' AS secret_set,
            c.sync_enabled, c.sync_interval_minutes, c.status::text AS status,
            c.last_sync_at, c.last_success_at, c.consecutive_failures, c.last_error,
@@ -108,6 +110,7 @@ export async function readNinjaSettings(tx: Tx): Promise<NinjaSettings> {
     connection: {
       id: row.id,
       baseUrl: row.base_url,
+      portalUrl: row.portal_url,
       clientId: row.client_id ?? '',
       secretSet: row.secret_set,
       syncEnabled: row.sync_enabled,

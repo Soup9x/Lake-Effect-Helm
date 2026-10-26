@@ -16,6 +16,7 @@ import { siteValuesFrom } from '@/lib/sites/values';
 import { categoryBySource, ORG_CATEGORIES } from '@/lib/nav/org-categories';
 import { isClientRole } from '@/lib/ui/roles';
 import { formatDateTime, humanise } from '@/lib/ui/format';
+import { SyncedRow } from '@/components/synced-row';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,11 +84,19 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
       WHERE site_id = ${siteId}::uuid AND archived_at IS NULL
       ORDER BY lower(name)
     `;
-    return { row, contacts, others, assets, diagrams, history: await listHistory(tx, 'site', siteId) };
+    // A NinjaOne location this site was made from or adopted (1080). Only
+    // tenant-wide actors can read ninja_location; anybody else sees no row.
+    const [ninja] = await tx<{ seen_at: Date }[]>`
+      SELECT seen_at FROM ninja_location WHERE site_id = ${siteId}::uuid ORDER BY seen_at DESC LIMIT 1
+    `;
+    return {
+      row, contacts, others, assets, diagrams, ninjaSeenAt: ninja?.seen_at ?? null,
+      history: await listHistory(tx, 'site', siteId),
+    };
   });
   if (!data) notFound();
 
-  const { row, contacts, others, assets, diagrams, history } = data;
+  const { row, contacts, others, assets, diagrams, ninjaSeenAt, history } = data;
   const canWrite = !isClientRole(identity.roleKey);
   const values = siteValuesFrom(row);
 
@@ -180,6 +189,7 @@ export default async function LocationPage({ params }: { params: Promise<{ siteI
                     </ul>
                   ) : '—'}
                 </dd>
+                {ninjaSeenAt && <SyncedRow source="NinjaOne" at={formatDateTime(ninjaSeenAt.toISOString())} />}
                 <dt className="text-ink-muted">Last updated</dt>
                 <dd className="text-ink">{formatDateTime(row.updated_at.toISOString())}</dd>
               </dl>

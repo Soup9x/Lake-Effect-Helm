@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { isUuid } from '@/lib/ids';
-import { Boxes, CalendarClock, KeyRound, MapPin, Users } from 'lucide-react';
+import { Boxes, CalendarClock, Cloud, ExternalLink, KeyRound, MapPin, Users } from 'lucide-react';
+import { ninjaOrganizationUrl } from '@/lib/ninja/links';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
@@ -45,7 +46,7 @@ import {
 import { Badge, severityTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { RevealButton } from '@/components/reveal-button';
-import { formatDate, humanise, relativeDays } from '@/lib/ui/format';
+import { formatDate, formatDateTime, humanise, relativeDays } from '@/lib/ui/format';
 
 /**
  * One client, everything Helm knows about them.
@@ -120,10 +121,20 @@ export default async function OrganizationPage({
       readDocumentationHealth(tx, organizationId),
     ]);
 
+    // The NinjaOne organisations that import here (0980, 1090). Tenant-wide
+    // actors only, by ninja_organization's RLS; anybody else gets none.
+    const ninja = await tx<{ ninja_org_id: string; name: string; seen_at: Date; portal: string }[]>`
+      SELECT n.ninja_org_id, n.name, n.seen_at, coalesce(c.config ->> 'portal_url', c.base_url) AS portal
+      FROM ninja_organization n
+      JOIN integration_connection c ON c.id = n.connection_id
+      WHERE n.organization_id = ${organizationId}::uuid
+      ORDER BY lower(n.name)
+    `;
+
     return {
       organization, sites, contacts, assets, credentials, expiries,
       health, pinned, folders, documents, pages,
-      recentlyUpdated, recentlyViewed, activity, runs, documentationHealth,
+      recentlyUpdated, recentlyViewed, activity, runs, documentationHealth, ninja,
       canWriteOrganization: session.permissions.includes('organization:write'),
       canDeleteDocuments: session.permissions.includes('asset:delete'),
       canReadAudit: session.permissions.includes('audit:read'),
@@ -157,7 +168,7 @@ export default async function OrganizationPage({
     organization, sites, contacts, assets, credentials, expiries, health, pinned,
     folders, documents, pages, recentlyUpdated, recentlyViewed, activity, runs,
     canDeleteDocuments, canReadAudit, canSeeAccessCounts,
-    documentationHealth, canWriteOrganization,
+    documentationHealth, canWriteOrganization, ninja,
   } = data;
 
   // Which image the avatar loads, and the same rule the clients list and the
@@ -293,6 +304,25 @@ export default async function OrganizationPage({
           was possible through the bulk bar; taking one off was not possible
           anywhere, because nothing rendered a control over them.
         */}
+        {ninja.length > 0 && (
+          <p className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-muted"
+            title="Kept current by the NinjaOne sync">
+            <span className="flex items-center gap-1.5 text-ink">
+              <Cloud className="size-3.5 text-ink-faint" aria-hidden />
+              NinjaOne · synced {formatDateTime(
+                new Date(Math.max(...ninja.map((n) => n.seen_at.getTime()))).toISOString())}
+            </span>
+            {ninja.map((n) => {
+              const href = ninjaOrganizationUrl(n.portal, n.ninja_org_id);
+              return href ? (
+                <a key={n.ninja_org_id} href={href} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-brand hover:underline">
+                  {ninja.length === 1 ? 'Open in NinjaOne' : n.name} <ExternalLink className="size-3" aria-hidden />
+                </a>
+              ) : null;
+            })}
+          </p>
+        )}
         <div className="mb-4">
           <TagEditor
             target="client"
