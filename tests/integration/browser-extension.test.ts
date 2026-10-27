@@ -1,8 +1,10 @@
 /**
  * The browser extension (1120), through the real routes.
  *
- *   PAIRING      a person, from a session, MSP-side; never a client user, and
- *                never a request that authenticated with a token.
+ *   PAIRING      a person, from a session, MSP-side, with their password typed
+ *                again (and their authenticator code, when they have one);
+ *                never a client user, never a request that authenticated
+ *                with a token, and never without a fresh step-up (1121).
  *   THE KEY      an extension token is half a credential: without a signature
  *                by the paired device key, or with a stale or wrong one, the
  *                request is the same flat 401 as an unknown token.
@@ -14,11 +16,18 @@
  *   PERSONAL     a personal API token cannot read the vault at all (closing a
  *                gap 1030's comment said did not exist).
  *   LIFETIME     renewal replaces the token; unpairing stops it at once.
+ *   ADMIN        somebody holding user:write sees every pairing and can
+ *                revoke one; nobody else can.
+ *   SUGGESTIONS  a site with no match offers what the person copied lately,
+ *                and what MSP staff copy most; search finds near misses.
  */
 import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { useSessionResolver, type SessionUser } from '../../src/lib/auth/session';
+import { setLocalPassword } from '../../src/lib/auth/local';
+import { confirmEnrolment, removeTotp, startEnrolment } from '../../src/lib/auth/local-totp';
+import { base32Decode, generateTotp } from '../../src/lib/crypto/totp';
 import { resetServices, setKekProvider } from '../../src/lib/services';
 import { withTenant } from '../../src/lib/db/client';
 import { canonicalRequest } from '../../src/lib/extension/signature';
@@ -29,6 +38,7 @@ import {
 
 import { GET as listInstalls, POST as pair } from '../../src/app/api/extension/installs/route';
 import { DELETE as unpair } from '../../src/app/api/extension/installs/[installId]/route';
+import { DELETE as adminRevoke } from '../../src/app/api/extension/admin/installs/[installId]/route';
 import { DELETE as signOut, GET as me } from '../../src/app/api/extension/me/route';
 import { POST as renew } from '../../src/app/api/extension/renew/route';
 import { POST as match } from '../../src/app/api/extension/match/route';
@@ -44,6 +54,11 @@ let h: Harness;
 let currentUser: SessionUser | null = null;
 const TECH: SessionUser = { id: IDS.tech1, email: 'tech1@northwind.test' };
 const CLIENT: SessionUser = { id: IDS.acmeAdmin, email: 'it@acme.test' };
+
+const PASSWORDS: Record<string, string> = {
+  [IDS.tech1]: 'nineteen copper doorframes',
+  [IDS.acmeAdmin]: 'eleven quiet harbours',
+};
 
 const ORIGIN = 'https://helm.test';
 const PORTAL_PASSWORD = 'portal-password-4c1e';
@@ -99,10 +114,15 @@ async function su<T>(fn: (sql: ReturnType<typeof superuserSql>) => Promise<T>): 
   try { return await fn(sql); } finally { await sql.end({ timeout: 5 }); }
 }
 
-async function pairAs(user: SessionUser, device: Device, label = 'Work laptop') {
+async function pairAs(
+  user: SessionUser,
+  device: Device,
+  label = 'Work laptop',
+  auth: { password?: string | undefined; code?: string } = { password: PASSWORDS[user.id] },
+) {
   currentUser = user;
   const response = await pair(sessionRequest('/api/extension/installs', 'POST', {
-    publicKey: device.spki, label, browser: 'Brave', extensionVersion: '0.1.0',
+    publicKey: device.spki, label, browser: 'Brave', extensionVersion: '0.1.0', ...auth,
   }));
   currentUser = null;
   return response;
@@ -120,6 +140,15 @@ beforeAll(async () => {
   setKekProvider(h.kek);
   useSessionResolver(async () => currentUser);
   await h.keys.provision(IDS.tenant1, IDS.admin1, { reason: 'browser extension tests' });
+  for (const user of [TECH, CLIENT]) {
+    await setLocalPassword({
+      userId: user.id,
+      password: PASSWORDS[user.id]!,
+      context: { email: user.email, name: user.email },
+      reason: 'test setup',
+      connection: 'auth',
+    });
+  }
 
   currentUser = TECH;
   const make = async (payload: Record<string, unknown>) => {
@@ -176,6 +205,57 @@ describe('pairing', () => {
       SELECT metadata FROM audit_log WHERE action = 'browser_extension.paired' AND entity_id = ${paired.installId}::uuid`);
     expect(audit!.metadata).toMatchObject({ label: 'Work laptop', browser: 'Brave' });
     expect(JSON.stringify(audit)).not.toContain(paired.token.split('.')[1]);
+  });
+
+  it('asks for the password again, and pairs nothing without the right one', async () => {
+    const count = () => su(async (sql) =>
+      (await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM browser_extension_install`)[0]!.n);
+    const before = await count();
+
+    const missing = await pairAs(TECH, newDevice(), 'No password', {});
+    expect(missing.status).toBe(400);
+    const wrong = await pairAs(TECH, newDevice(), 'Wrong password', { password: 'not it at all' });
+    expect(wrong.status).toBe(401);
+    expect((await json<{ error: { message: string } }>(wrong)).error.message).toBe('That password is not correct.');
+
+    expect(await count()).toBe(before);
+    // The wrong one counted, as it would at sign-in.
+    await su((sql) => sql`DELETE FROM auth_attempt`);
+  });
+
+  it('asks for the authenticator code too, when the person has one', async () => {
+    const { secret } = await startEnrolment(TECH.id, TECH.email);
+    const code = (offsetSeconds = 0) =>
+      generateTotp(base32Decode(secret), { periodSeconds: 30 }, Date.now() + offsetSeconds * 1000).code;
+    await confirmEnrolment(TECH.id, code());
+    try {
+      const first = await pairAs(TECH, newDevice(), 'Two factors');
+      expect(first.status).toBe(401);
+      expect((await json<{ error: { details: Record<string, unknown> } }>(first)).error.details)
+        .toEqual({ secondFactor: 'totp' });
+
+      const wrong = await pairAs(TECH, newDevice(), 'Two factors', { password: PASSWORDS[TECH.id], code: '000000' });
+      expect(wrong.status).toBe(401);
+
+      const right = await pairAs(TECH, newDevice(), 'Two factors', {
+        password: PASSWORDS[TECH.id],
+        // The next step's code: the one that confirmed enrolment is spent.
+        code: code(30),
+      });
+      expect(right.status, await right.clone().text()).toBe(200);
+    } finally {
+      await removeTotp(TECH.id);
+      await su((sql) => sql`DELETE FROM auth_attempt`);
+    }
+  });
+
+  it('is refused by the database without a fresh step-up, whoever calls it', async () => {
+    await su((sql) => sql`DELETE FROM step_up_verification`);
+    await expect(withTenant({ tenantId: IDS.tenant1, actorId: IDS.tech1 }, (tx) => tx`
+      SELECT * FROM helm.pair_browser_extension(
+        'Direct', NULL, NULL, decode(repeat('ab', 91), 'hex'), 'helm_be_direct00',
+        decode(repeat('cd', 32), 'hex'), now() + interval '1 day')
+    `)).rejects.toThrow(/re-enter your password/);
   });
 
   it('refuses a co-managed client user', async () => {
@@ -391,6 +471,62 @@ describe('the personal vault', () => {
   });
 });
 
+describe('suggestions and search as you type', () => {
+  let device: Device;
+  let token: string;
+
+  beforeAll(async () => {
+    device = newDevice();
+    token = (await json<ExtensionPairing>(await pairAs(TECH, device, 'Suggestion tests'))).token;
+  });
+
+  const lookup = async (url: string) =>
+    json<ExtensionLookup>(await match(signed(device, token, '/api/extension/match', 'POST', { url })));
+  const find = async (q: string) => {
+    const response = await searchRoute(signed(device, token, '/api/extension/search', 'POST', { q }));
+    expect(response.status, await response.clone().text()).toBe(200);
+    return (await json<{ entries: ExtensionEntry[] }>(response)).entries;
+  };
+
+  it('offers what the person copied lately when the site matches nothing', async () => {
+    const result = await lookup('https://nothing-here.example/');
+    expect(result.entries).toEqual([]);
+    const recent = result.suggestions!.recent;
+    // Copied above: the portal password, and the personal entry.
+    expect(recent.map((e) => e.name)).toEqual(expect.arrayContaining(['Acme portal', 'My bank']));
+    expect(recent.find((e) => e.kind === 'personal')).toMatchObject({ id: personalId });
+    // One list or the other, never both.
+    const recentIds = new Set(recent.map((e) => e.id));
+    expect(result.suggestions!.popular.filter((e) => recentIds.has(e.id))).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain(PORTAL_PASSWORD);
+
+    // A browser page gets them too; a site that matched does not need them.
+    expect((await lookup('chrome://newtab/')).suggestions?.recent.length).toBeGreaterThan(0);
+    expect((await lookup('https://portal.acme-corp.test/')).suggestions).toBeUndefined();
+  });
+
+  it('counts colleagues\' copies for MSP staff only, and nobody else\'s vault at all', async () => {
+    const activity = (actorId: string) => withTenant({ tenantId: IDS.tenant1, actorId }, (tx) =>
+      tx<{ activity_entity_type: string; activity_entity_id: string; last_used_by_me: Date | null; uses: number }[]>`
+        SELECT * FROM helm.extension_credential_activity()`);
+
+    const admin = await activity(IDS.admin1);
+    expect(admin.find((r) => r.activity_entity_id === portal.secretId))
+      .toMatchObject({ last_used_by_me: null });
+    expect(Number(admin.find((r) => r.activity_entity_id === portal.secretId)!.uses)).toBeGreaterThan(0);
+    expect(admin.some((r) => r.activity_entity_type === 'personal_credential')).toBe(false);
+
+    const client = await activity(IDS.acmeAdmin);
+    expect(client.every((r) => Number(r.uses) === 0)).toBe(true);
+  });
+
+  it('searches from the first character, and finds a near miss', async () => {
+    expect((await find('a')).length).toBeGreaterThan(0);
+    expect((await find('portl')).map((e) => e.name)).toContain('Acme portal');
+    expect((await find('zzzzqqq'))).toEqual([]);
+  });
+});
+
 describe('renewing and unpairing', () => {
   it('renews: the new token works, the old one is refused', async () => {
     const device = newDevice();
@@ -446,5 +582,55 @@ describe('renewing and unpairing', () => {
     currentUser = null;
     expect(response.status).toBe(404);
     expect((await me(signed(device, paired.token, '/api/extension/me'))).status).toBe(200);
+  });
+});
+
+describe('every paired browser, for an administrator', () => {
+  const ADMIN: SessionUser = { id: IDS.admin1, email: 'admin@northwind.test' };
+  const asUser = async <T>(user: SessionUser, fn: () => Promise<T>) => {
+    currentUser = user;
+    try { return await fn(); } finally { currentUser = null; }
+  };
+  // The file has paired tech1 close to the limit of 10 live browsers by now.
+  beforeAll(async () => {
+    await su((sql) => sql`UPDATE browser_extension_install SET revoked_at = now()
+                           WHERE user_id = ${IDS.tech1}::uuid AND revoked_at IS NULL`);
+  });
+
+  const tenantList = (actorId: string) => withTenant({ tenantId: IDS.tenant1, actorId }, (tx) =>
+    tx<{ id: string; user_email: string; revoked_at: Date | null }[]>`SELECT * FROM helm.tenant_browser_extensions()`);
+
+  it('lists everybody\'s pairings for somebody who manages people, and nobody else', async () => {
+    const paired = await json<ExtensionPairing>(await pairAs(TECH, newDevice(), 'Admin list'));
+    const rows = await tenantList(IDS.admin1);
+    expect(rows.find((r) => r.id === paired.installId)).toMatchObject({ user_email: 'tech1@northwind.test' });
+    await expect(tenantList(IDS.tech1)).rejects.toThrow(/user:write/);
+  });
+
+  it('revokes somebody else\'s browser, which stops it on its next request', async () => {
+    const device = newDevice();
+    const paired = await json<ExtensionPairing>(await pairAs(TECH, device, 'Revoked by admin'));
+    expect((await me(signed(device, paired.token, '/api/extension/me'))).status).toBe(200);
+
+    const refused = await asUser(TECH, () =>
+      adminRevoke(sessionRequest(`/api/extension/admin/installs/${paired.installId}`, 'DELETE'),
+        params('installId', paired.installId)));
+    expect(refused.status).toBe(403);
+
+    const revoked = await asUser(ADMIN, () =>
+      adminRevoke(sessionRequest(`/api/extension/admin/installs/${paired.installId}`, 'DELETE'),
+        params('installId', paired.installId)));
+    expect(revoked.status, await revoked.clone().text()).toBe(200);
+    expect((await me(signed(device, paired.token, '/api/extension/me'))).status).toBe(401);
+
+    const [audit] = await su((sql) => sql<{ actor_id: string; metadata: Record<string, unknown> }[]>`
+      SELECT actor_id, metadata FROM audit_log
+      WHERE action = 'browser_extension.revoked' AND entity_id = ${paired.installId}::uuid`);
+    expect(audit).toMatchObject({ actor_id: IDS.admin1, metadata: { by: 'administrator', userId: IDS.tech1 } });
+
+    const again = await asUser(ADMIN, () =>
+      adminRevoke(sessionRequest(`/api/extension/admin/installs/${paired.installId}`, 'DELETE'),
+        params('installId', paired.installId)));
+    expect(again.status).toBe(404);
   });
 });

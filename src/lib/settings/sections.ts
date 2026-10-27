@@ -12,7 +12,7 @@ export interface AdminSection {
   /** Shorter, for the sub-navigation. */
   short: string;
   detail: string;
-  icon: 'general' | 'people' | 'security' | 'email' | 'integrations' | 'backups' | 'automation' | 'audit' | 'types';
+  icon: 'general' | 'people' | 'security' | 'email' | 'integrations' | 'backups' | 'automation' | 'audit' | 'types' | 'extensions';
 }
 
 export const ADMIN_SECTIONS: readonly AdminSection[] = [
@@ -43,6 +43,10 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
   {
     href: '/settings/automation', title: 'Automation', short: 'Automation', icon: 'automation',
     detail: 'Service accounts for scripts and tools, and the identities background jobs run as.',
+  },
+  {
+    href: '/settings/browser-extensions', title: 'Browser extensions', short: 'Browser extensions', icon: 'extensions',
+    detail: 'Every browser paired with the Helm extension, who it belongs to, when it was last used, and revoking one.',
   },
   {
     href: '/settings/asset-types', title: 'Documentation types', short: 'Documentation types', icon: 'types',

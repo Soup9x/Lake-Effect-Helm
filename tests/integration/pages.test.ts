@@ -588,6 +588,18 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () => (await import('../../src/app/(app)/extension/pair/page')).default(),
   },
   {
+    // Personal → Browser extension: the download, the steps, and the
+    // person's own pairings through helm.my_browser_extensions().
+    name: 'my browser extension',
+    load: async () => (await import('../../src/app/(app)/personal/browser-extension/page')).default(),
+  },
+  {
+    // Administration → Browser extensions: everybody's pairings, through
+    // helm.tenant_browser_extensions(), which refuses without user:write.
+    name: 'administration, browser extensions',
+    load: async () => (await import('../../src/app/(app)/settings/browser-extensions/page')).default(),
+  },
+  {
     // 0700's two landing pages. Worth running here specifically because each
     // collects reads that belonged to other pages — the task list, the inbox,
     // the expiry view, the coverage floor — and a landing page that 500s takes

@@ -425,7 +425,7 @@ gains an offline verification oracle for guessed plaintexts. The column is
 nullable; deployments that do not want that tradeoff leave
 `HELM_BLIND_INDEX_KEY_B64` unset and get no reuse detection.
 
-### 4.6 The browser extension (1120)
+### 4.6 The browser extension (1120, 1121)
 
 A Chrome, Edge and Brave extension that looks up the credentials for the site
 in front of a technician and copies a username, a standard password or a
@@ -454,7 +454,12 @@ extension injected into that one tab and checked against a random state; it is
 never in a URL or the person's hands (`src/lib/extension/pairing-protocol.ts`).
 `helm.pair_browser_extension()` refuses a client-side role, a service account
 and a token-authenticated request, and every `/api/extension/*` route checks
-the tenant-wide scope again on each request.
+the tenant-wide scope again on each request. Since 1121 pairing also takes the person's
+password again, and their authenticator code when they have one, checked
+through the sign-in path (throttle and lockout included) and recorded as a
+step-up immediately before the pairing; `helm.pair_browser_extension()`
+refuses without `helm.step_up_verified()`. A session left open is therefore
+not enough to mint a 30-day credential from it.
 
 **What it may reveal.** `helm.reveal_secret()` has one more rung: an
 extension token may reveal for `copy`, `autofill` and `totp` only, and a
@@ -467,13 +472,19 @@ and not writable by it.
 **Lifetime.** An extension token lives 30 days and the extension renews it in
 its last week (`helm.renew_browser_extension_token()`, which revokes the old
 one in the same statement). Unused for 30 days, it lapses. Unpairing under
-Security & notifications, disabling the person or ending their membership stops
-it on the next request.
+Personal → Browser extension, revocation by somebody holding `user:write` under
+Administration → Browser extensions (`helm.revoke_browser_extension()`, from a
+session, audited with whose browser it was), disabling the person or ending
+their membership stops it on the next request.
 
 **Lookup is not access.** The match and search routes return metadata only and
 write no audit row, as 0210 decided for autofill: merely visiting a page must
 not count as opening a credential. Each copy is a reveal with purpose `copy`,
-audited exactly as the web interface's quick copy is.
+audited exactly as the web interface's quick copy is. When nothing matches, the popup offers the
+person's recent copies and, for MSP staff, the most copied client credentials:
+`helm.extension_credential_activity()` reads those from the audit log, which the
+extension's token cannot, and returns ids and counts only. The route resolves
+them under RLS, so nothing the person could not open is listed.
 
 **A personal API token cannot read the personal vault.** 1030's header said no
 token could, relying on a token's actor never being a person; a personal token

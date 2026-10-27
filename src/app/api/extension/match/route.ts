@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { requireExtensionCaller } from '@/lib/extension/http';
-import { matchSite } from '@/lib/extension/lookup';
+import { matchSite, suggestions } from '@/lib/extension/lookup';
 import { siteOf } from '@/lib/extension/site';
 import type { ExtensionLookup } from '@/lib/extension/types';
 
@@ -27,9 +27,16 @@ export const POST = tenantRoute(async ({ tx, request, identity, session }): Prom
   const site = siteOf(body.url);
   // A browser page, a file, an extension page: nothing to match, which is an
   // answer rather than an error.
-  if (!site) return { host: null, site: null, entries: [] };
+  const entries = site ? await matchSite(tx, site) : [];
 
-  return { host: site.host, site: site.registrableDomain, entries: await matchSite(tx, site) };
+  // Nothing for this site: offer what the person is likely to want instead,
+  // in the same round trip, since the popup would ask next anyway.
+  return {
+    host: site?.host ?? null,
+    site: site?.registrableDomain ?? null,
+    entries,
+    ...(entries.length === 0 ? { suggestions: await suggestions(tx) } : {}),
+  };
 }, { permissions: ['asset:read'] });
 
 export const dynamic = 'force-dynamic';

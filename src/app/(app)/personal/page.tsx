@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import {
-  Bell, CalendarClock, ClipboardList, KeyRound, Lock, UserCog,
+  Bell, CalendarClock, ClipboardList, KeyRound, Lock, Puzzle, UserCog,
 } from 'lucide-react';
 import { countVault } from '@/lib/personal/vault';
 import { withTenant } from '@/lib/db/client';
@@ -190,6 +190,24 @@ export default async function PersonalPage() {
           </CardContent>
         </Card>
 
+        {identity.memberships.find((m) => m.tenantId === identity.tenantId)?.orgScopeAll && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Puzzle className="size-4 text-ink-faint" aria-hidden /> Browser extension
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <AccountLink
+                href="/personal/browser-extension"
+                icon={Puzzle}
+                title="Download, set up, and your paired browsers"
+                detail="Look up and copy credentials for the site you are on, from Chrome, Edge or Brave."
+              />
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -223,7 +241,7 @@ function AccountLink({
   detail,
 }: {
   href: string;
-  icon: typeof KeyRound | typeof Lock;
+  icon: typeof KeyRound | typeof Lock | typeof Puzzle;
   title: string;
   detail: string;
 }) {

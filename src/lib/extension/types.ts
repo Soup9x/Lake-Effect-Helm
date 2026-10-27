@@ -40,6 +40,11 @@ export interface ExtensionLookup {
   /** Its registrable domain, or null for an IP address or a bare name. */
   site: string | null;
   entries: ExtensionEntry[];
+  /**
+   * Only when nothing matched: what the person copied or opened lately, and,
+   * for MSP staff, what is copied most. Never both lists holding one entry.
+   */
+  suggestions?: { recent: ExtensionEntry[]; popular: ExtensionEntry[] } | undefined;
 }
 
 export interface ExtensionMe {

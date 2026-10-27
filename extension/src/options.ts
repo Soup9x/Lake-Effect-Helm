@@ -86,7 +86,7 @@ async function startPairing(): Promise<void> {
 
 async function renderPending(publicKey: string): Promise<void> {
   pairSection.replaceChildren(
-    el('p', {}, 'Helm has opened in a new tab. Sign in if it asks, then check that it shows this fingerprint and press Pair:'),
+    el('p', {}, 'Helm has opened in a new tab. Sign in if it asks, check that it shows this fingerprint, then enter your Helm password and press Pair:'),
     el('p', { class: 'fingerprint' }, await fingerprint(publicKey)),
     el('p', { class: 'muted' }, 'If Helm asked you to sign in first and then says the link did not come from the extension, press Pair again below.'),
     button('Pair again', () => void startPairing()),

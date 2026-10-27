@@ -70,6 +70,13 @@ export interface LoginRequest {
    * code. Asked for only when the account has one, or policy requires one.
    */
   code?: string | undefined;
+  /**
+   * For a re-authentication (`establishSession: false`) that should ask for
+   * the authenticator code too, when the account has one: pairing the browser
+   * extension, which mints a credential that outlives the session. An account
+   * without one is not made to set it up here; that belongs to sign-in.
+   */
+  secondFactor?: 'if_enrolled' | undefined;
 }
 
 export type LoginResult =
@@ -284,7 +291,8 @@ export async function attemptLocalLogin(request: LoginRequest): Promise<LoginRes
  * ONLY FOR A SIGN-IN. A re-authentication — step-up, changing the password —
  * is made from a session that already passed this step, and asks only for the
  * password; requiring a code there too would be a second factor for the same
- * session twice.
+ * session twice. The exception is a caller that asks for it
+ * (`secondFactor: 'if_enrolled'`), and then only the enrolled branch applies.
  *
  * Enrolled: a code is required, and a wrong one is a failed attempt that
  * counts and locks. Not enrolled but required by policy: the first submission
@@ -298,7 +306,9 @@ async function secondStep(
   challenge: ChallengeRow,
   request: LoginRequest,
 ): Promise<{ stop?: LoginResult; recoveryCodes?: string[] }> {
-  if (request.establishSession === false) return {};
+  if (request.establishSession === false) {
+    if (request.secondFactor !== 'if_enrolled' || !challenge.totp_enrolled) return {};
+  }
   const code = request.code?.trim();
 
   if (challenge.totp_enrolled) {

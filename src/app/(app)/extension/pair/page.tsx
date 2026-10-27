@@ -22,7 +22,7 @@ export default async function ExtensionPairPage() {
         title="Pair the browser extension"
         trail={[
           { label: 'Personal', href: '/personal' },
-          { label: 'Security & notifications', href: '/account' },
+          { label: 'Browser extension', href: '/personal/browser-extension' },
         ]}
         description="Let the Helm extension in this browser look up and copy credentials as you."
       />

@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ComponentType } from 'react';
 import {
-  Activity, Bot, Boxes, Building, Cloud, HardDriveDownload, Mail, ShieldCheck, Users,
+  Activity, Bot, Boxes, Building, Cloud, HardDriveDownload, Mail, Puzzle, ShieldCheck, Users,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -34,6 +34,7 @@ const ICONS: Record<AdminSection['icon'], ComponentType<{ className?: string; 'a
   automation: Bot,
   audit: Activity,
   types: Boxes,
+  extensions: Puzzle,
 };
 
 export default async function AdministrationPage() {

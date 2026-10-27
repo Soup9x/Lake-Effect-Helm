@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { Bell, KeyRound, MonitorSmartphone, Puzzle, ShieldCheck } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
@@ -12,8 +13,6 @@ import { NotificationPreferencesCard } from '@/components/notification-preferenc
 import { SessionList, type SessionRow } from '@/components/session-list';
 import { ApiTokensCard } from '@/components/api-tokens-card';
 import { listMyTokens } from '@/lib/auth/api-tokens';
-import { PairedBrowsersCard } from '@/components/paired-browsers-card';
-import { listMyBrowsers } from '@/lib/extension/pairing';
 import { formatDateTime } from '@/lib/ui/format';
 
 interface CredentialRow {
@@ -56,9 +55,9 @@ export default async function AccountPage() {
   const currentRef = token ? sessionRef(token) : null;
 
   const {
-    credential, sessions, notifications, tokens, browsers, permissions,
+    credential, sessions, notifications, tokens, permissions,
   } = await withTenant(actorOf(identity), async (tx, session) => {
-    const [credentialRows, sessionRows, notificationRow, tokenRows, browserRows] = await Promise.all([
+    const [credentialRows, sessionRows, notificationRow, tokenRows] = await Promise.all([
       // The view carries no hash — helm_app holds column grants that exclude
       // it. Its only job is to answer "do you have a local password, and did
       // somebody else choose it".
@@ -74,15 +73,11 @@ export default async function AccountPage() {
       // own policy is tenant-wide-only, and these rows are mine, not the
       // tenant's.
       listMyTokens(tx),
-      // Browsers paired with the extension, through its own SECURITY DEFINER
-      // reader for the same reason (1120).
-      listMyBrowsers(tx),
     ]);
     return {
       credential: credentialRows[0] ?? null,
       sessions: sessionRows,
       tokens: tokenRows,
-      browsers: browserRows,
       // What this session holds, as the DATABASE resolved it: the scope menu a
       // token may be narrowed to. Not the role's list — a token-authenticated
       // session is already narrowed, and a token must not widen past it.
@@ -160,8 +155,12 @@ export default async function AccountPage() {
                 <Puzzle className="size-4 text-ink-faint" aria-hidden /> Browser extension
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <PairedBrowsersCard browsers={browsers} />
+            <CardContent className="text-sm text-ink-muted">
+              Downloading the extension, setting it up, and the browsers you have paired are under{' '}
+              <Link href="/personal/browser-extension" className="text-brand hover:underline">
+                Personal → Browser extension
+              </Link>
+              .
             </CardContent>
           </Card>
         )}

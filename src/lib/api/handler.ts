@@ -179,7 +179,7 @@ export function serviceRoute<T>(
 }
 
 /** Everything withTenant() can record about who is asking and from where. */
-function actorFor(identity: RequestIdentity, requestId: string): SessionContextRequest {
+export function actorFor(identity: RequestIdentity, requestId: string): SessionContextRequest {
   return {
     tenantId: identity.tenantId,
     actorId: identity.actorId,
