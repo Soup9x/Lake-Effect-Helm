@@ -198,6 +198,8 @@ export type RevealDenialReason =
   | 'seed_not_directly_revealable'
   /** The 'totp' purpose attached to something that is not a seed. */
   | 'not_a_totp_seed'
+  /** The browser extension asking for anything but a standard password, or for a purpose it has no use for (1120). */
+  | 'not_permitted_for_extension'
   | 'no_such_version'
   | 'key_destroyed';
 

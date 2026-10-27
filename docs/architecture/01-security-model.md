@@ -425,6 +425,61 @@ gains an offline verification oracle for guessed plaintexts. The column is
 nullable; deployments that do not want that tradeoff leave
 `HELM_BLIND_INDEX_KEY_B64` unset and get no reuse detection.
 
+### 4.6 The browser extension (1120)
+
+A Chrome, Edge and Brave extension that looks up the credentials for the site
+in front of a technician and copies a username, a standard password or a
+one-time code. It does not fill forms. The code is in `extension/`; the server
+side is `src/lib/extension/` and `/api/extension/*`.
+
+**What the extension holds.** A P-256 device key it made itself, the private
+half a non-extractable WebCrypto key in IndexedDB, and a `helm_be_` token. The
+token is half a credential: `resolveIdentity()` refuses an extension token on
+any request not signed by the device key over the method, path and query, a
+timestamp within five minutes, and a SHA-256 of the body
+(`src/lib/extension/signature.ts`). `helm.authenticate_api_token()` returns the
+key of the token's live pairing for this, and nothing else changed at the
+pre-context boundary; the guard still counts three functions. A token lifted
+from the extension's storage, a log or a proxy is therefore not usable on its
+own. What this does not defend: somebody with the browser profile on disk has
+both halves, because non-extractable means "not exportable by script", not
+"not on disk".
+
+**Who may pair, and how.** A person, from a browser session, holding a
+tenant-wide (MSP-side) role, in the tab the extension opens. The page shows the
+key's fingerprint, which the extension's settings also show, and pairing is
+the person pressing Pair. The token goes from that response to the extension
+by `window.postMessage` to Helm's own origin, received by a listener the
+extension injected into that one tab and checked against a random state; it is
+never in a URL or the person's hands (`src/lib/extension/pairing-protocol.ts`).
+`helm.pair_browser_extension()` refuses a client-side role, a service account
+and a token-authenticated request, and every `/api/extension/*` route checks
+the tenant-wide scope again on each request.
+
+**What it may reveal.** `helm.reveal_secret()` has one more rung: an
+extension token may reveal for `copy`, `autofill` and `totp` only, and a
+password only when its secret is `standard`. Elevated and critical credentials
+are listed with "Open in Helm" and refused if asked for anyway
+(`not_permitted_for_extension`). Step-up was already unreachable to any token.
+The personal vault is readable by the owner's extension, for `copy` and codes,
+and not writable by it.
+
+**Lifetime.** An extension token lives 30 days and the extension renews it in
+its last week (`helm.renew_browser_extension_token()`, which revokes the old
+one in the same statement). Unused for 30 days, it lapses. Unpairing under
+Security & notifications, disabling the person or ending their membership stops
+it on the next request.
+
+**Lookup is not access.** The match and search routes return metadata only and
+write no audit row, as 0210 decided for autofill: merely visiting a page must
+not count as opening a credential. Each copy is a reveal with purpose `copy`,
+audited exactly as the web interface's quick copy is.
+
+**A personal API token cannot read the personal vault.** 1030's header said no
+token could, relying on a token's actor never being a person; a personal token
+(0750) is one. The owner policy now requires a request with no token, and the
+extension's read-only policy admits only its own token type.
+
 ---
 
 ## 5. Audit log
@@ -580,6 +635,13 @@ deliberately **no regex or wildcard type**: hand-written `*.example.com` pattern
 reliably end up matching `example.com.attacker.tld`. The extension sends the
 browser-reported origin, never a page-supplied string, and the server resolves
 candidates — the extension never holds a searchable copy of the vault.
+
+The lookup that exists (§4.6) matches a credential's URL field by its host
+(`helm.url_host()`) and any `credential_domain` rule, exactly or under the same
+registrable domain, which the server computes from the Public Suffix List with
+its private section. The tab's URL is parsed with `new URL()`, so a Unicode
+lookalike arrives as punycode and never equals an ASCII host; an IP address or
+intranet name only ever matches exactly.
 
 ### 7.6 Session tokens are stored as issued
 

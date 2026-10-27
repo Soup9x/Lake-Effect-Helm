@@ -616,8 +616,8 @@ describe('the denial causes the SQL can return are all mapped', () => {
       'step_up_required', 'reason_required', 'export_not_permitted',
       'not_in_a_live_export', 'not_an_integration_credential',
       'purpose_not_permitted_for_actor', 'autofill_not_permitted_for_sensitivity',
-      'seed_not_directly_revealable', 'not_a_totp_seed', 'no_such_version',
-      'key_destroyed',
+      'seed_not_directly_revealable', 'not_a_totp_seed', 'not_permitted_for_extension',
+      'no_such_version', 'key_destroyed',
     ] satisfies RevealDenialReason[];
 
     const unmapped = (await causesInFunction()).filter(

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Helm extension settings</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="options">
+    <main>
+      <h1><img src="icons/icon-48.png" alt="" width="28" height="28" /> Lake Effect Helm</h1>
+
+      <section>
+        <h2>Helm server</h2>
+        <form id="server-form">
+          <input id="server" type="text" placeholder="https://helm.example.com" autocomplete="off" spellcheck="false" />
+          <button type="submit" class="primary">Save</button>
+        </form>
+        <p id="server-note" class="muted">The address you sign in to Helm at. The browser asks you to let the extension reach it.</p>
+      </section>
+
+      <section>
+        <h2>This browser</h2>
+        <div id="pair"></div>
+      </section>
+
+      <section>
+        <h2>Clipboard</h2>
+        <label for="clipboard">Clear a copied password or code after</label>
+        <select id="clipboard">
+          <option value="30">30 seconds</option>
+          <option value="60">1 minute</option>
+          <option value="120">2 minutes</option>
+          <option value="0">Never</option>
+        </select>
+      </section>
+
+      <section class="muted small">
+        <p>
+          The extension copies standard passwords and one-time codes. Elevated and critical credentials are
+          copied from Helm itself. Every copy is recorded in Helm's audit log. Removing this browser under
+          Security &amp; notifications in Helm stops it immediately.
+        </p>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
