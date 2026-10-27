@@ -14,6 +14,7 @@
  * The token is stored, and that is acceptable only because it is half a
  * credential: Helm refuses it on any request not signed by the device key.
  */
+import type { Theme } from './theme';
 
 export interface Pairing {
   installId: string;
@@ -26,9 +27,10 @@ export interface Pairing {
 export interface Settings {
   /** Seconds before a copied password is cleared from the clipboard; 0 is never. */
   clearClipboardSeconds: number;
+  theme: Theme;
 }
 
-export const DEFAULT_SETTINGS: Settings = { clearClipboardSeconds: 30 };
+export const DEFAULT_SETTINGS: Settings = { clearClipboardSeconds: 30, theme: 'system' };
 
 export interface PendingPairing {
   state: string;
@@ -71,8 +73,9 @@ export async function getSettings(): Promise<Settings> {
   return { ...DEFAULT_SETTINGS, ...(settings ?? {}) };
 }
 
-export async function setSettings(settings: Settings): Promise<void> {
-  await chrome.storage.local.set({ settings });
+/** Changes some settings and keeps the rest. */
+export async function setSettings(changes: Partial<Settings>): Promise<void> {
+  await chrome.storage.local.set({ settings: { ...(await getSettings()), ...changes } });
 }
 
 export async function getPending(): Promise<PendingPairing | null> {

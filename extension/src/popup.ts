@@ -22,7 +22,11 @@
  */
 import type { ExtensionEntry, ExtensionLookup } from '../../src/lib/extension/types';
 import { call, renewIfDue, type Result } from './api';
-import { getPairing, getServer } from './store';
+import { getPairing, getServer, getSettings } from './store';
+import { applyRememberedTheme, applyTheme } from './theme';
+
+applyRememberedTheme();
+void getSettings().then((settings) => applyTheme(settings.theme));
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const list = $('list');

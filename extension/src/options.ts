@@ -11,6 +11,7 @@ import type { ExtensionMe } from '../../src/lib/extension/types';
 import { call } from './api';
 import { browserName, platformName } from './browser';
 import { normaliseServer } from './server';
+import { applyRememberedTheme, applyTheme, type Theme } from './theme';
 import {
   clearPairing,
   fingerprint,
@@ -25,6 +26,8 @@ import {
   setSettings,
 } from './store';
 
+applyRememberedTheme();
+
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const serverInput = $<HTMLInputElement>('server');
@@ -32,6 +35,7 @@ const serverForm = $<HTMLFormElement>('server-form');
 const serverNote = $('server-note');
 const pairSection = $('pair');
 const clipboardSelect = $<HTMLSelectElement>('clipboard');
+const themeSelect = $<HTMLSelectElement>('theme');
 
 serverForm.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -63,6 +67,12 @@ serverForm.addEventListener('submit', (event) => {
 
 clipboardSelect.addEventListener('change', () => {
   void setSettings({ clearClipboardSeconds: Number(clipboardSelect.value) });
+});
+
+themeSelect.addEventListener('change', () => {
+  const theme = themeSelect.value as Theme;
+  applyTheme(theme);
+  void setSettings({ theme });
 });
 
 async function startPairing(): Promise<void> {
@@ -97,6 +107,8 @@ async function render(): Promise<void> {
   const [server, pairing, settings] = await Promise.all([getServer(), getPairing(), getSettings()]);
   serverInput.value = server ?? '';
   clipboardSelect.value = String(settings.clearClipboardSeconds);
+  themeSelect.value = settings.theme;
+  applyTheme(settings.theme);
 
   if (!server) {
     pairSection.replaceChildren(el('p', { class: 'muted' }, 'Save your Helm address first.'));
