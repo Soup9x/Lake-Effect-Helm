@@ -518,6 +518,19 @@ token could, relying on a token's actor never being a person; a personal token
 (0750) is one. The owner policy now requires a request with no token, and the
 extension's read-only policy admits only its own token type.
 
+### 4.7 Cross-site requests
+
+The session cookie is `SameSite=Lax`, which keeps it off a request from another
+*site* but not from another origin on the same site: with Helm at
+helm.example.com, a page on any other *.example.com gets the cookie attached to
+its POST. Every route wrapper (`tenantRoute`, `serviceRoute`, `publicRoute`)
+therefore refuses a non-read request whose browser-set `Sec-Fetch-Site` is
+`same-site` or `cross-site` (`src/lib/api/cross-site.ts`). A request carrying a
+bearer token is exempt, because no page can attach one to another origin
+without a preflight Helm never answers; so is a request with no
+`Sec-Fetch-Site` at all (a server, or a browser older than Safari 16.4), which
+keeps SameSite as its only defence.
+
 ---
 
 ## 5. Audit log

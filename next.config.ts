@@ -17,6 +17,10 @@ const config: NextConfig = {
   // runs in production.
   output: 'standalone',
 
+  // No `X-Powered-By: Next.js`. It tells a scanner on the internet which
+  // framework's advisories to try, and tells a technician nothing.
+  poweredByHeader: false,
+
   async headers() {
     return [
       {
