@@ -640,6 +640,33 @@ configure() {
 # -----------------------------------------------------------------------------
 # 4. Start
 # -----------------------------------------------------------------------------
+# `up` recreates only the containers whose configuration changed, so caddy and
+# postgres can run for weeks across upgrades. If Docker, containerd or runc is
+# updated underneath them in that time, the old containers keep serving but
+# Docker can no longer exec into them: every healthcheck fails before it runs
+# ("OCI runtime exec failed ... procReady not received") and `up --wait`
+# reports a working service as unhealthy. Recreating such a container fixes
+# it and loses nothing — its state is in named volumes. A healthcheck that
+# ran and failed is a real failure and is left for the caller to report.
+recover_stale_containers() {
+  local stale="" svc id log
+  for svc in $(docker compose ps --services --status running 2>/dev/null); do
+    id=$(docker compose ps -q "$svc" 2>/dev/null) || continue
+    [ -n "$id" ] || continue
+    log=$(docker inspect --format '{{if .State.Health}}{{range .State.Health.Log}}{{.Output}}{{"\n"}}{{end}}{{end}}' "$id" 2>/dev/null) || continue
+    case "$log" in
+      *"OCI runtime exec failed"*|*"procReady not received"*) stale="$stale $svc" ;;
+    esac
+  done
+  [ -n "$stale" ] || return 1
+
+  warn "Docker cannot run healthchecks inside:$stale"
+  note "Those containers predate a Docker runtime update on this host. Recreating"
+  note "them; their data is in named volumes and is kept."
+  # shellcheck disable=SC2086  # $stale is a list of service names
+  docker compose up -d --force-recreate --wait --wait-timeout 300 $stale
+}
+
 start_stack() {
   step "4/5  Build and start"
 
@@ -656,7 +683,7 @@ start_stack() {
   ok "images built"
 
   info "starting the stack and waiting for every service to report healthy..."
-  if ! docker compose up -d --wait --wait-timeout 300; then
+  if ! docker compose up -d --wait --wait-timeout 300 && ! recover_stale_containers; then
     printf '\n'
     docker compose ps || true
     printf '\n'
