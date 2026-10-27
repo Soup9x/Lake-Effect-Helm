@@ -1151,6 +1151,27 @@ docker compose up -d web worker
 
 ### 9.2 If the `caddy` healthcheck is wrong about you
 
+First look at what the check actually said:
+
+```bash
+docker inspect --format '{{json .State.Health.Log}}' lake-effect-helm-caddy-1
+```
+
+If every entry reads `OCI runtime exec failed ... procReady not received`, the
+check never ran. Docker, containerd or runc was updated while the container
+kept running, and Docker can no longer start processes inside it. `up` leaves
+containers whose configuration has not changed alone, so a long-lived `caddy`
+or `postgres` is the usual victim. `setup.sh` recognises this and recreates the
+container itself; by hand it is:
+
+```bash
+docker compose up -d --force-recreate --wait caddy   # or postgres
+```
+
+Certificates and data live in named volumes and survive the recreate.
+
+If the check ran and failed instead, read on.
+
 The check runs `wget --no-check-certificate` inside the Caddy container. Alpine's
 BusyBox build supports that flag; if yours does not, the container reports
 unhealthy while the site works perfectly — and because `caddy` is what `web`'s
