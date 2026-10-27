@@ -8,9 +8,12 @@
  *
  * A 401 means the pairing is gone — removed in Helm, lapsed, or the person
  * offboarded — so the local pairing is forgotten and the popup says so.
+ *
+ * Locked (lock.ts), there is no token to send, and nothing is sent.
  */
 import { canonicalRequest } from '../../src/lib/extension/signature';
-import { clearPairing, getKey, getPairing, getServer, setPairing, sha256Hex, toBase64Url } from './store';
+import { currentToken, getLock, replaceToken } from './lock';
+import { clearPairing, getKey, getPairing, getServer, sha256Hex, toBase64Url } from './store';
 
 export type Result<T> =
   | { ok: true; value: T }
@@ -25,6 +28,10 @@ export async function call<T>(
   const [server, pairing, key] = await Promise.all([getServer(), getPairing(), getKey('device')]);
   if (!server || !pairing || !key) {
     return { ok: false, status: 401, code: 'not_paired', message: 'This browser is not paired with Helm.' };
+  }
+  const token = await currentToken();
+  if (!token) {
+    return { ok: false, status: 423, code: 'locked', message: 'Helm is locked. Unlock it with your PIN or password.' };
   }
 
   const method = options.method ?? (options.json === undefined ? 'GET' : 'POST');
@@ -48,7 +55,7 @@ export async function call<T>(
       credentials: 'omit',
       cache: 'no-store',
       headers: {
-        authorization: `Bearer ${pairing.token}`,
+        authorization: `Bearer ${token}`,
         'x-helm-device-timestamp': timestamp,
         'x-helm-device-signature': toBase64Url(signature),
         ...(body ? { 'content-type': 'application/json' } : {}),
@@ -81,12 +88,13 @@ export async function call<T>(
   };
 }
 
-/** Renew the token once it is in its last week. Quiet on failure: the next call says why. */
+/** Renew the token once it is in its last week. Quiet on failure: the next call says why. Not while locked. */
 export async function renewIfDue(): Promise<void> {
   const pairing = await getPairing();
   if (!pairing) return;
+  if ((await getLock()) && !(await currentToken())) return;
   const left = new Date(pairing.expiresAt).getTime() - Date.now();
   if (left > 7 * 24 * 60 * 60 * 1000) return;
   const result = await call<{ token: string; expiresAt: string }>('/api/extension/renew', { method: 'POST', json: {} });
-  if (result.ok) await setPairing({ ...pairing, token: result.value.token, expiresAt: result.value.expiresAt });
+  if (result.ok) await replaceToken(result.value.token, result.value.expiresAt);
 }

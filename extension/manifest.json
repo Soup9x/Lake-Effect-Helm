@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Lake Effect Helm",
   "short_name": "Helm",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Look up, fill and copy credentials from your Lake Effect Helm server for the site you are on.",
   "minimum_chrome_version": "116",
   "icons": {

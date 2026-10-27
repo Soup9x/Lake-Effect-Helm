@@ -1,6 +1,6 @@
 /**
- * The service worker: finishing a pairing, renewing the token, and clearing
- * the clipboard after a copy.
+ * The service worker: finishing a pairing, renewing the token, clearing the
+ * clipboard after a copy, and locking after the idle timeout (lock.ts).
  *
  * PAIRING. Settings opens Helm's pairing page in a tab and records which tab
  * and which random state (store.ts, PendingPairing). Each time that tab
@@ -12,10 +12,12 @@
  */
 import { PAIR_MESSAGE_TYPE, type PairMessage } from '../../src/lib/extension/pairing-protocol';
 import { renewIfDue } from './api';
+import { clearLock, lockIfIdle } from './lock';
 import { getPending, getSettings, promotePendingKey, setPairing, setPending } from './store';
 
 const CLEAR_ALARM = 'helm-clear-clipboard';
 const RENEW_ALARM = 'helm-renew';
+const IDLE_ALARM = 'helm-idle-lock';
 
 /** Injected into the pairing tab. Self-contained: it is serialised, not imported. */
 function pairingListener(expectedState: string, messageType: string): void {
@@ -67,6 +69,9 @@ async function finishPairing(message: PairMessage, sender: chrome.runtime.Messag
   if (message.state !== pending.state || typeof message.token !== 'string') return;
 
   if (!(await promotePendingKey())) return;
+  // A lock sealed the old pairing's token; the new one starts unlocked, and
+  // settings says the lock is off.
+  await clearLock();
   await setPairing({
     installId: message.installId,
     token: message.token,
@@ -112,6 +117,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     void clearClipboard().catch((error: unknown) => console.warn('helm: could not clear the clipboard', error));
   } else if (alarm.name === RENEW_ALARM) {
     void renewIfDue();
+  } else if (alarm.name === IDLE_ALARM) {
+    void lockIfIdle();
   }
 });
 
@@ -121,9 +128,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.alarms.create(RENEW_ALARM, { periodInMinutes: 24 * 60 });
+  void chrome.alarms.create(IDLE_ALARM, { periodInMinutes: 1 });
 });
 
 chrome.runtime.onStartup.addListener(() => {
   void chrome.alarms.create(RENEW_ALARM, { periodInMinutes: 24 * 60 });
+  void chrome.alarms.create(IDLE_ALARM, { periodInMinutes: 1 });
   void renewIfDue();
 });
