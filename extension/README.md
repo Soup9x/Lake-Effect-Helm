@@ -25,6 +25,18 @@ cannot drift: `src/lib/extension/signature.ts` (what a request signs),
 `types.ts` (what the routes return) and `pairing-protocol.ts` (how pairing
 talks).
 
+## Download
+
+Every version is published as a GitHub release by
+`.github/workflows/extension-release.yml`. The newest one is always at:
+
+```
+https://github.com/Soup9x/Lake-Effect-Helm/releases/latest/download/helm-extension.zip
+```
+
+Unzip it and load the folder unpacked (below). A release is made when a push
+to `main` raises `version` in `manifest.json`.
+
 ## Build
 
 ```bash
