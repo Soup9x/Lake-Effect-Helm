@@ -125,13 +125,17 @@ export function ExtensionPair({
         ...(askCode && code.trim() ? { code: code.trim() } : {}),
       },
     });
-    setPassword('');
     setCode('');
     if (!result.ok) {
+      // Asked for the code, or the code was wrong: the password was right, so
+      // it stays, and only the code is asked for. Otherwise it was the
+      // password, which goes.
       if (result.details?.secondFactor === 'totp') setAskCode(true);
+      else setPassword('');
       setState({ status: 'error', params, fingerprint, message: result.message });
       return;
     }
+    setPassword('');
     const message: PairMessage = {
       type: PAIR_MESSAGE_TYPE,
       state: params.state,
@@ -264,6 +268,7 @@ export function ExtensionPair({
                 onChange={(e) => setCode(e.target.value)}
                 disabled={busy}
                 required
+                autoFocus
               />
               <FieldHint>From your authenticator app, or one of your recovery codes.</FieldHint>
             </div>
