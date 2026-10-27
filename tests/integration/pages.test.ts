@@ -581,6 +581,13 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () => (await import('../../src/app/(app)/profile/page')).default(),
   },
   {
+    // The tab the browser extension opens to pair. The key itself arrives in
+    // the URL fragment, so the server half is only the frame and the
+    // tenant-wide check.
+    name: 'pairing the browser extension',
+    load: async () => (await import('../../src/app/(app)/extension/pair/page')).default(),
+  },
+  {
     // 0700's two landing pages. Worth running here specifically because each
     // collects reads that belonged to other pages — the task list, the inbox,
     // the expiry view, the coverage floor — and a landing page that 500s takes

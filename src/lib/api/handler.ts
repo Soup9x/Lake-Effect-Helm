@@ -465,6 +465,17 @@ function mapSecretDenial(error: SecretAccessDeniedError): ApiError {
         'this credential is too sensitive to be auto-filled; open it in Helm instead',
         details,
       );
+    case 'not_permitted_for_extension':
+      /*
+       * The browser extension copies standard passwords and one-time codes and
+       * nothing else (1120). Said so the popup can send the person to Helm,
+       * which is where an elevated or critical credential is copied from.
+       */
+      return new ApiError(
+        'forbidden',
+        'this credential cannot be copied from the browser extension; open it in Helm instead',
+        details,
+      );
     case 'no_such_version':
       return ApiError.notFound('no such version of this credential');
     case 'key_destroyed':

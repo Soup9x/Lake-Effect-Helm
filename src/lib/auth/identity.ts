@@ -17,7 +17,8 @@
 import type { NextRequest } from 'next/server';
 import { withoutTenantContext } from '../db/client';
 import { ApiError } from '../api/errors';
-import { bearerFrom, verifyToken, type TokenRejection } from './tokens';
+import { bearerFrom, verifyToken, type TokenKind, type TokenRejection } from './tokens';
+import { verifyDeviceSignature } from './device-signature';
 import { getSessionUser } from './session';
 import { isIP } from 'node:net';
 import { envInt } from '../env';
@@ -28,6 +29,8 @@ export interface RequestIdentity {
   actorType: 'user' | 'service_account';
   method: 'session' | 'api_token';
   apiTokenId?: string;
+  /** Which kind of token, when authenticated by one. */
+  tokenType?: TokenKind;
   /** Token scopes, when authenticated by token. Narrows the role's permissions. */
   scopes?: string[];
   ip?: string;
@@ -43,13 +46,14 @@ export async function resolveIdentity(request: NextRequest): Promise<RequestIden
 
   const bearer = bearerFrom(request.headers);
   if (bearer) {
-    return resolveTokenIdentity(bearer, ip, userAgent);
+    return resolveTokenIdentity(request, bearer, ip, userAgent);
   }
 
   return resolveSessionIdentity(request, ip, userAgent);
 }
 
 async function resolveTokenIdentity(
+  request: NextRequest,
   bearer: string,
   ip: string | undefined,
   userAgent: string | undefined,
@@ -66,6 +70,22 @@ async function resolveTokenIdentity(
   }
 
   const { identity } = result;
+
+  // An extension token proves nothing alone: the request must be signed by the
+  // device key of the browser it was paired to (1120). Checked before the use
+  // is recorded, so a stolen token being tried shows as rejections in the log
+  // and not as activity on the person's paired browser.
+  if (identity.tokenType === 'browser_extension') {
+    const signed = await verifyDeviceSignature(
+      request,
+      request.nextUrl.pathname + request.nextUrl.search,
+      identity.devicePublicKey ?? Buffer.alloc(0),
+    );
+    if (!signed.ok) {
+      logRejection(`device_signature_${signed.reason}`);
+      throw ApiError.unauthenticated('invalid API token');
+    }
+  }
 
   // Accounting is best-effort: a failure to record usage must not fail an
   // otherwise valid request.
@@ -88,6 +108,7 @@ async function resolveTokenIdentity(
     actorType: identity.serviceAccountId ? 'service_account' : 'user',
     method: 'api_token',
     apiTokenId: identity.tokenId,
+    tokenType: identity.tokenType,
     scopes: identity.scopes,
     ...(ip ? { ip } : {}),
     ...(userAgent ? { userAgent } : {}),
@@ -195,7 +216,7 @@ export function clientIp(request: { headers: Headers }): string | undefined {
   return real && isIP(real) ? real : undefined;
 }
 
-function logRejection(reason: TokenRejection): void {
+function logRejection(reason: TokenRejection | `device_signature_${string}`): void {
   // Server-side only. Useful for spotting a leaked token being probed; never
   // returned to the caller.
   console.warn(`api token rejected: ${reason}`);

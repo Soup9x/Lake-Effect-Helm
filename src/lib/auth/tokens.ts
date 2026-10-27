@@ -1,6 +1,6 @@
 /**
- * API tokens: personal ones a person issues from the account page (0750), and
- * service-account ones the schema allows but nothing issues yet.
+ * API tokens: personal ones a person issues from the account page (0750),
+ * service-account ones (0760), and the browser extension's (1120).
  *
  * Format: `helm_<kind>_<prefix>.<secret>`
  *
@@ -98,6 +98,11 @@ export interface TokenIdentity {
   serviceAccountId: string | null;
   userId: string | null;
   scopes: string[];
+  /**
+   * For an extension token, the public key of its live pairing: every request
+   * it authenticates must be signed by it (1120). Absent for any other token.
+   */
+  devicePublicKey?: Buffer;
 }
 
 export type TokenRejection =
@@ -107,7 +112,9 @@ export type TokenRejection =
   | 'expired'
   | 'ip_not_allowed'
   | 'subject_disabled'
-  | 'tenant_inactive';
+  | 'tenant_inactive'
+  /** An extension token whose pairing was revoked, or never approved. */
+  | 'device_unpaired';
 
 export type TokenVerification =
   | { ok: true; identity: TokenIdentity }
@@ -126,6 +133,7 @@ interface RawTokenRow {
   revoked_at: Date | null;
   subject_disabled: boolean;
   tenant_active: boolean;
+  device_public_key: Buffer | null;
 }
 
 /**
@@ -177,6 +185,12 @@ export async function verifyToken(
   if (row.subject_disabled) return { ok: false, reason: 'subject_disabled' };
   if (!row.tenant_active) return { ok: false, reason: 'tenant_inactive' };
 
+  // An extension token is only ever half of the credential; without a live
+  // pairing there is no key to check the other half against.
+  if (row.token_type === 'browser_extension' && !row.device_public_key) {
+    return { ok: false, reason: 'device_unpaired' };
+  }
+
   if (row.ip_allowlist && row.ip_allowlist.length > 0) {
     if (!requestIp || !ipAllowed(requestIp, row.ip_allowlist)) {
       return { ok: false, reason: 'ip_not_allowed' };
@@ -192,6 +206,9 @@ export async function verifyToken(
       serviceAccountId: row.service_account_id,
       userId: row.user_id,
       scopes: row.scopes,
+      ...(row.token_type === 'browser_extension' && row.device_public_key
+        ? { devicePublicKey: row.device_public_key }
+        : {}),
     },
   };
 }

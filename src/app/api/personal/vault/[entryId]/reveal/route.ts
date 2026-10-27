@@ -11,7 +11,7 @@ import { requirePerson } from '@/lib/personal/http';
 const schema = z.object({ purpose: z.enum(['view', 'copy']).default('view') });
 
 export const POST = tenantRoute(async ({ tx, request, identity, params }) => {
-  requirePerson(identity);
+  requirePerson(identity, { allowExtension: true });
   const id = z.guid().safeParse(params.entryId);
   if (!id.success) throw ApiError.invalid('not an entry id');
   const body = await readJson(request, (raw) => {
@@ -19,6 +19,10 @@ export const POST = tenantRoute(async ({ tx, request, identity, params }) => {
     if (!result.success) throw ApiError.invalid('invalid reveal request');
     return result.data;
   });
+  // The extension copies; it has no screen to show a password on (1120).
+  if (identity.tokenType === 'browser_extension' && body.purpose !== 'copy') {
+    throw ApiError.forbidden('the browser extension can only copy a password');
+  }
   return revealPassword(tx, identity.tenantId, id.data, body.purpose);
 });
 

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Helm</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="popup">
+    <header>
+      <img src="icons/icon-32.png" alt="" width="20" height="20" />
+      <h1 id="heading">Helm</h1>
+      <button id="settings" type="button" class="action" title="Settings" aria-label="Settings">⚙</button>
+    </header>
+    <input id="search" type="search" placeholder="Search Helm" autocomplete="off" spellcheck="false" />
+    <p id="status" class="status muted" role="status"></p>
+    <div id="list"></div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

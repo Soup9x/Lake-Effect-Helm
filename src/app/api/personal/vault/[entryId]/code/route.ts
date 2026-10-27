@@ -6,7 +6,7 @@ import { requirePerson } from '@/lib/personal/http';
 
 /** The current one-time code of one of the signed-in person's own entries. The seed never leaves. */
 export const POST = tenantRoute(async ({ tx, identity, params }) => {
-  requirePerson(identity);
+  requirePerson(identity, { allowExtension: true });
   const id = z.guid().safeParse(params.entryId);
   if (!id.success) throw ApiError.invalid('not an entry id');
   return currentCode(tx, identity.tenantId, id.data);
