@@ -24,6 +24,7 @@ import { ApiError, toErrorBody, type ErrorCode } from './errors';
 import { resolveIdentity, type RequestIdentity } from '../auth/identity';
 import { installSessionResolver } from '../auth/bootstrap';
 import { readTextBounded } from './body';
+import { assertNotCrossSite } from './cross-site';
 import { helmMessage, mapDatabaseError, postgresError } from './pg-errors';
 
 export interface RouteContext {
@@ -81,6 +82,7 @@ export function tenantRoute<T>(
       // loaded — so a request that reached any other route first found no
       // resolver and failed with a bare 500. Idempotent and memoised, so this
       // costs one boolean check per request after the first.
+      assertNotCrossSite(request);
       await installSessionResolver();
 
       const identity = await resolveIdentity(request);
@@ -156,6 +158,7 @@ export function serviceRoute<T>(
     const requestId = request.headers.get('x-request-id') ?? randomUUID();
 
     try {
+      assertNotCrossSite(request);
       await installSessionResolver();
       const identity = await resolveIdentity(request);
       const params = args?.params ? await args.params : {};
@@ -205,6 +208,9 @@ export function publicRoute<T>(
   return async (request: NextRequest) => {
     const requestId = request.headers.get('x-request-id') ?? randomUUID();
     try {
+      // Login, password reset, step-up and pairing are public routes too, and
+      // the ones a forged request would most like to reach.
+      assertNotCrossSite(request);
       const result = await handler(request, requestId);
       // Same pass-through as tenantRoute: a handler that built its own Response
       // must not be JSON-serialised into an empty object.
