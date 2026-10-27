@@ -8,7 +8,8 @@
  *                           extension can sign with it and cannot read it out.
  *                           A CryptoKey cannot be put in chrome.storage, which
  *                           only holds JSON.
- *   chrome.storage.session  a pairing in progress: which tab, which state.
+ *   chrome.storage.session  a pairing in progress: which tab, which state;
+ *                           and, with a lock on, the unlocked token (lock.ts).
  *                           In memory, gone when the browser closes.
  *
  * The token is stored, and that is acceptable only because it is half a
@@ -63,8 +64,10 @@ export async function setPairing(pairing: Pairing): Promise<void> {
   await chrome.storage.local.set({ pairing });
 }
 
+/** Forget the pairing, and any lock on it (lock.ts), whose sealed token was its. */
 export async function clearPairing(): Promise<void> {
-  await chrome.storage.local.remove('pairing');
+  await chrome.storage.local.remove(['pairing', 'lock']);
+  await chrome.storage.session.remove('unlocked');
   await deleteKey('device');
 }
 

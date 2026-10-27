@@ -483,6 +483,19 @@ These are the honest extension's checks, not a server boundary: an extension
 token could already copy the same password, so the server's limits are the
 copy limits above.
 
+**Locking.** A person can lock the extension behind a PIN or a password
+(`extension/src/lock.ts`). Locked, the token is stored only encrypted, under
+AES-GCM with a key from PBKDF2-SHA-256 (600,000 rounds) over the PIN or
+password; unlocked, the plaintext token is held in `chrome.storage.session`,
+which is memory only, so closing the browser or restarting the computer always
+locks it, and an optional idle timeout locks it sooner. Five wrong tries in a
+row forget the pairing. This is a local control: the PIN never reaches Helm,
+Helm does not know which browsers are locked, and a copy of the browser
+profile can be guessed against offline (a short PIN quickly, a password far
+more slowly), so it defends against somebody at an unattended browser, not
+against a stolen profile; revoking the browser in Helm is still the answer to
+that.
+
 **Lifetime.** An extension token lives 30 days and the extension renews it in
 its last week (`helm.renew_browser_extension_token()`, which revokes the old
 one in the same statement). Unused for 30 days, it lapses. Unpairing under

@@ -25,6 +25,10 @@
  * needs a step-up: those rows offer "Open in Helm" instead, and Helm refuses
  * the copy anyway if asked (1120).
  *
+ * LOCKED. With a lock on (lock.ts) and the browser restarted, idle too long
+ * or locked by hand, the popup asks for the PIN or password before anything
+ * else, and has nothing to call Helm with until it gets it.
+ *
  * WHAT IT SHOWS. Laid out like Bitwarden's popup: a search in the header, and
  * cards below it. The site's matches first; when there are none, what the
  * person used lately and what MSP staff use most (1121). Typing searches as
@@ -33,6 +37,7 @@
 import type { ExtensionEntry, ExtensionLookup } from '../../src/lib/extension/types';
 import { call, renewIfDue, type Result } from './api';
 import { formInPage, type FillValues, type FormProbe } from './fill';
+import { MAX_FAILURES, getLock, lockNow, lockState, unlock, type LockConfig } from './lock';
 import { getPairing, getServer, getSettings } from './store';
 import { applyRememberedTheme, applyTheme } from './theme';
 
@@ -455,6 +460,58 @@ searchInput.addEventListener('keydown', (event) => {
   }
 });
 
+const lockButton = $<HTMLButtonElement>('lock');
+lockButton.append(icon('lock'));
+lockButton.addEventListener('click', () => {
+  void lockNow().then(start);
+});
+
+function showUnlock(lock: LockConfig): void {
+  const pin = lock.method === 'pin';
+  const noun = pin ? 'PIN' : 'password';
+  searchInput.disabled = true;
+  lockButton.hidden = true;
+  const input = el('input', {
+    type: 'password', autocomplete: 'off', 'aria-label': `Your ${noun}`, placeholder: `Your ${noun}`,
+    ...(pin ? { inputmode: 'numeric', maxlength: '12' } : {}),
+  }) as HTMLInputElement;
+  const submit = el('button', { type: 'submit', class: 'primary' }, 'Unlock') as HTMLButtonElement;
+  const message = el('p', { role: 'status' });
+  const form = el('form', { class: 'card unlock' },
+    el('p', {}, `Helm is locked. Enter your ${noun} to unlock it.`),
+    el('div', { class: 'row' }, input, submit),
+    message,
+  );
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!input.value) return;
+    submit.disabled = true;
+    message.textContent = 'Unlocking…';
+    message.className = '';
+    void unlock(input.value).then(async (result) => {
+      if (result === 'unlocked') {
+        searchInput.disabled = false;
+        await start();
+        return;
+      }
+      submit.disabled = false;
+      input.value = '';
+      message.className = 'error';
+      if (result === 'forgotten') {
+        message.textContent = 'Too many wrong tries, so this browser is no longer paired. Pair it again from settings.';
+        input.disabled = true;
+        submit.disabled = true;
+        return;
+      }
+      const left = MAX_FAILURES - ((await getLock())?.failures ?? 0);
+      message.textContent = `That ${noun} is not right. ${left} ${left === 1 ? 'try' : 'tries'} left.`;
+      input.focus();
+    });
+  });
+  render(form);
+  input.focus();
+}
+
 $('settings').append(icon('settings'));
 $('settings').addEventListener('click', () => {
   void chrome.runtime.openOptionsPage();
@@ -480,6 +537,16 @@ async function start(): Promise<void> {
   }
   server = configured;
   tenant.textContent = pairing.tenantName;
+  const locked = await lockState();
+  lockButton.hidden = locked !== 'unlocked';
+  if (locked === 'locked') {
+    const lock = await getLock();
+    if (lock) {
+      showUnlock(lock);
+      return;
+    }
+  }
+  searchInput.disabled = false;
   void renewIfDue();
 
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });

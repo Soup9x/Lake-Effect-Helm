@@ -14,6 +14,7 @@ How it is secured, and why, is in
 | --- | --- |
 | `manifest.json` | Manifest V3. The version here is the store version. |
 | `src/popup.ts` | The toolbar popup: matches for this tab, search, fill, copy. |
+| `src/lock.ts` | The PIN or password lock: the token sealed at rest, unlocked in session memory. |
 | `src/fill.ts` | Finds and fills the sign-in form in the tab (runs in the page). |
 | `src/options.ts` | Settings: the Helm address, pairing, clipboard clearing. |
 | `src/background.ts` | Finishes a pairing, renews the token daily, clears the clipboard. |
