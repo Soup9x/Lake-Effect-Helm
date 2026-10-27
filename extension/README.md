@@ -50,7 +50,12 @@ checks the extension as well as the server.
 To try it: open `chrome://extensions` (or `brave://extensions`,
 `edge://extensions`), turn on Developer mode, **Load unpacked**, and choose
 `dist/extension`. Then open the extension's settings, enter the Helm address,
-and press **Pair with Helm**.
+and press **Pair with Helm**. Pairing asks for the Helm password (and the
+authenticator code, if the account has one).
+
+People find the download link and these steps in Helm itself, under
+Personal → Browser extension; administrators see every paired browser under
+Administration → Browser extensions.
 
 ## Releasing
 

@@ -11,6 +11,7 @@ import type { ExtensionMe } from '../../src/lib/extension/types';
 import { call } from './api';
 import { browserName, platformName } from './browser';
 import { normaliseServer } from './server';
+import { applyRememberedTheme, applyTheme, type Theme } from './theme';
 import {
   clearPairing,
   fingerprint,
@@ -25,6 +26,8 @@ import {
   setSettings,
 } from './store';
 
+applyRememberedTheme();
+
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const serverInput = $<HTMLInputElement>('server');
@@ -32,6 +35,7 @@ const serverForm = $<HTMLFormElement>('server-form');
 const serverNote = $('server-note');
 const pairSection = $('pair');
 const clipboardSelect = $<HTMLSelectElement>('clipboard');
+const themeSelect = $<HTMLSelectElement>('theme');
 
 serverForm.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -65,6 +69,12 @@ clipboardSelect.addEventListener('change', () => {
   void setSettings({ clearClipboardSeconds: Number(clipboardSelect.value) });
 });
 
+themeSelect.addEventListener('change', () => {
+  const theme = themeSelect.value as Theme;
+  applyTheme(theme);
+  void setSettings({ theme });
+});
+
 async function startPairing(): Promise<void> {
   const server = await getServer();
   if (!server) return;
@@ -86,7 +96,7 @@ async function startPairing(): Promise<void> {
 
 async function renderPending(publicKey: string): Promise<void> {
   pairSection.replaceChildren(
-    el('p', {}, 'Helm has opened in a new tab. Sign in if it asks, then check that it shows this fingerprint and press Pair:'),
+    el('p', {}, 'Helm has opened in a new tab. Sign in if it asks, check that it shows this fingerprint, then enter your Helm password and press Pair:'),
     el('p', { class: 'fingerprint' }, await fingerprint(publicKey)),
     el('p', { class: 'muted' }, 'If Helm asked you to sign in first and then says the link did not come from the extension, press Pair again below.'),
     button('Pair again', () => void startPairing()),
@@ -97,6 +107,8 @@ async function render(): Promise<void> {
   const [server, pairing, settings] = await Promise.all([getServer(), getPairing(), getSettings()]);
   serverInput.value = server ?? '';
   clipboardSelect.value = String(settings.clearClipboardSeconds);
+  themeSelect.value = settings.theme;
+  applyTheme(settings.theme);
 
   if (!server) {
     pairSection.replaceChildren(el('p', { class: 'muted' }, 'Save your Helm address first.'));

@@ -11,7 +11,11 @@
  * carried.
  *
  * NOTHING IS PAIRED BY OPENING THE PAGE. Approval is the button, in a tab
- * signed in to Helm; the POST it makes is refused to anything but a session.
+ * signed in to Helm, with the person's password typed again (and their
+ * authenticator code, when they have one: the field appears when Helm asks
+ * for it). The POST is refused to anything but a session, and the database
+ * refuses a pairing without that fresh step-up (1121). The password is
+ * cleared from state as soon as the request returns.
  *
  * THE TOKEN is posted to this page's own origin and nowhere else, then
  * dropped from state. The extension's listener in this tab picks it up and
@@ -81,6 +85,9 @@ export function ExtensionPair({
 }) {
   const [state, setState] = useState<State>({ status: 'reading' });
   const [label, setLabel] = useState('');
+  const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [askCode, setAskCode] = useState(false);
   // Read once: the effect clears the fragment, and a second run (React's
   // development double-invoke) would otherwise find it gone.
   const fragment = useRef<PairRequestParams | null | undefined>(undefined);
@@ -114,9 +121,14 @@ export function ExtensionPair({
         label: label.trim() || 'My browser',
         browser: params.browser || null,
         extensionVersion: params.version || null,
+        password,
+        ...(askCode && code.trim() ? { code: code.trim() } : {}),
       },
     });
+    setPassword('');
+    setCode('');
     if (!result.ok) {
+      if (result.details?.secondFactor === 'totp') setAskCode(true);
       setState({ status: 'error', params, fingerprint, message: result.message });
       return;
     }
@@ -171,7 +183,7 @@ export function ExtensionPair({
           <p className="text-ink-muted">
             The extension closes this tab once it has picked the pairing up. If the tab stays open,
             the extension did not open it: remove the pairing under{' '}
-            <Link href="/account" className="text-brand hover:underline">Security &amp; notifications</Link>.
+            <Link href="/personal/browser-extension" className="text-brand hover:underline">Personal → Browser extension</Link>.
           </p>
         </CardContent>
       </Card>
@@ -219,10 +231,54 @@ export function ExtensionPair({
           ) : null}
         </div>
 
+        <form
+          id="extension-pair-form"
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void approve();
+          }}
+        >
+          <div className="space-y-1.5">
+            <Label htmlFor="extension-password">Your Helm password</Label>
+            <Input
+              id="extension-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={busy}
+              required
+            />
+            <FieldHint>Pairing gives this browser access for 30 days, so Helm asks who you are again.</FieldHint>
+          </div>
+          {askCode ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="extension-code">Authenticator code</Label>
+              <Input
+                id="extension-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={code}
+                maxLength={32}
+                onChange={(e) => setCode(e.target.value)}
+                disabled={busy}
+                required
+              />
+              <FieldHint>From your authenticator app, or one of your recovery codes.</FieldHint>
+            </div>
+          ) : null}
+        </form>
+
         {state.status === 'error' ? <p className="text-danger">{state.message}</p> : null}
 
         <div className="flex gap-2">
-          <Button variant="primary" onClick={approve} disabled={busy || label.trim() === ''}>
+          <Button
+            variant="primary"
+            type="submit"
+            form="extension-pair-form"
+            disabled={busy || label.trim() === '' || password === '' || (askCode && code.trim() === '')}
+          >
             {busy ? <Loader2 className="animate-spin" aria-hidden /> : null} Pair
           </Button>
           <Button variant="ghost" onClick={() => window.close()} disabled={busy}>

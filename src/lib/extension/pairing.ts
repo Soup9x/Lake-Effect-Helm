@@ -106,3 +106,38 @@ export async function revokeMyBrowser(tx: HelmTx, id: string): Promise<boolean> 
   const [row] = await tx<{ revoked: boolean }[]>`SELECT helm.revoke_my_browser_extension(${id}::uuid) AS revoked`;
   return row?.revoked === true;
 }
+
+/** A row of helm.tenant_browser_extensions(): somebody's pairing, for an administrator. */
+export interface TenantBrowserRow extends Omit<PairedBrowserRow, 'current'> {
+  userId: string;
+  userName: string;
+  userEmail: string;
+}
+
+export async function listTenantBrowsers(tx: HelmTx): Promise<TenantBrowserRow[]> {
+  const rows = await tx<(Omit<RawRow, 'is_current'> & { user_id: string; user_name: string; user_email: string })[]>`
+    SELECT * FROM helm.tenant_browser_extensions()
+  `;
+  const now = Date.now();
+  return rows.map((r) => ({
+    id: r.id,
+    userId: r.user_id,
+    userName: r.user_name,
+    userEmail: r.user_email,
+    label: r.device_label,
+    browser: r.browser,
+    extensionVersion: r.extension_version,
+    fingerprint: formatFingerprint(r.key_sha256),
+    pairedAt: r.paired_at.toISOString(),
+    lastUsedAt: r.last_used_at?.toISOString() ?? null,
+    lastUsedIp: r.last_used_ip,
+    expiresAt: r.expires_at?.toISOString() ?? null,
+    revokedAt: r.revoked_at?.toISOString() ?? null,
+    live: r.revoked_at === null && r.expires_at !== null && r.expires_at.getTime() > now,
+  }));
+}
+
+export async function revokeBrowser(tx: HelmTx, id: string): Promise<boolean> {
+  const [row] = await tx<{ revoked: boolean }[]>`SELECT helm.revoke_browser_extension(${id}::uuid) AS revoked`;
+  return row?.revoked === true;
+}
