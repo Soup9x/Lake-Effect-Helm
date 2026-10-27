@@ -1,8 +1,9 @@
 # Lake Effect Helm browser extension
 
-Looks up the credentials for the site you are on and copies a username, a
-standard password or a one-time code. Chrome, Edge and Brave, from one build.
-It does not fill forms.
+Looks up the credentials for the site you are on, and fills or copies a
+username, a standard password or a one-time code. Click a credential to fill
+the sign-in form on the page; the icons beside it copy. Chrome, Edge and Brave,
+from one build.
 
 How it is secured, and why, is in
 [docs/architecture/01-security-model.md §4.6](../docs/architecture/01-security-model.md).
@@ -12,7 +13,8 @@ How it is secured, and why, is in
 | Path | What |
 | --- | --- |
 | `manifest.json` | Manifest V3. The version here is the store version. |
-| `src/popup.ts` | The toolbar popup: matches for this tab, search, copy. |
+| `src/popup.ts` | The toolbar popup: matches for this tab, search, fill, copy. |
+| `src/fill.ts` | Finds and fills the sign-in form in the tab (runs in the page). |
 | `src/options.ts` | Settings: the Helm address, pairing, clipboard clearing. |
 | `src/background.ts` | Finishes a pairing, renews the token daily, clears the clipboard. |
 | `src/offscreen.ts` | Clears the clipboard (an offscreen page is the only way an extension can). |

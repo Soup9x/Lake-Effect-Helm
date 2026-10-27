@@ -13,6 +13,9 @@
  *   COPYING      a standard password and nothing else: no 'view', nothing
  *                elevated. The personal vault opens for 'copy' only, and
  *                cannot be written through the extension.
+ *   FILLING      the same password for 'autofill', audited as a fill, with
+ *                the same limits; in the personal vault too, and only for the
+ *                extension.
  *   PERSONAL     a personal API token cannot read the vault at all (closing a
  *                gap 1030's comment said did not exist).
  *   LIFETIME     renewal replaces the token; unpairing stops it at once.
@@ -402,6 +405,23 @@ describe('looking up and copying', () => {
     expect(causes.map((c) => c.cause)).toEqual(['not_permitted_for_extension', 'not_permitted_for_extension']);
   });
 
+  it('fills a standard password, audited as a fill, and nothing above standard', async () => {
+    const path = `/api/secrets/${portal.secretId}/reveal`;
+    const response = await reveal(signed(device, token, path, 'POST', { purpose: 'autofill' }), params('secretId', portal.secretId));
+    expect(response.status, await response.clone().text()).toBe(200);
+    const body = await json<{ value: string; auditEventUid: string }>(response);
+    expect(body.value).toBe(PORTAL_PASSWORD);
+    const [row] = await su((sql) => sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata FROM audit_log WHERE event_uid = ${body.auditEventUid}::uuid`);
+    expect(row!.metadata).toMatchObject({ purpose: 'autofill' });
+
+    const elevatedPath = `/api/secrets/${elevated.secretId}/reveal`;
+    const refused = await reveal(
+      signed(device, token, elevatedPath, 'POST', { purpose: 'autofill' }), params('secretId', elevated.secretId),
+    );
+    expect(refused.status).toBe(403);
+  });
+
   it('still lets the same person view the elevated one from a browser session', async () => {
     currentUser = TECH;
     const response = await reveal(
@@ -430,6 +450,22 @@ describe('the personal vault', () => {
 
     const viewed = await personalReveal(signed(device, token, path, 'POST', { purpose: 'view' }), params('entryId', personalId));
     expect(viewed.status).toBe(403);
+  });
+
+  it('fills through the extension, audited as a fill, and fills for nobody else', async () => {
+    const path = `/api/personal/vault/${personalId}/reveal`;
+    const filled = await personalReveal(signed(device, token, path, 'POST', { purpose: 'autofill' }), params('entryId', personalId));
+    expect(filled.status, await filled.clone().text()).toBe(200);
+    const body = await json<{ value: string; auditEventUid: string }>(filled);
+    expect(body.value).toBe('bank-pw-1');
+    const [row] = await su((sql) => sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata FROM audit_log WHERE event_uid = ${body.auditEventUid}::uuid`);
+    expect(row!.metadata).toMatchObject({ purpose: 'autofill' });
+
+    currentUser = TECH;
+    const fromSession = await personalReveal(sessionRequest(path, 'POST', { purpose: 'autofill' }), params('entryId', personalId));
+    currentUser = null;
+    expect(fromSession.status).toBe(403);
   });
 
   it('cannot be listed, changed or deleted through the extension', async () => {

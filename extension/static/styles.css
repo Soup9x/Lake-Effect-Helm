@@ -123,6 +123,14 @@ body.popup {
   color: hsl(var(--hue) 55% var(--avatar-ink-l)); background: hsl(var(--hue) 55% var(--avatar-l));
 }
 .avatar.personal { color: var(--brand); background: var(--brand-tint); }
+.entry .fill {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; margin: -4px; padding: 4px;
+  border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left;
+}
+button.fill { cursor: pointer; }
+button.fill:hover .name { color: var(--brand); }
+button.fill:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+button.fill:disabled { cursor: progress; opacity: .7; }
 .entry .meta { flex: 1; min-width: 0; }
 .entry .name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entry .sub, .entry .note { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -140,6 +148,9 @@ body.popup {
 
 .reason { display: flex; gap: 4px; width: 100%; padding-left: 40px; }
 .reason input { flex: 1; }
+.confirm { width: 100%; padding: 8px 0 2px 40px; font-size: 12px; }
+.confirm p { margin: 0 0 6px; color: var(--ink); }
+.confirm-actions { display: flex; gap: 6px; }
 
 .toast {
   position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); margin: 0; max-width: 340px;
