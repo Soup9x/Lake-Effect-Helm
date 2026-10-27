@@ -30,7 +30,7 @@ export default async function PersonalBrowserExtensionPage() {
     <>
       <PageHeader
         title="Browser extension"
-        description="Look up and copy credentials from Chrome, Edge or Brave, for the site you are on."
+        description="Fill and copy credentials from Chrome, Edge or Brave, for the site you are on."
         trail={[{ label: 'Personal', href: '/personal' }]}
       />
       <PageBody>
@@ -54,8 +54,9 @@ export default async function PersonalBrowserExtensionPage() {
                 <CardContent className="space-y-3 text-sm">
                   <p className="text-ink-muted">
                     One download for Chrome, Edge and Brave. It shows the credentials Helm has for the
-                    site you are on, searches the rest, and copies usernames, standard passwords and
-                    one-time codes. Elevated and critical passwords stay in Helm. Every copy is audited.
+                    site you are on and searches the rest. Click a credential to fill the sign-in form, or
+                    copy its username, standard password or one-time code. Elevated and critical passwords
+                    stay in Helm. Every fill and copy is audited.
                   </p>
                   <div className="flex flex-wrap items-center gap-3">
                     <Button asChild variant="primary">

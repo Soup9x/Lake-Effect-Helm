@@ -315,7 +315,7 @@ async function audit(tx: HelmTx, id: string, purpose: string): Promise<string | 
 
 /** The password, for the owner, with one audit row. */
 export async function revealPassword(
-  tx: HelmTx, tenantId: string, id: string, purpose: 'view' | 'copy',
+  tx: HelmTx, tenantId: string, id: string, purpose: 'view' | 'copy' | 'autofill',
 ): Promise<{ value: string; auditEventUid: string | null }> {
   const [row] = await tx<EnvelopeRow[]>`
     SELECT data_key_id, secret_version, secret_ciphertext, secret_nonce, secret_tag, secret_aad

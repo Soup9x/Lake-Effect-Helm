@@ -428,8 +428,8 @@ nullable; deployments that do not want that tradeoff leave
 ### 4.6 The browser extension (1120, 1121)
 
 A Chrome, Edge and Brave extension that looks up the credentials for the site
-in front of a technician and copies a username, a standard password or a
-one-time code. It does not fill forms. The code is in `extension/`; the server
+in front of a technician, and copies or fills a username, a standard password
+or a one-time code. The code is in `extension/`; the server
 side is `src/lib/extension/` and `/api/extension/*`.
 
 **What the extension holds.** A P-256 device key it made itself, the private
@@ -466,8 +466,22 @@ extension token may reveal for `copy`, `autofill` and `totp` only, and a
 password only when its secret is `standard`. Elevated and critical credentials
 are listed with "Open in Helm" and refused if asked for anyway
 (`not_permitted_for_extension`). Step-up was already unreachable to any token.
-The personal vault is readable by the owner's extension, for `copy` and codes,
-and not writable by it.
+The personal vault is readable by the owner's extension, for `copy`, `autofill`
+and codes, and not writable by it.
+
+**Filling.** A click on a credential in the popup fills the sign-in form on the
+tab (`extension/src/fill.ts`), with the password revealed for `autofill`, so
+the audit log tells a fill from a copy. Nothing fills on page load. The script
+runs in the extension's isolated world through `activeTab`, which reaches only
+the tab's own origin, so a form in another site's frame is never filled, and
+the fill is pinned to the document it found the form in. A credential Helm
+matched to the tab's site fills at once; one from a search or the suggestions
+first names the site Helm has it for and asks, which is the defence against a
+lookalike page. A named site over plain http is refused; an IP address or an
+internal name is allowed, since a device's admin page often has nothing else.
+These are the honest extension's checks, not a server boundary: an extension
+token could already copy the same password, so the server's limits are the
+copy limits above.
 
 **Lifetime.** An extension token lives 30 days and the extension renews it in
 its last week (`helm.renew_browser_extension_token()`, which revokes the old
