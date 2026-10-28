@@ -1,12 +1,13 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { isUuid } from '@/lib/ids';
-import { Cloud, ExternalLink, Network } from 'lucide-react';
+import { Cloud, ExternalLink, FileText, Network } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { AssetForm } from '@/components/asset-form';
 import { DependencyChip, DependencyEditor } from '@/components/dependency-editor';
+import { listDependents } from '@/lib/documents/links';
 import { TagEditor } from '@/components/tag-editor';
 import { isClientRole } from '@/lib/ui/roles';
 import { isWeakStrength, strengthLabel } from '@/lib/ui/strength';
@@ -296,6 +297,8 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     const assignable = template && perm?.run ? await listAssignableUsers(tx) : [];
     // Files attached to this asset (0780): the circuit's LOA, the contract's PDF.
     const attachments = await listNodeAttachments(tx, node.id);
+    // The written documents that list this asset as a dependency (1130).
+    const documents = await listDependents(tx, 'asset', node.id);
     /*
      * A device's interfaces (0800), and the pickers its sectioned edit form
      * needs: the client's people and what an interface can connect to. Read
@@ -349,7 +352,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     return {
       synced, ninjaProfile: ninjaProfile ?? null, proxmoxProfile: proxmoxProfile ?? null,
       node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, sites, record, template, schedules, runs, diagrams,
-      attachments, device,
+      attachments, documents, device,
       canDeleteAttachments: session.permissions.includes('asset:delete'),
       totp: totp ?? null,
       canReveal: perm?.reveal ?? false,
@@ -369,7 +372,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     synced, ninjaProfile, proxmoxProfile,
     node, detail, detailRaw, edges, secrets, sites, record, template, schedules, runs, diagrams, totp, canReveal, canManageSeed, canChangePassword,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
-    attachments, canDeleteAttachments, device, history,
+    attachments, documents, canDeleteAttachments, device, history,
   } = data;
 
   /*
@@ -647,6 +650,20 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
           organizationId={node.organization_id}
           canLink={canWrite}
         />
+        {documents.length > 0 && (
+          <div className="border-t border-border pt-3">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-faint">Documents that depend on this</p>
+            <div className="flex flex-wrap gap-2">
+              {documents.map((d) => (
+                <a key={d.id} href={d.href} title={d.note ?? undefined}
+                   className="inline-flex max-w-full items-center gap-2 rounded-full border border-border-strong bg-surface-raised px-3 py-1 text-sm text-ink transition-colors hover:border-brand hover:bg-surface-sunken">
+                  <FileText className="size-3.5 shrink-0 text-ink-faint" aria-hidden />
+                  <span className="truncate">{d.title}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

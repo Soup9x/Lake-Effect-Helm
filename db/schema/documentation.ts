@@ -456,6 +456,25 @@ export const documentPage = pgTable('document_page', {
 });
 
 /**
+ * A written document's dependencies (1130): exactly one target column is set,
+ * each a real foreign key, and the target must belong to the page's client.
+ */
+export const documentPageLink = pgTable('document_page_link', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  pageId: uuid('page_id').notNull(),
+  targetNodeId: uuid('target_node_id'),
+  targetPageId: uuid('target_page_id'),
+  targetContactId: uuid('target_contact_id'),
+  targetSiteId: uuid('target_site_id'),
+  targetDiagramId: uuid('target_diagram_id'),
+  note: text('note'),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
+});
+
+/**
  * Per-client document folders, nested.
  *
  * `parentId` NULL is the top level of one client's tree; there is no root row,

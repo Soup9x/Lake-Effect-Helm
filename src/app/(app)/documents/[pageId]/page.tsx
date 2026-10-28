@@ -5,6 +5,7 @@ import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
 import { DocumentPage } from '@/components/document-page';
 import { readPage } from '@/lib/documents/pages';
+import { listDependencies, listDependents } from '@/lib/documents/links';
 import { listPageAttachments } from '@/lib/clients/queries';
 import { maxUploadBytes } from '@/lib/documents/limits';
 import { isClientRole } from '@/lib/ui/roles';
@@ -29,11 +30,13 @@ export default async function DocumentPageRoute({ params }: { params: Promise<{ 
       organizationName: org?.name ?? 'Client',
       folderPath: path[0]?.path ?? [],
       attachments: await listPageAttachments(tx, pageId),
+      dependencies: await listDependencies(tx, pageId),
+      dependents: await listDependents(tx, 'document', pageId),
       canDelete: session.permissions.includes('asset:delete'),
     };
   });
   if (!data) notFound();
-  const { page, organizationName, folderPath, attachments, canDelete } = data;
+  const { page, organizationName, folderPath, attachments, dependencies, dependents, canDelete } = data;
   const canWrite = !isClientRole(identity.roleKey);
 
   const rows: DocumentRow[] = attachments.map((d) => ({
@@ -57,6 +60,8 @@ export default async function DocumentPageRoute({ params }: { params: Promise<{ 
         <DocumentPage
           page={{ ...page, body: page.body as JSONContent }}
           attachments={rows}
+          dependencies={dependencies}
+          dependents={dependents}
           canWrite={canWrite}
           canDelete={canDelete}
           maxBytes={maxUploadBytes()}
