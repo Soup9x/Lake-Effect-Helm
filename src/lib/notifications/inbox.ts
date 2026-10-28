@@ -109,6 +109,35 @@ export async function markRead(tx: HelmTx, ids?: readonly string[]): Promise<num
 }
 
 /**
+ * Dismiss notifications outright, read or not.
+ *
+ * `ids` absent means every one of them — the "clear all" button — and an empty
+ * array means none, the same distinction markRead keeps. Unlike clearRead this
+ * takes unread rows too: somebody pressing the cross on a notification has
+ * seen it in the act of dismissing it, and the record of what happened is in
+ * the audit log either way.
+ */
+export async function dismiss(tx: HelmTx, ids?: readonly string[]): Promise<number> {
+  if (ids !== undefined && ids.length === 0) return 0;
+
+  const rows = ids === undefined
+    ? await tx<{ id: string }[]>`
+        DELETE FROM user_notification
+        WHERE tenant_id = helm.current_tenant_id()
+          AND user_id = helm.current_actor_id()
+        RETURNING id
+      `
+    : await tx<{ id: string }[]>`
+        DELETE FROM user_notification
+        WHERE tenant_id = helm.current_tenant_id()
+          AND user_id = helm.current_actor_id()
+          AND id = ANY (${ids as string[]}::uuid[])
+        RETURNING id
+      `;
+  return rows.length;
+}
+
+/**
  * Remove notifications this person no longer wants to see.
  *
  * The owner's own row, so an ordinary DELETE under the policy rather than a

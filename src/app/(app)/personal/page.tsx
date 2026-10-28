@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { countMyOpenTasks, listMyTasks } from '@/lib/sops/queries';
 import { listInbox, unreadCount } from '@/lib/notifications/inbox';
 import { formatDateTime } from '@/lib/ui/format';
+import { NotificationCenter } from '@/components/notifications/notification-center';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,7 +49,8 @@ export default async function PersonalPage() {
       // The same query My Tasks runs with its default filters, capped: this is
       // a signpost to that page, not a second copy of it.
       tasks: await listMyTasks(tx, { state: 'open', who: 'mine', limit: 5 }),
-      notifications: (await listInbox(tx, 5)),
+      // One past the first page, so the card knows whether to offer more.
+      notifications: await listInbox(tx, 51),
       unread: await unreadCount(tx),
       // The owner policy counts this person's entries and nobody else's; an
       // API token or service account has none (actor_type is not 'user').
@@ -116,54 +118,19 @@ export default async function PersonalPage() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card id="notifications">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Bell className="size-4 text-ink-faint" aria-hidden /> Recent notifications
+                <Bell className="size-4 text-ink-faint" aria-hidden /> Notifications
                 {unread > 0 && <Badge tone="brand">{unread} unread</Badge>}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {notifications.length === 0 ? (
-                /*
-                 * SAYS WHICH EMPTY IT IS, like the bell itself. "Nothing here"
-                 * could mean nothing happened or nothing is subscribed, and
-                 * those have different answers — the oversight kinds are off
-                 * until somebody asks for them, so a quiet page is the shipped
-                 * state rather than a fault.
-                 */
-                <p className="text-sm text-ink-muted">
-                  Nothing yet. You are told when a checklist step is assigned to you
-                  or falls due; exports, credential reveals and expiries are off
-                  until you ask for them below.
-                </p>
-              ) : (
-                <ul className="divide-y divide-border rounded-md border border-border">
-                  {notifications.map((item) => (
-                    <li key={item.id} className="flex items-start gap-2 px-3 py-2 text-sm">
-                      {!item.read && (
-                        <span aria-hidden className="mt-1.5 size-1.5 shrink-0 rounded-full bg-brand" />
-                      )}
-                      <span className="min-w-0">
-                        {item.href ? (
-                          <Link
-                            href={item.href}
-                            className="text-ink underline-offset-2 hover:underline"
-                          >
-                            {item.subject}
-                          </Link>
-                        ) : (
-                          <span className="text-ink">{item.subject}</span>
-                        )}
-                        <span className="mt-0.5 block text-xs text-ink-faint">
-                          {item.organizationName ? `${item.organizationName} · ` : ''}
-                          {formatDateTime(item.occurredAt)}
-                        </span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <NotificationCenter
+                initial={notifications.slice(0, 50)}
+                unread={unread}
+                more={notifications.length > 50}
+              />
               <p className="text-xs text-ink-faint">
                 <Link href="/account" className="underline-offset-2 hover:underline">
                   Choose what appears here

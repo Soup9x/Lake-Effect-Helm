@@ -571,6 +571,52 @@ describe('custody of a bell', () => {
     // Deleting something unseen would delete the thing the table exists for.
     expect(await inboxRows()).toHaveLength(1);
   });
+
+  it('dismisses named rows read or not, and clears everything when asked', async () => {
+    await subscribe(USERS.admin, ['export_activity']);
+    await requestAnExport();
+    await requestAnExport('a second export with its own long enough reason');
+    await requestAnExport('a third export with yet another long enough reason');
+    await fanOut();
+
+    currentUser = USERS.admin;
+    const first = await read(await getInbox(request()));
+    const ids = (first.payload.notifications as { id: string }[]).map((n) => n.id);
+    expect(ids).toHaveLength(3);
+
+    // The limit is honoured, and `more` says whether anything is behind it.
+    const paged = await read(await getInbox(new NextRequest('http://helm.test/api/account/inbox?limit=2')));
+    expect(paged.payload.notifications as unknown[]).toHaveLength(2);
+    expect(paged.payload.more).toBe(true);
+    expect(first.payload.more).toBe(false);
+
+    // An unread row, dismissed by name.
+    const one = await read(await clearInbox(request('DELETE', { ids: [ids[0]!] })));
+    expect(one.payload).toMatchObject({ cleared: 1, unread: 2 });
+    expect((await read(await clearInbox(request('DELETE', { ids: [] })))).payload)
+      .toMatchObject({ cleared: 0, unread: 2 });
+
+    const all = await read(await clearInbox(request('DELETE', { all: true })));
+    expect(all.payload).toMatchObject({ cleared: 2, unread: 0 });
+    expect(await inboxRows()).toEqual([]);
+
+    expect((await clearInbox(request('DELETE', { all: false }))).status).toBe(400);
+  });
+
+  it('cannot dismiss somebody else\'s notification', async () => {
+    await subscribe(USERS.admin, ['export_activity']);
+    await requestAnExport();
+    await fanOut();
+
+    currentUser = USERS.admin;
+    const ids = ((await read(await getInbox(request()))).payload
+      .notifications as { id: string }[]).map((n) => n.id);
+
+    currentUser = USERS.tech;
+    const theirs = await read(await clearInbox(request('DELETE', { ids })));
+    expect(theirs.payload).toMatchObject({ cleared: 0 });
+    expect(await inboxRows()).toHaveLength(1);
+  });
 });
 
 describe('the pre-filter and the retention sweep', () => {
