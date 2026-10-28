@@ -10,11 +10,14 @@
  *      client's record gets no client, not that client's name.
  *   3. "ALL CLIENTS" IS EVERYTHING THE READER CAN SEE, and outside a client
  *      that is all there is.
+ *   4. "MY PASSWORDS" IS THE READER'S OWN VAULT AND NOTHING ELSE. Nobody
+ *      else's entry matches, an administrator's search included, and the
+ *      client scopes never return a vault entry.
  */
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { useSessionResolver, type SessionUser } from '../../src/lib/auth/session';
-import { connectPools, disconnectPools, IDS, resetDatabase } from './harness';
+import { connectPools, disconnectPools, IDS, resetDatabase, superuserSql } from './harness';
 import { POST as suggest } from '../../src/app/api/search/suggest/route';
 
 vi.mock('next/headers', () => ({
@@ -49,6 +52,18 @@ beforeAll(async () => {
   resetDatabase();
   connectPools();
   useSessionResolver(async () => currentUser);
+  // Entries with no secret in them: the search reads labels only.
+  const sql = superuserSql();
+  try {
+    await sql`
+      INSERT INTO personal_credential (tenant_id, owner_user_id, name, username, url) VALUES
+        (${IDS.tenant1}, ${IDS.tech1}, 'Zephyr Bank', 'tech1@zephyr.example', 'https://zephyr.example'),
+        (${IDS.tenant1}, ${IDS.tech1}, 'Gym', 'zephyr-runner', NULL),
+        (${IDS.tenant1}, ${IDS.admin1}, 'Zephyr Admin Mail', 'admin', NULL)
+    `;
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
 }, 120_000);
 afterAll(async () => { await disconnectPools(); });
 
@@ -96,5 +111,32 @@ describe('all clients', () => {
     const out = await ask({ q: '01', path: '/dashboard', scope: 'client' });
     expect(out.client).toBeNull();
     expect(titles(out)).toEqual(expect.arrayContaining(['acme-fw-01', 'globex-app-01']));
+  });
+});
+
+describe('my passwords', () => {
+  const TECH: SessionUser = { id: IDS.tech1, email: 'tech1@northwind.test' };
+
+  it('searches the reader’s own vault by name, username and website, names that start with it first', async () => {
+    const out = await ask({ q: 'zephyr', path: `/organizations/${IDS.orgAcme}`, scope: 'personal' }, TECH);
+    expect(out.scoped).toBe(false);
+    expect(out.groups.map((g) => g.kind)).toEqual(['personal']);
+    expect(titles(out)).toEqual(['Zephyr Bank', 'Gym']);
+    expect(out.groups[0]!.hits[0]!.href).toMatch(/^\/personal\/passwords\/[0-9a-f-]{36}$/);
+  });
+
+  it('never finds somebody else’s entry, an administrator’s search included', async () => {
+    expect(titles(await ask({ q: 'zephyr', path: '/dashboard', scope: 'personal' }, TECH)))
+      .not.toContain('Zephyr Admin Mail');
+    expect(titles(await ask({ q: 'zephyr', path: '/dashboard', scope: 'personal' }, ADMIN)))
+      .toEqual(['Zephyr Admin Mail']);
+  });
+
+  it('is never part of a client search', async () => {
+    for (const scope of ['client', 'all']) {
+      const out = await ask({ q: 'zephyr', path: '/dashboard', scope }, TECH);
+      expect(out.groups.map((g) => g.kind)).not.toContain('personal');
+      expect(titles(out)).not.toContain('Zephyr Bank');
+    }
   });
 });

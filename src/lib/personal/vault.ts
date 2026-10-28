@@ -89,6 +89,28 @@ export async function listVault(tx: HelmTx): Promise<VaultEntry[]> {
   return rows.map(view);
 }
 
+/**
+ * This person's entries matching what was typed in the top bar, when they
+ * picked "My passwords" there. A substring of the name, username or website;
+ * names that start with it first. Never notes: the box shows a line under
+ * each hit, and a note is not something to flash on screen while typing.
+ *
+ * The owner policy is the scope, as everywhere here — there is no argument
+ * that could widen it.
+ */
+export async function searchVault(tx: HelmTx, q: string, limit: number): Promise<{ entries: VaultEntry[]; hasMore: boolean }> {
+  const escaped = q.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const pattern = `%${escaped}%`;
+  const rows = await tx<Row[]>`
+    SELECT id, name, username, url, notes, has_password, has_totp, updated_at
+    FROM personal_credential
+    WHERE name ILIKE ${pattern} OR username ILIKE ${pattern} OR url ILIKE ${pattern}
+    ORDER BY (name ILIKE ${`${escaped}%`}) DESC, lower(name), id
+    LIMIT ${limit + 1}
+  `;
+  return { entries: rows.slice(0, limit).map(view), hasMore: rows.length > limit };
+}
+
 /* ------------------------------------------------------------------------- *
  * Sealing and opening
  * ------------------------------------------------------------------------- */

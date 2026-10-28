@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 /** What the list promises, and only that: the server holds the key. */
 const VAULT_PROMISE =
   'Only you can see or open these, an administrator included. They belong to no client, never appear in ' +
-  'search or exports, and are deleted if you leave. Encrypted like every Helm secret; each time one is ' +
+  'client search or exports (the top bar’s My passwords search finds them, for you alone), and are deleted if you leave. Encrypted like every Helm secret; each time one is ' +
   'opened it is logged, without its name.';
 
 /**

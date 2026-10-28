@@ -3,6 +3,8 @@ import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 import { search } from '@/lib/search/service';
 import { clientForPath } from '@/lib/search/scope';
+import { searchVault } from '@/lib/personal/vault';
+import { requirePerson } from '@/lib/personal/http';
 
 /**
  * POST /api/search/suggest — what the top bar's search box shows as you type.
@@ -19,17 +21,24 @@ import { clientForPath } from '@/lib/search/scope';
  *
  * The same helm.search() as the full page, capped: these are suggestions, and
  * "See all results" is one click away.
+ *
+ * "MY PASSWORDS" (scope 'personal') searches the signed-in person's own vault
+ * instead, and nothing else. It is a separate scope rather than one more group
+ * in every search, because the vault promises to stay out of client search:
+ * its entries show up only when their owner asks for them, and the owner
+ * policy means nobody else's could match anyway. An API token is refused, as
+ * on every vault route.
  */
 const bodySchema = z.object({
   q: z.string().max(256),
   path: z.string().max(512).default('/'),
-  scope: z.enum(['client', 'all']).default('client'),
+  scope: z.enum(['client', 'all', 'personal']).default('client'),
 });
 
 const SUGGESTION_LIMIT = 8;
 
 export const POST = tenantRoute(
-  async ({ tx, request }) => {
+  async ({ tx, request, identity }) => {
     const body = await readJson(request, (raw) => {
       const parsed = bodySchema.safeParse(raw);
       if (!parsed.success) throw ApiError.invalid('invalid search', { issues: zodIssues(parsed.error) });
@@ -40,6 +49,27 @@ export const POST = tenantRoute(
     const scoped = body.scope === 'client' && client !== null;
     const q = body.q.trim();
     if (q.length === 0) return { client, scoped, groups: [], hasMore: false };
+
+    if (body.scope === 'personal') {
+      requirePerson(identity);
+      const mine = await searchVault(tx, q, SUGGESTION_LIMIT);
+      return {
+        client,
+        scoped: false,
+        hasMore: mine.hasMore,
+        groups: mine.entries.length === 0 ? [] : [{
+          kind: 'personal',
+          label: 'My passwords',
+          hits: mine.entries.map((e) => ({
+            key: `personal_credential:${e.id}`,
+            title: e.name,
+            subtitle: [e.username, e.url].filter(Boolean).join(' · ') || null,
+            organizationName: null,
+            href: `/personal/passwords/${e.id}`,
+          })),
+        }],
+      };
+    }
 
     const results = await search(tx, {
       query: q,
