@@ -20,6 +20,10 @@
  * opening it — rather than every unread row, because an inbox with forty
  * unread and twenty shown should not quietly lose the other twenty.
  *
+ * EVERY ROW CAN BE CLEARED, AND SO CAN ALL OF THEM. The state and the actions
+ * live in useInbox, shared with the Personal page's card, which is the place to
+ * see more than the twenty this shows.
+ *
  * NO POLLING. A bell that polls every thirty seconds is a query per user per
  * thirty seconds forever, on an on-premises box sized for an MSP's technicians,
  * to shave a few minutes off noticing something the fan-out itself takes up to
@@ -27,40 +31,14 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { Bell, ClipboardCheck, FileDown, KeyRound, Settings2, TriangleAlert } from 'lucide-react';
+import { Bell } from 'lucide-react';
 import { useDismissable } from '@/lib/ui/use-dismissable';
-import { formatDateTime } from '@/lib/ui/format';
-import { apiFetch } from '@/lib/ui/api';
-import type { NotificationKind } from '@/lib/notifications/kinds';
-
-interface InboxItem {
-  id: string;
-  kind: NotificationKind;
-  subject: string;
-  href: string | null;
-  organizationId: string | null;
-  organizationName: string | null;
-  occurredAt: string;
-  read: boolean;
-}
-
-/** One icon per kind, so a glance distinguishes a reminder from a reveal. */
-const KIND_ICON: Record<NotificationKind, typeof Bell> = {
-  task_assigned: ClipboardCheck,
-  task_due: ClipboardCheck,
-  export_activity: FileDown,
-  credential_access: KeyRound,
-  expiring_soon: TriangleAlert,
-  operations: Settings2,
-};
+import { useInbox } from '@/components/notifications/use-inbox';
+import { InboxRows, InboxToolbar } from '@/components/notifications/inbox-list';
 
 export function NotificationBell({ unread }: { unread: number }) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<InboxItem[] | null>(null);
-  const [count, setCount] = useState<number | null>(null);
-  const [failed, setFailed] = useState(false);
+  const inbox = useInbox({ items: null, unread: null });
   const container = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
 
@@ -69,50 +47,20 @@ export function NotificationBell({ unread }: { unread: number }) {
   // The server's number until this component has changed it. `?? unread`
   // rather than initialising state from the prop, so a navigation that brings a
   // new count is not ignored by stale state.
-  const shown = count ?? unread;
+  const shown = inbox.unread ?? unread;
+  const items = inbox.items;
 
   async function toggle() {
     const next = !open;
     setOpen(next);
     if (!next) return;
 
-    setFailed(false);
-    const result = await apiFetch<{ notifications?: InboxItem[]; unread?: number } | undefined>(
-      '/api/account/inbox',
-      { headers: { accept: 'application/json' } },
-    );
-    if (!result.ok) {
-      setFailed(true);
-      return;
-    }
-    const list = result.value?.notifications ?? [];
-    setItems(list);
-    setCount(result.value?.unread ?? 0);
+    const list = await inbox.load(20);
+    if (list === null) return;
 
     // Exactly what was shown, not everything. See the header.
     const unseen = list.filter((item) => !item.read).map((item) => item.id);
-    if (unseen.length > 0) await markRead(unseen);
-  }
-
-  async function markRead(ids: string[]) {
-    const result = await apiFetch<{ unread?: number } | undefined>('/api/account/inbox', {
-      method: 'PUT',
-      json: { ids },
-    });
-    // A failed mark-read is not worth an error message: the rows are still
-    // there, still unread, and the next open tries again.
-    if (!result.ok) return;
-    setCount(result.value?.unread ?? 0);
-    // Locally too, so the dots clear without a second fetch.
-    setItems((current) => current?.map(
-      (item) => (ids.includes(item.id) ? { ...item, read: true } : item),
-    ) ?? null);
-    /*
-     * The shell's own count came from the server and is now wrong. Refreshing
-     * is what keeps it right on the NEXT navigation rather than carrying a
-     * stale number until something else happens to re-render the layout.
-     */
-    router.refresh();
+    if (unseen.length > 0) await inbox.markRead(unseen, true);
   }
 
   return (
@@ -148,25 +96,24 @@ export function NotificationBell({ unread }: { unread: number }) {
         <div
           role="menu"
           aria-label="Notifications"
-          className="absolute right-0 z-30 mt-1 w-80 overflow-hidden rounded-md border border-border bg-surface-raised shadow-lg"
+          className="absolute right-0 z-30 mt-1 w-96 max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-border bg-surface-raised shadow-lg"
         >
-          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
             <span className="text-xs font-medium text-ink-faint">Notifications</span>
-            <Link
-              href="/account"
-              onClick={() => setOpen(false)}
-              className="text-xs text-ink-muted underline-offset-2 hover:text-ink hover:underline"
-            >
-              Choose what appears here
-            </Link>
+            <InboxToolbar
+              unread={shown}
+              total={items?.length ?? 0}
+              busy={inbox.busy}
+              onMarkAllRead={() => void inbox.markRead()}
+              onClearAll={() => void inbox.dismiss()}
+            />
           </div>
 
-          {failed ? (
-            <p role="alert" className="px-3 py-3 text-sm text-danger">
-              Could not load your notifications.
-            </p>
-          ) : items === null ? (
-            <p className="px-3 py-3 text-sm text-ink-faint">Loading…</p>
+          {inbox.failed && (
+            <p role="alert" className="px-3 py-2 text-sm text-danger">{inbox.failed}</p>
+          )}
+          {items === null ? (
+            !inbox.failed && <p className="px-3 py-3 text-sm text-ink-faint">Loading…</p>
           ) : items.length === 0 ? (
             /*
              * THE EMPTY STATE SAYS WHICH EMPTY IT IS. "Nothing here" could mean
@@ -185,50 +132,38 @@ export function NotificationBell({ unread }: { unread: number }) {
               </span>
             </div>
           ) : (
-            <ul className="max-h-96 overflow-y-auto py-1">
-              {items.map((item) => {
-                const Icon = KIND_ICON[item.kind] ?? Bell;
-                const body = (
-                  <>
-                    {!item.read && (
-                      <span
-                        aria-hidden
-                        className="mt-1.5 size-1.5 shrink-0 rounded-full bg-brand"
-                      />
-                    )}
-                    {item.read && <span aria-hidden className="mt-1.5 size-1.5 shrink-0" />}
-                    <Icon className="mt-0.5 size-4 shrink-0 text-ink-faint" aria-hidden />
-                    <span className="min-w-0">
-                      <span className="block text-ink">{item.subject}</span>
-                      <span className="block truncate text-xs text-ink-faint">
-                        {item.organizationName ? `${item.organizationName} · ` : ''}
-                        {formatDateTime(item.occurredAt)}
-                      </span>
-                    </span>
-                  </>
-                );
-
-                return (
-                  <li key={item.id}>
-                    {item.href ? (
-                      <Link
-                        href={item.href}
-                        role="menuitem"
-                        onClick={() => setOpen(false)}
-                        className="flex items-start gap-2 px-3 py-2 text-sm hover:bg-surface-sunken"
-                      >
-                        {body}
-                      </Link>
-                    ) : (
-                      // Nowhere to go, so not a link. A menuitem that navigates
-                      // nowhere is worse than plain text.
-                      <div className="flex items-start gap-2 px-3 py-2 text-sm">{body}</div>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
+            /*
+             * Capped by the viewport as well as by 24rem, so on a short window
+             * the list scrolls inside the popover instead of running off the
+             * bottom of the screen where nothing can reach it.
+             */
+            <InboxRows
+              menu
+              items={items}
+              busy={inbox.busy}
+              onMarkRead={(id) => void inbox.markRead([id])}
+              onDismiss={(id) => void inbox.dismiss([id])}
+              onNavigate={() => setOpen(false)}
+              className="max-h-[min(24rem,calc(100vh-10rem))] overflow-y-auto overscroll-contain py-1"
+            />
           )}
+
+          <div className="flex items-center justify-between border-t border-border px-3 py-2">
+            <Link
+              href="/personal#notifications"
+              onClick={() => setOpen(false)}
+              className="text-xs text-ink-muted underline-offset-2 hover:text-ink hover:underline"
+            >
+              See all
+            </Link>
+            <Link
+              href="/account"
+              onClick={() => setOpen(false)}
+              className="text-xs text-ink-muted underline-offset-2 hover:text-ink hover:underline"
+            >
+              Choose what appears here
+            </Link>
+          </div>
         </div>
       )}
     </div>

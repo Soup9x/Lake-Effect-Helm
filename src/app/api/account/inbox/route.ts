@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
-import { clearRead, listInbox, markRead, unreadCount } from '@/lib/notifications/inbox';
+import { clearRead, dismiss, listInbox, markRead, unreadCount } from '@/lib/notifications/inbox';
 
 /**
  * My bell.
@@ -33,10 +33,32 @@ const schema = z.object({
   ids: z.array(z.guid()).max(200).optional(),
 });
 
-export const GET = tenantRoute(async ({ tx }) => ({
-  notifications: await listInbox(tx, 20),
-  unread: await unreadCount(tx),
-}));
+/**
+ * What a clear removes. NO BODY AT ALL is the original meaning — the read ones —
+ * so the bell's older callers keep working; `ids` dismisses exactly those, read
+ * or not; `all` empties the inbox.
+ */
+const clearSchema = z.union([
+  z.object({ ids: z.array(z.guid()).max(200) }).strict(),
+  z.object({ all: z.literal(true) }).strict(),
+  z.object({ read: z.literal(true) }).strict(),
+]);
+
+/** The longest list one GET returns. The retention sweep keeps far fewer. */
+const MAX_LIMIT = 200;
+
+export const GET = tenantRoute(async ({ tx, request }) => {
+  const asked = Number(new URL(request.url).searchParams.get('limit') ?? 20);
+  const limit = Number.isInteger(asked) ? Math.min(Math.max(asked, 1), MAX_LIMIT) : 20;
+  // One more than asked, so the screen knows whether "Show more" has anything
+  // behind it without a count query.
+  const rows = await listInbox(tx, limit + 1);
+  return {
+    notifications: rows.slice(0, limit),
+    more: rows.length > limit,
+    unread: await unreadCount(tx),
+  };
+});
 
 export const PUT = tenantRoute(async ({ tx, request }) => {
   const body = await readJson(request, (raw) => {
@@ -54,16 +76,31 @@ export const PUT = tenantRoute(async ({ tx, request }) => {
 });
 
 /**
- * Empty the read ones.
+ * Clear notifications.
  *
  * Offered because a bell nobody can empty becomes a list people stop looking
- * at. Only the read ones: deleting something unseen would delete the thing the
- * table exists for, and 0700's retention sweep already keeps unread rows far
- * longer than read ones for the same reason.
+ * at. With no body, only the read ones go: deleting something unseen by
+ * accident would delete the thing the table exists for. Dismissing named rows,
+ * or everything, is an explicit choice made on screen, so those take unread
+ * rows too.
  */
-export const DELETE = tenantRoute(async ({ tx }) => ({
-  cleared: await clearRead(tx),
-  unread: await unreadCount(tx),
-}));
+export const DELETE = tenantRoute(async ({ tx, request }) => {
+  const body = request.body === null
+    ? { read: true as const }
+    : await readJson(request, (raw) => {
+      const result = clearSchema.safeParse(raw);
+      if (!result.success) {
+        throw ApiError.invalid('a list of notification ids, or { all: true }', {
+          issues: zodIssues(result.error),
+        });
+      }
+      return result.data;
+    });
+
+  const cleared = 'ids' in body
+    ? await dismiss(tx, body.ids)
+    : 'all' in body ? await dismiss(tx) : await clearRead(tx);
+  return { cleared, unread: await unreadCount(tx) };
+});
 
 export const dynamic = 'force-dynamic';
