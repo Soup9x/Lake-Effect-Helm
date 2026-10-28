@@ -14,13 +14,19 @@
  * RLS. Outside a client only "All clients" exists, and the toggle is not drawn.
  * The choice is remembered per browser; it is a habit, not a fact about a page.
  *
+ * MY PASSWORDS. The key button in the box, or the third chip, switches it to the
+ * signed-in person's own vault and nothing else (the route says why it is its
+ * own scope). Not remembered: a habit of searching your own passwords would
+ * leave the box looking in the wrong place the next time you open Helm, and
+ * the placeholder is the only thing saying so.
+ *
  * Enter on a highlighted suggestion opens it; Enter otherwise opens /search
  * with the same query and the same scope, which is also what "See all
- * results" does.
+ * results" does — or, for My passwords, the My passwords list filtered by it.
  */
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Loader2, Search } from 'lucide-react';
+import { KeyRound, Loader2, Search } from 'lucide-react';
 import { apiFetch } from '@/lib/ui/api';
 import { cn } from '@/lib/ui/cn';
 
@@ -33,7 +39,7 @@ interface SuggestResponse {
   groups: Group[];
 }
 
-type Scope = 'client' | 'all';
+type Scope = 'client' | 'all' | 'personal';
 const SCOPE_KEY = 'helm:search-scope';
 const MIN_LENGTH = 2;
 const DEBOUNCE_MS = 200;
@@ -62,6 +68,7 @@ export function SearchBox() {
 
   const setScope = (next: Scope) => {
     setScopeState(next);
+    if (next === 'personal') return;
     try { window.localStorage.setItem(SCOPE_KEY, next); } catch { /* as above */ }
   };
 
@@ -112,10 +119,12 @@ export function SearchBox() {
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
+  const personal = scope === 'personal';
   const scoped = scope === 'client' && client !== null;
   const flat = groups.flatMap((g) => g.hits);
   const allResultsHref = () => {
     const params = new URLSearchParams({ q: query.trim() });
+    if (personal) return `/personal/passwords?${params.toString()}`;
     if (scoped) params.set('org', client.id);
     return `/search?${params.toString()}`;
   };
@@ -144,12 +153,29 @@ export function SearchBox() {
     }
   };
 
-  const showPanel = open && (query.trim().length >= MIN_LENGTH || client !== null);
+  // Leaving My passwords goes back to whatever the box was on before.
+  const togglePersonal = () => {
+    if (personal) {
+      let stored: Scope = 'client';
+      try { if (window.localStorage.getItem(SCOPE_KEY) === 'all') stored = 'all'; } catch { /* as above */ }
+      setScope(stored);
+    } else {
+      setScope('personal');
+    }
+    setOpen(true);
+  };
+
+  const scopes: Scope[] = client ? ['client', 'all', 'personal'] : ['all', 'personal'];
+  const scopeLabel = (s: Scope) =>
+    s === 'client' ? `This client · ${client?.name ?? ''}` : s === 'all' ? 'All clients' : 'My passwords';
+  // Outside a client, "All clients" is what anything but My passwords means.
+  const current: Scope = personal ? 'personal' : scoped ? 'client' : 'all';
+  const showPanel = open;
   let index = -1;
 
   return (
     <div ref={boxRef} className="relative">
-      <div className="flex h-8 w-44 items-center gap-1.5 rounded-md bg-white/10 px-2 text-nav-ink focus-within:bg-white/15 focus-within:text-nav-ink-active sm:w-64">
+      <div className="flex h-8 w-44 items-center gap-1.5 rounded-md bg-white/10 pl-2 pr-1 text-nav-ink focus-within:bg-white/15 focus-within:text-nav-ink-active sm:w-64">
         {loading ? <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden /> : <Search className="size-4 shrink-0" aria-hidden />}
         <input
           type="search"
@@ -157,10 +183,23 @@ export function SearchBox() {
           onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
-          placeholder={scoped ? `Search ${client.name}` : 'Search all clients'}
-          aria-label="Search"
+          placeholder={personal ? 'Search my passwords' : scoped ? `Search ${client.name}` : 'Search all clients'}
+          aria-label={personal ? 'Search my passwords' : 'Search'}
           className="min-w-0 flex-1 bg-transparent text-sm text-nav-ink-active placeholder:text-nav-ink outline-none"
         />
+        <button
+          type="button"
+          onClick={togglePersonal}
+          aria-pressed={personal}
+          aria-label="Search my passwords"
+          title={personal ? 'Searching my passwords. Click to search clients' : 'Search my passwords'}
+          className={cn(
+            'grid size-6 shrink-0 place-items-center rounded',
+            personal ? 'bg-white/25 text-nav-ink-active' : 'hover:bg-white/15 hover:text-nav-ink-active',
+          )}
+        >
+          <KeyRound className="size-3.5" aria-hidden />
+        </button>
       </div>
 
       {showPanel && (
@@ -168,32 +207,34 @@ export function SearchBox() {
           id="search-suggestions"
           className="absolute right-0 top-10 z-40 w-[min(26rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border bg-surface-raised text-sm shadow-lg"
         >
-          {client && (
-            <fieldset className="flex gap-1 border-b border-border p-2" aria-label="Where to search">
-              {(['client', 'all'] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setScope(s)}
-                  aria-pressed={scope === s}
-                  className={cn(
-                    'min-w-0 truncate rounded-full border px-3 py-1 text-xs',
-                    scope === s
-                      ? 'border-transparent bg-brand font-medium text-on-brand'
-                      : 'border-border text-ink-muted hover:border-border-strong hover:text-ink',
-                  )}
-                >
-                  {s === 'client' ? `This client · ${client.name}` : 'All clients'}
-                </button>
-              ))}
-            </fieldset>
-          )}
+          <fieldset className="flex gap-1 border-b border-border p-2" aria-label="Where to search">
+            {scopes.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setScope(s)}
+                aria-pressed={current === s}
+                className={cn(
+                  'flex min-w-0 items-center gap-1 rounded-full border px-3 py-1 text-xs',
+                  s === 'client' ? 'truncate' : 'shrink-0',
+                  current === s
+                    ? 'border-transparent bg-brand font-medium text-on-brand'
+                    : 'border-border text-ink-muted hover:border-border-strong hover:text-ink',
+                )}
+              >
+                {s === 'personal' && <KeyRound className="size-3" aria-hidden />}
+                <span className="truncate">{scopeLabel(s)}</span>
+              </button>
+            ))}
+          </fieldset>
 
           {query.trim().length < MIN_LENGTH ? (
             <p className="px-3 py-3 text-xs text-ink-faint">Type at least two characters.</p>
           ) : groups.length === 0 ? (
             <p className="px-3 py-3 text-xs text-ink-faint">
-              {loading ? 'Searching…' : `Nothing matches “${query.trim()}”${scoped ? ` in ${client.name}` : ''}.`}
+              {loading
+                ? 'Searching…'
+                : `Nothing matches “${query.trim()}”${personal ? ' in your passwords' : scoped ? ` in ${client.name}` : ''}.`}
             </p>
           ) : (
             <ul className="max-h-96 overflow-y-auto py-1">
@@ -239,7 +280,9 @@ export function SearchBox() {
               onClick={() => go(allResultsHref())}
               className="block w-full border-t border-border px-3 py-2 text-left text-xs font-medium text-brand hover:bg-surface-sunken"
             >
-              {hasMore ? 'See all results' : 'Open the search page'} for “{query.trim()}”
+              {personal
+                ? `Open my passwords matching “${query.trim()}”`
+                : `${hasMore ? 'See all results' : 'Open the search page'} for “${query.trim()}”`}
             </button>
           )}
         </div>
