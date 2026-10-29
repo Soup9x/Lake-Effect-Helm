@@ -185,45 +185,62 @@ describe('JSON exports', () => {
   });
 });
 
-/** A one-file zip, deflated, the shape .1pux and Dashlane's exports have. */
-function zip(name: string, content: string): Uint8Array {
-  const data = deflateRawSync(Buffer.from(content));
-  const nameBytes = Buffer.from(name);
-  const local = Buffer.alloc(30);
-  local.writeUInt32LE(0x04034b50, 0);
-  local.writeUInt16LE(8, 8);
-  local.writeUInt32LE(data.length, 18);
-  local.writeUInt16LE(nameBytes.length, 26);
-  const central = Buffer.alloc(46);
-  central.writeUInt32LE(0x02014b50, 0);
-  central.writeUInt16LE(8, 10);
-  central.writeUInt32LE(data.length, 20);
-  central.writeUInt16LE(nameBytes.length, 28);
-  central.writeUInt32LE(0, 42);
-  const centralAt = local.length + nameBytes.length + data.length;
+/** A zip of deflated files, the shape .1pux, Dashlane's and IT Glue's exports have. */
+function zip(...files: [string, string][]): Uint8Array {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const [name, content] of files) {
+    const data = deflateRawSync(Buffer.from(content));
+    const nameBytes = Buffer.from(name);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt16LE(nameBytes.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt16LE(nameBytes.length, 28);
+    central.writeUInt32LE(offset, 42);
+    locals.push(local, nameBytes, data);
+    centrals.push(central, nameBytes);
+    offset += local.length + nameBytes.length + data.length;
+  }
+  const centralBytes = Buffer.concat(centrals);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(1, 8);
-  end.writeUInt16LE(1, 10);
-  end.writeUInt32LE(central.length + nameBytes.length, 12);
-  end.writeUInt32LE(centralAt, 16);
-  return new Uint8Array(Buffer.concat([local, nameBytes, data, central, nameBytes, end]));
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(centralBytes.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return new Uint8Array(Buffer.concat([...locals, centralBytes, end]));
 }
 
 describe('zip exports', () => {
   it('unpacks a .1pux', async () => {
-    const table = await readPasswordFile(zip('export.data', JSON.stringify({
+    const table = await readPasswordFile(zip(['export.data', JSON.stringify({
       accounts: [{ vaults: [{ attrs: { name: 'V' }, items: [
         { categoryUuid: '005', overview: { title: 'Wi-Fi' }, details: { password: 'pw' } },
       ] }] }],
-    })));
+    })]));
     expect(table.format).toBe('1Password 1PUX');
     expect(mapPasswordRows(table, table.suggested)[0]).toMatchObject({ name: 'Wi-Fi', password: 'pw' });
   });
 
   it('unpacks a zip holding one CSV', async () => {
-    const table = await readPasswordFile(zip('credentials.csv', 'title,username,password\nMail,u,pw'));
+    const table = await readPasswordFile(zip(['credentials.csv', 'title,username,password\nMail,u,pw']));
     expect(table.rows).toEqual([['Mail', 'u', 'pw']]);
+  });
+
+  it('finds passwords.csv in an IT Glue export among its other CSVs', async () => {
+    const table = await readPasswordFile(zip(
+      ['organizations.csv', 'id,name\n1,Acme'],
+      ['passwords.csv', 'organization,name,username,password\nAcme,DC,admin,pw'],
+      ['configurations.csv', 'id,name\n1,DC01'],
+    ));
+    expect(table.rows).toEqual([['Acme', 'DC', 'admin', 'pw']]);
   });
 
   it('reads plain bytes as text', async () => {

@@ -138,7 +138,7 @@ export function suggestMapping(columns: readonly string[]): ColumnMapping {
 // ---------------------------------------------------------------------------
 
 /**
- * Read an uploaded file. Async only for the zip formats, which inflate through
+ * Read an uploaded file. Async only for the zip formats (.1pux, Dashlane, IT Glue), which inflate through
  * DecompressionStream.
  */
 export async function readPasswordFile(
@@ -489,6 +489,8 @@ async function readZip(bytes: Uint8Array, options: { headerless?: boolean }): Pr
 
   const wanted = entries.find((e) => e.name === 'export.data')
     ?? entries.find((e) => /(^|\/)credentials\.csv$/i.test(e.name))
+    // IT Glue's account export: one CSV per kind of record, passwords among them.
+    ?? entries.find((e) => /(^|\/)passwords\.csv$/i.test(e.name))
     ?? (entries.filter((e) => /\.(csv|json)$/i.test(e.name)).length === 1
       ? entries.find((e) => /\.(csv|json)$/i.test(e.name))
       : undefined);

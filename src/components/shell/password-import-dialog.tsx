@@ -51,8 +51,13 @@ interface ImportSummary {
   left_out: number;
 }
 
-/** 1Password's .1pux for a large account runs to a few MB, mostly attachments it does not include. */
+/**
+ * A CSV or JSON export of even a large client is well under this. A zip can be
+ * far bigger — IT Glue's account export carries every attachment beside
+ * passwords.csv — and only the one file inside it is inflated.
+ */
 const MAX_BYTES = 20 * 1024 * 1024;
+const MAX_ZIP_BYTES = 500 * 1024 * 1024;
 const SAMPLE_ROWS = 5;
 
 export function PasswordImportDialog({
@@ -124,8 +129,9 @@ export function PasswordImportDialog({
 
   async function pick(file: File) {
     reset();
-    if (file.size > MAX_BYTES) {
-      setError(`That file is ${Math.round(file.size / 1024 / 1024)}MB. The limit is 20MB.`);
+    const limit = /\.(zip|1pux)$/i.test(file.name) ? MAX_ZIP_BYTES : MAX_BYTES;
+    if (file.size > limit) {
+      setError(`That file is ${Math.round(file.size / 1024 / 1024)}MB. The limit is ${limit / 1024 / 1024}MB.`);
       return;
     }
     setFilename(file.name);
@@ -230,7 +236,7 @@ export function PasswordImportDialog({
               />
               <FieldHint>
                 CSV or JSON from Bitwarden, 1Password (CSV or .1pux), LastPass, Keeper, Dashlane,
-                Proton Pass, KeePass, IT Glue or a browser, or any CSV with a header row.{' '}
+                Proton Pass, KeePass, IT Glue (passwords.csv, or the whole export zip) or a browser, or any CSV with a header row.{' '}
                 <a href={template} download="helm-passwords-template.csv" className="text-brand underline-offset-4 hover:underline">
                   Download a template
                 </a>
