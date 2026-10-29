@@ -49,6 +49,9 @@ import { syncSourceLabel } from '@/lib/integrations/sync-source';
 import { detailFieldsFor, subnetMaskOf } from '@/lib/assets/detail-fields';
 import { ExternalCheckNote, type ExternalCheckState } from '@/components/external-check-note';
 import { readExternalCheckSetting } from '@/lib/external/settings';
+import type { RegistryDetails } from '@/lib/external/rdap';
+import { registrySuggestions } from '@/lib/external/registry-suggestions';
+import { RegistryReview } from '@/components/registry-review';
 
 interface NodeRow {
   id: string; node_type: string; name: string; description: string | null;
@@ -276,15 +279,27 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         ? (await tx<{
             recorded: Date | null; observed: Date | null; checked: Date | null;
             status: string | null; error: string | null;
+            registry: RegistryDetails | null; dismissed: Record<string, unknown> | null;
+            fields: Record<string, unknown>;
           }[]>`
             SELECT expires_at AS recorded, registry_expires_at AS observed,
                    last_checked_at AS checked, last_check_status::text AS status,
-                   last_check_error AS error
+                   last_check_error AS error,
+                   -- 1140: the rest of the registry's answer, and what it is
+                   -- compared with. Dates as text, so a recorded day is
+                   -- compared as a day and not shifted by a time zone.
+                   registry_details AS registry, registry_dismissed AS dismissed,
+                   jsonb_build_object(
+                     'registrar', registrar, 'registered_at', registered_at::text,
+                     'expires_at', expires_at::text, 'nameservers', nameservers,
+                     'transfer_locked', transfer_locked, 'dnssec_enabled', dnssec_enabled
+                   ) AS fields
             FROM domain WHERE id = ${node.id}::uuid
           `)[0] ?? null
         : (await tx<{
             recorded: Date | null; observed: Date | null; checked: Date | null;
             status: string | null; error: string | null;
+            registry?: undefined; dismissed?: undefined; fields?: undefined;
           }[]>`
             SELECT not_after AS recorded, observed_not_after AS observed,
                    last_checked_at AS checked, last_check_status::text AS status,
@@ -449,6 +464,10 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
         recordedLabel: node.node_type === 'domain' ? 'Expires' : 'Not after',
       };
   const canWrite = !isClientRole(identity.roleKey);
+  // What the registry says beyond the expiry, field by field (1140).
+  const registry = checkRow?.fields
+    ? registrySuggestions(checkRow.fields, checkRow.registry ?? null, checkRow.dismissed ?? null)
+    : [];
 
   /*
    * THE CARDS, named so each kind of entry can lay them out its own way:
@@ -471,6 +490,15 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       ? [{ key: s.external_type, source, at: formatDateTime(s.last_synced_at.toISOString()) }]
       : [];
   });
+  /*
+   * The domain checker keeps a domain current the way a sync does, so it gets
+   * the same row — but only once it has actually learned something, and only
+   * while checking is on: a domain checked last spring and never since is not
+   * "synced".
+   */
+  if (node.node_type === 'domain' && checkSetting?.domainsEnabled && checkRow?.checked) {
+    syncedRows.push({ key: 'domain_checker', source: 'Domain checker', at: formatDateTime(checkRow.checked) });
+  }
   const syncedBadges = syncedRows.map(({ key, source, at }) => (
     <Badge key={key} tone="info" title={`Kept current by the ${source} sync`}>
       <Cloud className="size-3" aria-hidden />
@@ -606,7 +634,11 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
    * checking is switched off, since "off" is the sentence that stops
    * somebody hunting a fault that does not exist.
    */
-  const checkNote = checkState && <ExternalCheckNote state={checkState} />;
+  const checkNote = checkState && (
+    <ExternalCheckNote state={checkState} expiryReviewed={registry.some((r) => r.key === 'expires_at')}>
+      <RegistryReview nodeId={node.id} suggestions={registry} canWrite={canWrite} />
+    </ExternalCheckNote>
+  );
 
   const dependenciesCard = (
     <Card>
@@ -1213,6 +1245,8 @@ async function detailFor(
     'totp_algorithm', 'totp_digits', 'totp_period_seconds', 'totp_issuer', 'totp_account', 'totp_secret_kind',
     'next_check_at', 'last_checked_at', 'last_check_status', 'last_check_error',
     'registry_expires_at', 'observed_not_after', 'observed_fingerprint_sha256',
+    // 1140: listed field by field by RegistryReview, never as a blob of JSON.
+    'registry_details', 'registry_dismissed',
   ]);
   /*
    * Person ids go the same way as secret ids: a raw uuid in a detail list is

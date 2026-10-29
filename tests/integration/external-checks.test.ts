@@ -25,6 +25,7 @@ import { withTenant, db } from '../../src/lib/db/client';
 import { useSessionResolver, type SessionUser } from '../../src/lib/auth/session';
 import { actor, connectPools, disconnectPools, IDS, resetDatabase, superuserSql } from './harness';
 import { GET as getSetting, PUT as putSetting } from '../../src/app/api/tenant/external-checks/route';
+import { POST as postRegistry } from '../../src/app/api/assets/[nodeId]/registry/route';
 import { INTERVAL_MAX_HOURS, INTERVAL_MIN_HOURS } from '../../src/lib/external/settings';
 import { externalChecksJob } from '../../src/workers/external-checks';
 import { FakeRdap, FakeTlsHost, type RdapMode } from '../support/fake-external';
@@ -156,7 +157,10 @@ afterEach(async () => {
     await sql`DELETE FROM external_check_setting`;
     await sql`
       UPDATE domain SET registry_expires_at = NULL, last_checked_at = NULL,
-        next_check_at = NULL, last_check_status = NULL, last_check_error = NULL
+        next_check_at = NULL, last_check_status = NULL, last_check_error = NULL,
+        registry_details = NULL, registry_dismissed = NULL,
+        registrar = NULL, registered_at = NULL, nameservers = NULL,
+        transfer_locked = NULL, dnssec_enabled = false, expires_at = current_date + 200
     `;
     await sql`
       UPDATE ssl_certificate SET observed_not_after = NULL, observed_fingerprint_sha256 = NULL,
@@ -604,5 +608,111 @@ describe('turning it on', () => {
     expect(result.counts?.domains, 'the job should now have a domain to check').toBe(1);
     expect((await domainRow()).registry_expires_at?.toISOString())
       .toBe('2031-01-01T00:00:00.000Z');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('what the registry says beyond the expiry (1140)', () => {
+  const asAdmin = () => { currentUser = USERS.admin; };
+  const asClientViewer = () => { currentUser = USERS.viewer; };
+  const verdict = (payload: unknown) => postRegistry(
+    new NextRequest(new Request(`http://helm.test/api/assets/${IDS.domain}/registry`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    })),
+    { params: Promise.resolve({ nodeId: IDS.domain }) },
+  );
+  const recorded = () => su((sql) => sql<{
+    registrar: string | null; nameservers: string[] | null; transfer_locked: boolean | null;
+    dnssec_enabled: boolean; registered_at: string | null; expires_at: string | null;
+    registry_details: Record<string, unknown> | null; registry_dismissed: Record<string, unknown> | null;
+  }[]>`
+    SELECT registrar, nameservers, transfer_locked, dnssec_enabled,
+           registered_at::text, expires_at::text, registry_details, registry_dismissed
+    FROM domain WHERE id = ${IDS.domain}::uuid
+  `).then((rows) => rows[0]!);
+
+  it('keeps the whole answer as a suggestion, and changes nothing recorded', async () => {
+    const service = await rdap({ expiresAt: '2029-09-09T00:00:00Z' });
+    await enable({ domains: true, rdap: service.baseUrl });
+    await run();
+
+    const after = await recorded();
+    expect(after.registry_details).toMatchObject({
+      registrar: 'Example Registrar, LLC',
+      registered_at: '2020-01-01',
+      expires_at: '2029-09-09',
+      nameservers: ['ns1.example-dns.test', 'ns2.example-dns.test'],
+      transfer_locked: true,
+      dnssec_enabled: true,
+    });
+    expect(after.registrar, 'nothing is applied until a person says so').toBeNull();
+    expect(after.nameservers).toBeNull();
+    expect(after.dnssec_enabled).toBe(false);
+  });
+
+  it('keeps the details when the registry publishes no expiry', async () => {
+    const service = await rdap({ mode: 'no-expiry-event' });
+    await enable({ domains: true, rdap: service.baseUrl });
+    await run();
+    expect((await domainRow()).status).toBe('unsupported');
+    expect((await recorded()).registry_details).toMatchObject({ registered_at: '2020-01-01' });
+  });
+
+  it('applies the stored values a person chose, as their change', async () => {
+    const service = await rdap({ expiresAt: '2029-09-09T00:00:00Z' });
+    await enable({ domains: true, rdap: service.baseUrl });
+    await run();
+
+    asAdmin();
+    const { status, payload } = await read(await verdict({ apply: ['registrar', 'nameservers', 'expires_at'] }));
+    expect(status).toBe(200);
+    expect(payload.applied).toEqual(['registrar', 'nameservers', 'expires_at']);
+
+    const after = await recorded();
+    expect(after.registrar).toBe('Example Registrar, LLC');
+    expect(after.nameservers).toEqual(['ns1.example-dns.test', 'ns2.example-dns.test']);
+    expect(after.expires_at, 'and the alerts follow, since they read the recorded date').toBe('2029-09-09');
+    expect(after.transfer_locked, 'a field nobody named is untouched').toBeNull();
+
+    const [change] = await su((sql) => sql<{ changes: Record<string, unknown>; actor_id: string | null }[]>`
+      SELECT changes, actor_id FROM entity_change
+      WHERE entity_id = ${IDS.domain}::uuid ORDER BY id DESC LIMIT 1
+    `);
+    expect(Object.keys(change!.changes)).toEqual(expect.arrayContaining(['registrar', 'nameservers', 'expires_at']));
+    expect(change!.actor_id, 'recorded as the person who verified it').toBe(IDS.admin1);
+    expect(Object.keys(change!.changes), 'the suggestion itself is not history')
+      .not.toContain('registry_details');
+  });
+
+  it('remembers "keep mine" for that value, and forgets it once applied', async () => {
+    const service = await rdap();
+    await enable({ domains: true, rdap: service.baseUrl });
+    await run();
+
+    asAdmin();
+    const kept = await read(await verdict({ keep: ['registrar'] }));
+    expect(kept.status, kept.raw).toBe(200);
+    expect((await recorded()).registry_dismissed).toEqual({ registrar: 'Example Registrar, LLC' });
+    expect((await recorded()).registrar).toBeNull();
+
+    expect((await read(await verdict({ apply: ['registrar'] }))).status).toBe(200);
+    expect((await recorded()).registry_dismissed).toBeNull();
+  });
+
+  it('refuses a field the registry did not fill, or one it never mentioned', async () => {
+    asAdmin();
+    expect((await read(await verdict({ apply: ['domain_name'] }))).status).toBe(400);
+    // No check has run, so the registry has said nothing at all.
+    expect((await read(await verdict({ apply: ['registrar'] }))).status).toBe(409);
+  });
+
+  it('is not for a client viewer', async () => {
+    const service = await rdap();
+    await enable({ domains: true, rdap: service.baseUrl });
+    await run();
+    asClientViewer();
+    expect((await read(await verdict({ apply: ['registrar'] }))).status).toBe(403);
+    expect((await recorded()).registrar).toBeNull();
   });
 });
