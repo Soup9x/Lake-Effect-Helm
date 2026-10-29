@@ -30,6 +30,7 @@ interface NodeRow {
   device_type: string;
   pos_x: number | null;
   pos_y: number | null;
+  color: string | null;
 }
 
 export const GET = tenantRoute(
@@ -41,8 +42,10 @@ export const GET = tenantRoute(
 
     const [diagram] = await tx<{
       id: string; name: string; organization_id: string; site_id: string | null; site_name: string | null;
+      canvas_width: number | null; canvas_height: number | null;
     }[]>`
-      SELECT d.id, d.name, d.organization_id, d.site_id, s.name AS site_name
+      SELECT d.id, d.name, d.organization_id, d.site_id, s.name AS site_name,
+             d.canvas_width, d.canvas_height
       FROM network_diagram d LEFT JOIN site s ON s.id = d.site_id AND s.deleted_at IS NULL
       WHERE d.id = ${diagramId}::uuid
     `;
@@ -56,15 +59,18 @@ export const GET = tenantRoute(
                     ELSE coalesce(a.name, t.label) END AS label,
                CASE WHEN t.asset_node_id IS NOT NULL AND a.id IS NULL THEN NULL
                     ELSE coalesce(host(d.primary_ip), t.ip_address) END AS ip_address,
-               t.subnet, t.device_type::text AS device_type, t.pos_x, t.pos_y
+               t.subnet, t.device_type::text AS device_type, t.pos_x, t.pos_y, t.color
         FROM topology_node t
         LEFT JOIN asset_node a ON a.id = t.asset_node_id
         LEFT JOIN device d ON d.id = a.id
         WHERE t.diagram_id = ${diagramId}::uuid
         ORDER BY t.created_at
       `,
-      tx<{ id: string; from_node_id: string; to_node_id: string; label: string | null }[]>`
-        SELECT id, from_node_id, to_node_id, label
+      tx<{
+        id: string; from_node_id: string; to_node_id: string; label: string | null;
+        line_style: string; arrow: string; color: string | null;
+      }[]>`
+        SELECT id, from_node_id, to_node_id, label, line_style, arrow, color
         FROM topology_link
         WHERE diagram_id = ${diagramId}::uuid
         ORDER BY created_at
@@ -79,7 +85,10 @@ export const GET = tenantRoute(
     ]);
 
     return {
-      diagram: { id: diagram.id, name: diagram.name, siteId: diagram.site_id, siteName: diagram.site_name },
+      diagram: {
+        id: diagram.id, name: diagram.name, siteId: diagram.site_id, siteName: diagram.site_name,
+        canvasWidth: diagram.canvas_width, canvasHeight: diagram.canvas_height,
+      },
       nodes: nodes.map((n) => ({
         id: n.id,
         // Only for an entry the reader can open: the id of one they cannot is
@@ -91,12 +100,16 @@ export const GET = tenantRoute(
         deviceType: n.device_type,
         posX: n.pos_x,
         posY: n.pos_y,
+        color: n.color,
       })),
       links: links.map((l) => ({
         id: l.id,
         fromNodeId: l.from_node_id,
         toNodeId: l.to_node_id,
         label: l.label,
+        lineStyle: l.line_style,
+        arrow: l.arrow,
+        color: l.color,
       })),
       configurations: configurations.map((c) => ({
         id: c.id,
