@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
+import { DIAGRAM_COLORS } from '@/lib/topology/style';
 
 /**
  * PATCH and DELETE one box.
@@ -23,6 +24,7 @@ const patchSchema = z
       .enum(['switch', 'router', 'firewall', 'server', 'access_point', 'generic'])
       .optional(),
     assetNodeId: z.guid().nullable().optional(),
+    color: z.enum(DIAGRAM_COLORS).nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'nothing to change' })
   .refine((v) => (v.posX === undefined) === (v.posY === undefined), {
@@ -70,7 +72,8 @@ export const PATCH = tenantRoute(
           subnet      = CASE WHEN ${body.subnet !== undefined} THEN ${body.subnet ?? null} ELSE subnet END,
           device_type = COALESCE(${body.deviceType ?? null}::topology_device_type, device_type),
           asset_node_id = CASE WHEN ${body.assetNodeId !== undefined}
-                               THEN ${body.assetNodeId ?? null}::uuid ELSE asset_node_id END
+                               THEN ${body.assetNodeId ?? null}::uuid ELSE asset_node_id END,
+          color       = CASE WHEN ${body.color !== undefined} THEN ${body.color ?? null} ELSE color END
         WHERE id = ${nodeId}::uuid AND diagram_id = ${diagramId}::uuid
         RETURNING id
       `;

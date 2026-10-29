@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
+import { CANVAS_LIMITS } from '@/lib/topology/style';
 
 const patchSchema = z
   .object({
@@ -10,6 +11,9 @@ const patchSchema = z
     networkId: z.guid().nullable().optional(),
     isInternalOnly: z.boolean().optional(),
     archived: z.boolean().optional(),
+    /** The canvas size somebody dragged it to (1190); null back to the default. */
+    canvasWidth: z.number().int().min(CANVAS_LIMITS.minW).max(CANVAS_LIMITS.max).nullable().optional(),
+    canvasHeight: z.number().int().min(CANVAS_LIMITS.minH).max(CANVAS_LIMITS.max).nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
 
@@ -21,7 +25,7 @@ function diagramIdOf(params: Record<string, string>): string {
 
 /**
  * PATCH /api/diagrams/[diagramId] — rename, re-describe, re-file, archive or
- * restore a diagram.
+ * restore a diagram, or resize its canvas.
  *
  * An absent field is left alone and an explicit null clears it, the shape
  * PATCH /api/sites uses. Archiving keeps every box and line; the diagram leaves
@@ -50,6 +54,10 @@ export const PATCH = tenantRoute(
           network_id       = CASE WHEN ${body.networkId !== undefined}
                                   THEN ${body.networkId ?? null}::uuid ELSE network_id END,
           is_internal_only = COALESCE(${body.isInternalOnly ?? null}::boolean, is_internal_only),
+          canvas_width     = CASE WHEN ${body.canvasWidth !== undefined}
+                                  THEN ${body.canvasWidth ?? null}::integer ELSE canvas_width END,
+          canvas_height    = CASE WHEN ${body.canvasHeight !== undefined}
+                                  THEN ${body.canvasHeight ?? null}::integer ELSE canvas_height END,
           archived_at      = ${body.archived === undefined
             ? tx`archived_at`
             : body.archived ? tx`coalesce(archived_at, now())` : tx`NULL`},
