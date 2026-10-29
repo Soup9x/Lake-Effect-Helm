@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Lake Effect Helm",
   "short_name": "Helm",
-  "version": "0.4.0",
-  "description": "Look up, fill and copy credentials from your Lake Effect Helm server for the site you are on.",
+  "version": "0.5.0",
+  "description": "Look up, fill, save and copy credentials from your Lake Effect Helm server for the site you are on.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon-16.png",
@@ -27,12 +27,38 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["activeTab", "alarms", "clipboardWrite", "offscreen", "scripting", "storage"],
-  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "clipboardWrite",
+    "offscreen",
+    "scripting",
+    "storage"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
   "commands": {
     "_execute_action": {
-      "suggested_key": { "default": "Ctrl+Shift+L", "mac": "Command+Shift+L" },
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
       "description": "Open Helm for this site"
     }
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "menu.html",
+        "notify.html"
+      ],
+      "matches": [
+        "https://*/*"
+      ],
+      "use_dynamic_url": true
+    }
+  ]
 }

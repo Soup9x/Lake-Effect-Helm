@@ -26,18 +26,25 @@ const manifest = JSON.parse(readFileSync(resolve(source, 'manifest.json'), 'utf8
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 
-await build({
-  entryPoints: ['background', 'popup', 'options', 'offscreen'].map((name) => resolve(source, `src/${name}.ts`)),
+const common = {
   outdir: out,
   bundle: true,
-  format: 'esm',
   platform: 'browser',
   target: 'chrome116',
   sourcemap: false,
   minify: false,
   legalComments: 'none',
   logLevel: 'info',
+};
+
+await build({
+  ...common,
+  entryPoints: ['background', 'popup', 'options', 'offscreen', 'menu', 'notify'].map((name) => resolve(source, `src/${name}.ts`)),
+  format: 'esm',
 });
+
+// A registered content script is a classic script, not a module.
+await build({ ...common, entryPoints: [resolve(source, 'src/content.ts')], format: 'iife' });
 
 cpSync(resolve(source, 'manifest.json'), resolve(out, 'manifest.json'));
 cpSync(resolve(source, 'static'), out, { recursive: true });

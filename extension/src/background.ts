@@ -1,6 +1,8 @@
 /**
  * The service worker: finishing a pairing, renewing the token, clearing the
- * clipboard after a copy, and locking after the idle timeout (lock.ts).
+ * clipboard after a copy, the timeout (lock or sign out, lock.ts), and the
+ * in-page features: the icon in sign-in fields and the save prompt
+ * (content.ts, inpage.ts).
  *
  * PAIRING. Settings opens Helm's pairing page in a tab and records which tab
  * and which random state (store.ts, PendingPairing). Each time that tab
@@ -11,9 +13,10 @@
  * that origin before storing the pairing and closing the tab.
  */
 import { PAIR_MESSAGE_TYPE, type PairMessage } from '../../src/lib/extension/pairing-protocol';
-import { renewIfDue } from './api';
-import { clearLock, lockIfIdle } from './lock';
-import { getPending, getSettings, promotePendingKey, setPairing, setPending } from './store';
+import { renewIfDue, signOut } from './api';
+import { clearMatches, forgetTab, handleInPage } from './inpage';
+import { clearLock, lockIfIdle, noteActivity } from './lock';
+import { getPending, getServer, getSettings, promotePendingKey, setPairing, setPending } from './store';
 
 const CLEAR_ALARM = 'helm-clear-clipboard';
 const RENEW_ALARM = 'helm-renew';
@@ -48,16 +51,19 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  forgetTab(tabId);
   void getPending().then(async (pending) => {
     if (pending?.tabId === tabId) await setPending(null);
   });
 });
 
-chrome.runtime.onMessage.addListener((request: { kind?: string; message?: PairMessage; seconds?: number }, sender) => {
+chrome.runtime.onMessage.addListener((request: { kind?: string; message?: PairMessage; seconds?: number }, sender, reply) => {
   if (request.kind === 'helm-paired' && request.message) {
     void finishPairing(request.message, sender);
   } else if (request.kind === 'helm-copied') {
     void scheduleClear();
+  } else {
+    return handleInPage(request, sender, reply);
   }
   return false;
 });
@@ -80,6 +86,7 @@ async function finishPairing(message: PairMessage, sender: chrome.runtime.Messag
     label: pending.label,
   });
   await setPending(null);
+  await noteActivity();
   await chrome.tabs.remove(pending.tabId).catch(() => {});
 }
 
@@ -118,9 +125,51 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   } else if (alarm.name === RENEW_ALARM) {
     void renewIfDue();
   } else if (alarm.name === IDLE_ALARM) {
-    void lockIfIdle();
+    void lockIfIdle().then((due) => (due === 'signout' ? signOut() : undefined));
   }
 });
+
+/* ------------------------------------------------------------------------- *
+ * The in-page script: registered while the icon or the save prompt is on and
+ * the person has given the extension https pages, on every https page except
+ * Helm's own.
+ * ------------------------------------------------------------------------- */
+
+const CONTENT_ID = 'helm-content';
+const ALL_HTTPS = { origins: ['https://*/*'] };
+
+async function syncContentScript(): Promise<void> {
+  const [settings, server, granted] = await Promise.all([
+    getSettings(), getServer(), chrome.permissions.contains(ALL_HTTPS),
+  ]);
+  const want = granted && (settings.inlineMenu || settings.offerToSave);
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [CONTENT_ID] });
+  if (!want) {
+    if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [CONTENT_ID] });
+    return;
+  }
+  const script: chrome.scripting.RegisteredContentScript = {
+    id: CONTENT_ID,
+    js: ['content.js'],
+    matches: ['https://*/*'],
+    ...(server ? { excludeMatches: [`${server}/*`] } : {}),
+    allFrames: true,
+    runAt: 'document_idle',
+    persistAcrossSessions: true,
+  };
+  if (existing.length) await chrome.scripting.updateContentScripts([script]);
+  else await chrome.scripting.registerContentScripts([script]);
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && (changes.settings || changes.server)) {
+    void syncContentScript().catch((error: unknown) => console.warn('helm: could not register the page script', error));
+  }
+  // Locked, unlocked, paired or signed out: what the icons show changes.
+  if ((area === 'session' && changes.unlocked) || (area === 'local' && changes.pairing)) clearMatches();
+});
+chrome.permissions.onAdded.addListener(() => void syncContentScript());
+chrome.permissions.onRemoved.addListener(() => void syncContentScript());
 
 /* ------------------------------------------------------------------------- *
  * Renewal: once a day, and whenever the browser starts.
@@ -129,10 +178,20 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.alarms.create(RENEW_ALARM, { periodInMinutes: 24 * 60 });
   void chrome.alarms.create(IDLE_ALARM, { periodInMinutes: 1 });
+  void syncContentScript();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   void chrome.alarms.create(RENEW_ALARM, { periodInMinutes: 24 * 60 });
   void chrome.alarms.create(IDLE_ALARM, { periodInMinutes: 1 });
-  void renewIfDue();
+  void (async () => {
+    // "Sign out when the browser restarts", or unused past the timeout since.
+    const settings = await getSettings();
+    const due = await lockIfIdle();
+    if (settings.timeoutAction === 'signout' && (settings.timeoutMinutes === 0 || due === 'signout')) {
+      await signOut();
+      return;
+    }
+    await renewIfDue();
+  })();
 });

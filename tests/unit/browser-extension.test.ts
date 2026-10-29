@@ -11,6 +11,7 @@ import { canonicalRequest, EMPTY_BODY_SHA256 } from '../../src/lib/extension/sig
 import { parseDevicePublicKey, verifyDeviceSignature } from '../../src/lib/auth/device-signature';
 import { formatFingerprint } from '../../src/lib/extension/pairing';
 import { normaliseServer } from '../../extension/src/server';
+import { extensionMayCall } from '../../src/lib/extension/routes';
 
 describe('working out the site', () => {
   it('normalises the host and finds its registrable domain', () => {
@@ -109,5 +110,29 @@ describe('the Helm address the extension accepts', () => {
     expect(normaliseServer('http://helm.example.com')).toBeNull();
     expect(normaliseServer('http://localhost:3000')).toBe('http://localhost:3000');
     expect(normaliseServer('')).toBeNull();
+  });
+});
+
+describe('the routes an extension token reaches (1200)', () => {
+  const id = '0f0e0d0c-0b0a-4908-8706-050403020100';
+
+  it('reaches what the extension calls', () => {
+    expect(extensionMayCall('POST', '/api/extension/match')).toBe(true);
+    expect(extensionMayCall('post', '/api/extension/logins')).toBe(true);
+    expect(extensionMayCall('POST', '/api/extension/logins/update')).toBe(true);
+    expect(extensionMayCall('GET', '/api/extension/destinations')).toBe(true);
+    expect(extensionMayCall('POST', `/api/secrets/${id}/reveal`)).toBe(true);
+    expect(extensionMayCall('POST', `/api/personal/vault/${id}/code`)).toBe(true);
+  });
+
+  it('reaches nothing else, whatever its scopes would allow', () => {
+    expect(extensionMayCall('POST', `/api/secrets/${id}/rotate`)).toBe(false);
+    expect(extensionMayCall('POST', '/api/secrets')).toBe(false);
+    expect(extensionMayCall('POST', '/api/assets')).toBe(false);
+    expect(extensionMayCall('DELETE', `/api/assets/${id}`)).toBe(false);
+    expect(extensionMayCall('GET', `/api/secrets/${id}/reveal`)).toBe(false);
+    expect(extensionMayCall('POST', `/api/secrets/${id}/reveal/extra`)).toBe(false);
+    expect(extensionMayCall('POST', '/api/extension/installs')).toBe(false);
+    expect(extensionMayCall('POST', `/api/personal/vault/${id}/reveal/../../x`)).toBe(false);
   });
 });

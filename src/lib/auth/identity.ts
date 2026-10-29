@@ -19,6 +19,7 @@ import { withoutTenantContext } from '../db/client';
 import { ApiError } from '../api/errors';
 import { bearerFrom, verifyToken, type TokenKind, type TokenRejection } from './tokens';
 import { verifyDeviceSignature } from './device-signature';
+import { extensionMayCall } from '../extension/routes';
 import { getSessionUser } from './session';
 import { isIP } from 'node:net';
 import { envInt } from '../env';
@@ -84,6 +85,11 @@ async function resolveTokenIdentity(
     if (!signed.ok) {
       logRejection(`device_signature_${signed.reason}`);
       throw ApiError.unauthenticated('invalid API token');
+    }
+    // And only to the routes the extension itself calls (1200): its scopes
+    // include writing credentials, which every write route would accept.
+    if (!extensionMayCall(request.method, request.nextUrl.pathname)) {
+      throw ApiError.forbidden('the browser extension cannot call this');
     }
   }
 

@@ -13,10 +13,15 @@
           <h1>Helm</h1>
           <p id="tenant" class="bar-sub"></p>
         </div>
+        <button id="add" type="button" class="icon-button on-brand" title="Add a login" aria-label="Add a login" hidden></button>
         <button id="lock" type="button" class="icon-button on-brand" title="Lock now" aria-label="Lock now" hidden></button>
         <button id="settings" type="button" class="icon-button on-brand" title="Settings" aria-label="Settings"></button>
       </div>
-      <label class="search">
+      <div id="view-head" class="view-head" hidden>
+        <button id="back" type="button" class="icon-button on-brand" title="Back" aria-label="Back"></button>
+        <p id="view-title" class="view-title"></p>
+      </div>
+      <label class="search" id="search-box">
         <span class="search-icon" aria-hidden="true"></span>
         <input id="search" type="search" placeholder="Search credentials" autocomplete="off" spellcheck="false" aria-label="Search credentials" />
       </label>

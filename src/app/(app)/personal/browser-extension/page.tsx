@@ -30,7 +30,7 @@ export default async function PersonalBrowserExtensionPage() {
     <>
       <PageHeader
         title="Browser extension"
-        description="Fill and copy credentials from Chrome, Edge or Brave, for the site you are on."
+        description="Fill, save and copy credentials from Chrome, Edge or Brave, for the site you are on."
         trail={[{ label: 'Personal', href: '/personal' }]}
       />
       <PageBody>
@@ -55,8 +55,9 @@ export default async function PersonalBrowserExtensionPage() {
                   <p className="text-ink-muted">
                     One download for Chrome, Edge and Brave. It shows the credentials Helm has for the
                     site you are on and searches the rest. Click a credential to fill the sign-in form, or
-                    copy its username, standard password or one-time code. Elevated and critical passwords
-                    stay in Helm. Every fill and copy is audited.
+                    copy its username, standard password or one-time code. It can also show Helm in sign-in
+                    fields, offer to save a login after you sign in, and update a password that changed.
+                    Elevated and critical passwords stay in Helm. Every fill, copy and save is audited.
                   </p>
                   <div className="flex flex-wrap items-center gap-3">
                     <Button asChild variant="primary">
@@ -86,7 +87,7 @@ export default async function PersonalBrowserExtensionPage() {
                       <code className="rounded bg-surface-sunken px-1">edge://extensions</code>, turn on{' '}
                       <strong>Developer mode</strong>, choose <strong>Load unpacked</strong> and pick the folder.
                     </li>
-                    <li>Pin the Helm icon to the toolbar, right-click it and choose <strong>Options</strong>.</li>
+                    <li>Pin the Helm icon to the toolbar and click it. Until it is paired, it opens on its settings.</li>
                     <li>
                       Enter this Helm&rsquo;s address,{' '}
                       <code className="rounded bg-surface-sunken px-1">{origin}</code>, save, and allow
@@ -100,7 +101,9 @@ export default async function PersonalBrowserExtensionPage() {
                   </ol>
                   <p className="mt-3 text-xs text-ink-muted">
                     To update, download the new version, unzip it over the same folder, and press the
-                    reload button on the extension in the extensions page. Your pairing is kept.
+                    reload button on the extension in the extensions page. Your pairing is kept. A browser
+                    paired before version 0.5.0 is paired again (gear, then <strong>Pair again</strong>) to
+                    save logins.
                   </p>
                 </CardContent>
               </Card>

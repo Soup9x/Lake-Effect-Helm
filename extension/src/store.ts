@@ -9,8 +9,10 @@
  *                           A CryptoKey cannot be put in chrome.storage, which
  *                           only holds JSON.
  *   chrome.storage.session  a pairing in progress: which tab, which state;
- *                           and, with a lock on, the unlocked token (lock.ts).
- *                           In memory, gone when the browser closes.
+ *                           with a lock on, the unlocked token (lock.ts); and
+ *                           a login just typed into a page, until the person
+ *                           answers the save prompt (capture.ts). In memory,
+ *                           gone when the browser closes.
  *
  * The token is stored, and that is acceptable only because it is half a
  * credential: Helm refuses it on any request not signed by the device key.
@@ -25,13 +27,36 @@ export interface Pairing {
   label: string;
 }
 
+export type TimeoutAction = 'lock' | 'signout';
+
 export interface Settings {
   /** Seconds before a copied password is cleared from the clipboard; 0 is never. */
   clearClipboardSeconds: number;
   theme: Theme;
+  /**
+   * Minutes unused before the timeout action; 0 is when the browser restarts,
+   * and -1 never (only for signing out: a lock always locks on a restart).
+   */
+  timeoutMinutes: number;
+  /** Lock needs a PIN or password (lock.ts); signing out unpairs the browser. */
+  timeoutAction: TimeoutAction;
+  /** The Helm icon in sign-in fields, and its list of logins (content.ts). */
+  inlineMenu: boolean;
+  /** Offering to save a new login, and to update a changed password, after a sign-in. */
+  offerToSave: boolean;
+  /** Sites the person said never to offer a save on, by host. */
+  neverSave: string[];
 }
 
-export const DEFAULT_SETTINGS: Settings = { clearClipboardSeconds: 30, theme: 'system' };
+export const DEFAULT_SETTINGS: Settings = {
+  clearClipboardSeconds: 30,
+  theme: 'system',
+  timeoutMinutes: -1,
+  timeoutAction: 'signout',
+  inlineMenu: false,
+  offerToSave: false,
+  neverSave: [],
+};
 
 export interface PendingPairing {
   state: string;
@@ -66,14 +91,20 @@ export async function setPairing(pairing: Pairing): Promise<void> {
 
 /** Forget the pairing, and any lock on it (lock.ts), whose sealed token was its. */
 export async function clearPairing(): Promise<void> {
-  await chrome.storage.local.remove(['pairing', 'lock']);
+  await chrome.storage.local.remove(['pairing', 'lock', 'lastActive']);
   await chrome.storage.session.remove('unlocked');
   await deleteKey('device');
 }
 
 export async function getSettings(): Promise<Settings> {
-  const { settings } = (await chrome.storage.local.get('settings')) as LocalShape;
-  return { ...DEFAULT_SETTINGS, ...(settings ?? {}) };
+  const { settings, lock } = (await chrome.storage.local.get(['settings', 'lock'])) as LocalShape & {
+    lock?: { idleMinutes?: number };
+  };
+  // Before 0.5.0 the idle timeout lived with the lock and always locked.
+  const fromLock: Partial<Settings> = lock && settings?.timeoutAction === undefined
+    ? { timeoutAction: 'lock', timeoutMinutes: lock.idleMinutes ?? 0 }
+    : {};
+  return { ...DEFAULT_SETTINGS, ...fromLock, ...(settings ?? {}) };
 }
 
 /** Changes some settings and keeps the rest. */

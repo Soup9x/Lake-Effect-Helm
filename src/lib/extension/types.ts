@@ -55,6 +55,8 @@ export interface ExtensionMe {
   tenantId: string;
   tenantName: string;
   expiresAt: string;
+  /** Whether this pairing may save and update logins (1200); false for one paired before. */
+  canSave: boolean;
 }
 
 export interface ExtensionPairing {
@@ -63,4 +65,31 @@ export interface ExtensionPairing {
   expiresAt: string;
   tenantName: string;
   keySha256: string;
+}
+
+/** Where the extension may save a login: the person's own vault, or a client and one of its sites. */
+export interface ExtensionDestinations {
+  /**
+   * False when this pairing was approved before saving existed (1200), or for
+   * somebody whose role cannot write credentials. The extension then says
+   * how to get it: pair again.
+   */
+  canSave: boolean;
+  organizations: { id: string; name: string; sites: { id: string; name: string }[] }[];
+}
+
+/** After a sign-in: whether to offer a save, an update, or nothing. */
+export interface ExtensionLoginCheck {
+  state: 'new' | 'same' | 'changed' | 'skip';
+  host: string;
+  /** The login it matched, for 'same', 'changed' and some 'skip's. */
+  entry: ExtensionEntry | null;
+  canSave: boolean;
+}
+
+/** What a save or an update returns: where it went, never what it holds. */
+export interface ExtensionSaved {
+  kind: 'client' | 'personal';
+  id: string;
+  name: string;
 }

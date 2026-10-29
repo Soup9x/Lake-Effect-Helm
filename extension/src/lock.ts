@@ -10,6 +10,11 @@
  * Nothing in the extension can call Helm while it is locked, because it has
  * no token to call with.
  *
+ * THE TIMEOUT. Settings choose how long unused before what happens: lock
+ * (with a PIN or password set) or sign out, which unpairs the browser in Helm
+ * and forgets it here, as Bitwarden's "timeout action" does. Use is any call
+ * to Helm. Signing out is api.ts's, since it calls Helm; this only says when.
+ *
  * WHAT IT DOES NOT DO. The PIN or password never leaves this browser, and
  * Helm does not know whether a browser is locked. Somebody holding a copy of
  * the browser profile has the encrypted token and the device key, and can
@@ -21,7 +26,7 @@
  * A locked browser does not renew; a pairing locked for more than its last
  * week lapses, and is paired again.
  */
-import { clearPairing, fromBase64Url, getPairing, setPairing, toBase64Url } from './store';
+import { clearPairing, fromBase64Url, getPairing, getSettings, setPairing, toBase64Url, type TimeoutAction } from './store';
 
 export type LockMethod = 'pin' | 'password';
 
@@ -34,8 +39,8 @@ interface Sealed {
 
 export interface LockConfig {
   method: LockMethod;
-  /** Minutes without use before it locks; 0 locks only when the browser closes. */
-  idleMinutes: number;
+  /** Before 0.5.0, the idle timeout; settings hold it now (store.ts). */
+  idleMinutes?: number;
   failures: number;
   sealed: Sealed;
 }
@@ -75,7 +80,7 @@ export type LockState = 'off' | 'locked' | 'unlocked';
 export async function lockState(): Promise<LockState> {
   const lock = await getLock();
   if (!lock) return 'off';
-  await lockIfIdle(lock);
+  await lockIfIdle();
   return (await getUnlocked()) ? 'unlocked' : 'locked';
 }
 
@@ -105,13 +110,13 @@ async function seal(key: CryptoKey, token: string, salt: string, iterations: num
 const rawKey = async (key: CryptoKey) => toBase64Url(new Uint8Array(await crypto.subtle.exportKey('raw', key)));
 
 /** Turn the lock on. The browser must be paired, and unlocked if a lock is already on. */
-export async function enableLock(method: LockMethod, secret: string, idleMinutes: number): Promise<void> {
+export async function enableLock(method: LockMethod, secret: string): Promise<void> {
   const token = await currentToken();
   const pairing = await getPairing();
   if (!token || !pairing) throw new Error('pair this browser, or unlock it, first');
   const salt = toBase64Url(crypto.getRandomValues(new Uint8Array(16)));
   const key = await deriveKey(secret, fromBase64Url(salt), ITERATIONS);
-  await setLock({ method, idleMinutes, failures: 0, sealed: await seal(key, token, salt, ITERATIONS) });
+  await setLock({ method, failures: 0, sealed: await seal(key, token, salt, ITERATIONS) });
   await setUnlocked({ token, key: await rawKey(key), lastActive: Date.now() });
   // Last, so a failure above leaves the plain token where it was.
   await setPairing({ ...pairing, token: '' });
@@ -164,31 +169,72 @@ export async function disableLock(secret: string): Promise<UnlockResult> {
   return 'unlocked';
 }
 
-export async function setIdleMinutes(idleMinutes: number): Promise<void> {
-  const lock = await getLock();
-  if (lock) await setLock({ ...lock, idleMinutes });
+/* ------------------------------------------------------------------------- *
+ * The timeout
+ * ------------------------------------------------------------------------- */
+
+/** When Helm was last used from this browser, for signing out; local, so it survives a restart. */
+async function lastActive(): Promise<number | null> {
+  const { lastActive: at } = (await chrome.storage.local.get('lastActive')) as { lastActive?: number };
+  return at ?? null;
 }
 
-/** Lock if it has sat unused longer than the timeout. */
-export async function lockIfIdle(lock?: LockConfig | null): Promise<void> {
-  const config = lock === undefined ? await getLock() : lock;
-  if (!config || config.idleMinutes <= 0) return;
-  const unlocked = await getUnlocked();
-  if (unlocked && Date.now() - unlocked.lastActive > config.idleMinutes * 60_000) await lockNow();
+/** Note a use. Written at most twice a minute, since every call to Helm is one. */
+export async function noteActivity(): Promise<void> {
+  const now = Date.now();
+  const at = await lastActive();
+  if (at === null || now - at > 30_000) await chrome.storage.local.set({ lastActive: now });
+}
+
+/** What the timeout says should happen now, if anything. */
+export async function timeoutDue(): Promise<TimeoutAction | null> {
+  const settings = await getSettings();
+  if (settings.timeoutMinutes <= 0) return null;
+  const limit = settings.timeoutMinutes * 60_000;
+  if (settings.timeoutAction === 'lock') {
+    if (!(await getLock())) return null;
+    const unlocked = await getUnlocked();
+    return unlocked && Date.now() - unlocked.lastActive > limit ? 'lock' : null;
+  }
+  if (!(await getPairing())) return null;
+  const at = await lastActive();
+  return at !== null && Date.now() - at > limit ? 'signout' : null;
+}
+
+/** Lock if the timeout says so; a sign-out due is returned for the caller, which can reach Helm. */
+export async function lockIfIdle(): Promise<TimeoutAction | null> {
+  const due = await timeoutDue();
+  if (due === 'lock') await lockNow();
+  return due;
 }
 
 /**
  * The token to call Helm with: the stored one with no lock, the unlocked one
- * with a lock, and null while locked. Each use counts as activity.
+ * with a lock, and null while locked. Each use counts as activity, unless it
+ * is a page asking (touch false). Null too once a sign-out is due, which
+ * api.ts carries out.
  */
-export async function currentToken(): Promise<string | null> {
+export async function currentToken(touch = true): Promise<string | null> {
+  if ((await lockIfIdle()) === 'signout') return null;
   const lock = await getLock();
-  if (!lock) return (await getPairing())?.token ?? null;
-  await lockIfIdle(lock);
+  if (!lock) {
+    const token = (await getPairing())?.token ?? null;
+    if (token && touch) await noteActivity();
+    return token;
+  }
   const unlocked = await getUnlocked();
   if (!unlocked) return null;
-  await setUnlocked({ ...unlocked, lastActive: Date.now() });
+  if (touch) {
+    await setUnlocked({ ...unlocked, lastActive: Date.now() });
+    await noteActivity();
+  }
   return unlocked.token;
+}
+
+/** The token, without counting it as a use: for signing out. */
+export async function tokenForSignOut(): Promise<string | null> {
+  if (!(await getLock())) return (await getPairing())?.token ?? null;
+  return (await getUnlocked())?.token ?? null;
 }
 
 /** Store a renewed token, sealed again when there is a lock. */
