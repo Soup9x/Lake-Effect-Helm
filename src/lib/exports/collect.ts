@@ -34,6 +34,13 @@ export interface ExportScope {
    * asks for.
    */
   readonly contactIds?: string[] | undefined;
+  /**
+   * A documents-only bundle: these uploaded files and written documents, as an
+   * inventory, and nothing else. What "Export" on a Documents selection asks for.
+   */
+  readonly documentIds?: string[] | undefined;
+  /** A locations-only bundle: these locations and nothing else. */
+  readonly siteIds?: string[] | undefined;
 }
 
 export interface CollectedExport {
@@ -200,13 +207,34 @@ export async function collectExport(
   const nodeTypes = scope.nodeTypes ?? [];
   const contactIds = scope.contactIds ?? [];
   const contactsOnly = contactIds.length > 0;
+  const documentIds = scope.documentIds ?? [];
+  const siteIds = scope.siteIds ?? [];
+
+  if (documentIds.length > 0) {
+    return {
+      organization, sites: [], contacts: [], assets: [], credentials: [], relationships: [],
+      expirations: [], procedures: [], flexibleAssets: [],
+      documents: await collectDocuments(tx, organizationId, documentIds),
+      attestation: await collectAttestation(tx),
+    };
+  }
 
   const sites = await tx<SiteRecord[]>`
     SELECT id, name, code, is_primary, address_line1, city, region, postal_code,
            country, main_phone, after_hours_phone, access_notes
     FROM site WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL AND archived_at IS NULL
+      AND (${siteIds.length === 0} OR id = ANY(${siteIds}::uuid[]))
     ORDER BY is_primary DESC, name
   `;
+
+  // A locations-only bundle: the locations, and none of the estate.
+  if (siteIds.length > 0) {
+    return {
+      organization, sites, contacts: [], assets: [], credentials: [], relationships: [],
+      expirations: [], procedures: [], flexibleAssets: [], documents: [],
+      attestation: await collectAttestation(tx),
+    };
+  }
 
   const contacts = await tx<ContactRecord[]>`
     SELECT id, first_name, last_name, title, email::text, phone, mobile,
@@ -280,24 +308,7 @@ export async function collectExport(
     ORDER BY t.name, n.name
   `;
 
-  // Archived documents are excluded for the same reason archived assets are:
-  // an export is what the client's estate IS, not what it used to be.
-  const documents = await tx<DocumentRecord[]>`
-    SELECT a.id,
-           a.filename,
-           array_to_string(helm.document_folder_path(a.folder_id), ' / ') AS path,
-           a.content_type,
-           a.byte_size::bigint AS byte_size,
-           encode(a.content_sha256, 'hex') AS content_sha256,
-           a.is_internal_only,
-           a.uploaded_at
-    FROM attachment a
-    WHERE a.organization_id = ${organizationId}::uuid
-      AND a.is_document
-      AND a.deleted_at IS NULL
-      AND a.archived_at IS NULL
-    ORDER BY path, lower(a.filename)
-  `;
+  const documents = await collectDocuments(tx, organizationId, []);
 
   return {
     organization,
@@ -312,6 +323,54 @@ export async function collectExport(
     documents,
     attestation: await collectAttestation(tx),
   };
+}
+
+/**
+ * The document inventory, the whole client's or the ids given. Written
+ * documents (0810) are listed only when named: a selection that ticked one
+ * expects to see it, and the whole-client inventory has always been the files.
+ * A written document's row is its title, "text/plain", and the size and hash
+ * of its text.
+ */
+async function collectDocuments(tx: HelmTx, organizationId: string, ids: string[]): Promise<DocumentRecord[]> {
+  // Archived documents are excluded for the same reason archived assets are:
+  // an export is what the client's estate IS, not what it used to be.
+  const files = await tx<DocumentRecord[]>`
+    SELECT a.id,
+           a.filename,
+           array_to_string(helm.document_folder_path(a.folder_id), ' / ') AS path,
+           a.content_type,
+           a.byte_size::bigint AS byte_size,
+           encode(a.content_sha256, 'hex') AS content_sha256,
+           a.is_internal_only,
+           a.uploaded_at
+    FROM attachment a
+    WHERE a.organization_id = ${organizationId}::uuid
+      AND a.is_document
+      AND a.deleted_at IS NULL
+      AND a.archived_at IS NULL
+      AND (${ids.length === 0} OR a.id = ANY(${ids}::uuid[]))
+    ORDER BY path, lower(a.filename)
+  `;
+  if (ids.length === 0) return files;
+
+  const pages = await tx<DocumentRecord[]>`
+    SELECT p.id,
+           p.title AS filename,
+           array_to_string(helm.document_folder_path(p.folder_id), ' / ') AS path,
+           'text/plain' AS content_type,
+           octet_length(p.body_text)::bigint AS byte_size,
+           encode(sha256(convert_to(p.body_text, 'UTF8')), 'hex') AS content_sha256,
+           p.is_internal_only,
+           p.updated_at AS uploaded_at
+    FROM document_page p
+    WHERE p.organization_id = ${organizationId}::uuid
+      AND p.deleted_at IS NULL
+      AND p.archived_at IS NULL
+      AND p.id = ANY(${ids}::uuid[])
+  `;
+  return [...files, ...pages].sort((a, b) =>
+    `${a.path}/${a.filename}`.localeCompare(`${b.path}/${b.filename}`, undefined, { sensitivity: 'base' }));
 }
 
 /**

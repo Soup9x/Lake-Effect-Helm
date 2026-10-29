@@ -42,6 +42,8 @@ export interface GridRow {
   actions?: readonly RowAction[] | undefined;
   /** Free text the filter searches, lowercased by the caller. */
   search?: string | undefined;
+  /** No checkbox on this row in a selectable table: a folder among documents. */
+  unselectable?: boolean | undefined;
 }
 
 type Direction = 'asc' | 'desc';
@@ -167,7 +169,8 @@ export function DataTable<T extends GridRow>({
     if (kept) setSelection(kept);
   }, [filtered]);
 
-  const allVisibleSelected = sorted.length > 0 && sorted.every((r) => selected.has(r.id));
+  const pickable = useMemo(() => sorted.filter((r) => !r.unselectable), [sorted]);
+  const allVisibleSelected = pickable.length > 0 && pickable.every((r) => selected.has(r.id));
 
   return (
     <div className="w-full overflow-x-auto">
@@ -180,7 +183,7 @@ export function DataTable<T extends GridRow>({
                   type="checkbox"
                   checked={allVisibleSelected}
                   onChange={() =>
-                    setSelection(allVisibleSelected ? new Set() : new Set(sorted.map((r) => r.id)))
+                    setSelection(allVisibleSelected ? new Set() : new Set(pickable.map((r) => r.id)))
                   }
                   aria-label={allVisibleSelected ? 'Clear selection' : 'Select every visible row'}
                   className="size-3.5 rounded border-border-strong"
@@ -253,7 +256,8 @@ export function DataTable<T extends GridRow>({
                 key={row.id}
                 className="group border-b border-canvas-border last:border-0 hover:bg-surface-sunken/70"
               >
-                {selectable && (
+                {selectable && row.unselectable && <td className="py-2 pl-6 pr-2" />}
+                {selectable && !row.unselectable && (
                   <td className="py-2 pl-6 pr-2">
                     <input
                       type="checkbox"

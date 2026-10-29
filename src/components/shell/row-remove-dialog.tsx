@@ -17,6 +17,9 @@
  *   A folder is DELETED, and only when it is empty: both foreign keys into the
  *   tree are ON DELETE RESTRICT, so the database refuses anything else.
  *
+ *   An entry in the person's own vault is DELETED: the vault has no archive
+ *   (1030), so a delete there is what its own page's Delete does.
+ *
  * THREE MODES. 'remove' is the above. 'restore' flips archived_at back.
  * 'delete' is permanent destruction, offered only on a row that is ALREADY
  * archived and only to asset:delete — helm.delete_document and
@@ -30,7 +33,7 @@ import { Button } from '../ui/button';
 import { Modal } from '../ui/modal';
 import { apiFetch, type ApiRequest } from '@/lib/ui/api';
 
-export type RemoveKind = 'node' | 'document' | 'page' | 'folder' | 'contact' | 'site' | 'diagram';
+export type RemoveKind = 'node' | 'document' | 'page' | 'folder' | 'contact' | 'site' | 'diagram' | 'vault';
 export type RemoveMode = 'remove' | 'restore' | 'delete';
 
 const COPY: Record<RemoveKind, { verb: string; body: string; reversible: boolean }> = {
@@ -48,6 +51,11 @@ const COPY: Record<RemoveKind, { verb: string; body: string; reversible: boolean
     verb: 'Archive',
     body: 'It leaves this list and stops appearing in search. Every version is kept and it can be restored from the archive — tick "Include archived" to find it. Deleting it permanently is done from there.',
     reversible: true,
+  },
+  vault: {
+    verb: 'Delete',
+    body: 'The password is removed from your vault for good.',
+    reversible: false,
   },
   folder: {
     verb: 'Delete',
@@ -81,6 +89,7 @@ function requestFor(kind: RemoveKind, mode: RemoveMode, id: string): [string, Ap
       case 'document': return [`/api/documents/${id}`, { method: 'PATCH', json: { archived: true } }];
       case 'page': return [`/api/document-pages/${id}`, { method: 'PATCH', json: { archived: true } }];
       case 'folder': return [`/api/document-folders/${id}`, { method: 'DELETE' }];
+      case 'vault': return [`/api/personal/vault/${id}`, { method: 'DELETE' }];
       case 'contact': return [`/api/contacts/${id}`, { method: 'PATCH', json: { archived: true } }];
       case 'site': return [`/api/sites/${id}`, { method: 'PATCH', json: { archived: true } }];
       case 'diagram': return [`/api/diagrams/${id}`, { method: 'PATCH', json: { archived: true } }];

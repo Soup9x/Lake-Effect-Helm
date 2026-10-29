@@ -434,6 +434,8 @@ export const attachment = pgTable('attachment', {
   /** Archive-first, the rail 0500 put in front of every permanent deletion. */
   archivedAt: tstz('archived_at'),
   deletedAt: tstz('deleted_at'),
+  /** 1150: free-text labels, on a document in the tree. */
+  tags: textArray('tags').notNull().default([]),
 });
 
 /** 0810: a written document in the client's document tree. */
@@ -453,6 +455,8 @@ export const documentPage = pgTable('document_page', {
   updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
   archivedAt: tstz('archived_at'),
   deletedAt: tstz('deleted_at'),
+  /** 1150: free-text labels. */
+  tags: textArray('tags').notNull().default([]),
 });
 
 /**
