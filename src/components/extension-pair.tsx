@@ -43,7 +43,11 @@ type State =
   | { status: 'ready'; params: PairRequestParams; fingerprint: string }
   | { status: 'pairing'; params: PairRequestParams; fingerprint: string }
   | { status: 'paired'; label: string }
-  | { status: 'error'; params: PairRequestParams; fingerprint: string; message: string };
+  /**
+   * `prompt` is the next step, not a mistake: the password was right and Helm
+   * wants the authenticator code. It reads as a note, not in red.
+   */
+  | { status: 'error'; params: PairRequestParams; fingerprint: string; message: string; prompt?: boolean };
 
 function readFragment(): PairRequestParams | null {
   const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''));
@@ -130,9 +134,16 @@ export function ExtensionPair({
       // Asked for the code, or the code was wrong: the password was right, so
       // it stays, and only the code is asked for. Otherwise it was the
       // password, which goes.
-      if (result.details?.secondFactor === 'totp') setAskCode(true);
+      const wantsCode = result.details?.secondFactor === 'totp';
+      if (wantsCode) setAskCode(true);
       else setPassword('');
-      setState({ status: 'error', params, fingerprint, message: result.message });
+      setState({
+        status: 'error',
+        params,
+        fingerprint,
+        message: wantsCode && !askCode ? 'Password accepted. Now enter your authenticator code.' : result.message,
+        prompt: wantsCode && !askCode,
+      });
       return;
     }
     setPassword('');
@@ -275,7 +286,9 @@ export function ExtensionPair({
           ) : null}
         </form>
 
-        {state.status === 'error' ? <p className="text-danger">{state.message}</p> : null}
+        {state.status === 'error' ? (
+          <p className={state.prompt ? 'text-ink-muted' : 'text-danger'}>{state.message}</p>
+        ) : null}
 
         <div className="flex gap-2">
           <Button

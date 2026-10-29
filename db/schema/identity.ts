@@ -248,6 +248,7 @@ export const browserExtensionInstall = pgTable('browser_extension_install', {
   lastSeenIp: inet('last_seen_ip'),
   revokedAt: tstz('revoked_at'),
   createdAt: tstz('created_at').notNull().defaultNow(),
+  hiddenAt: tstz('hidden_at'),
 });
 
 export const stepUpVerification = pgTable('step_up_verification', {
