@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { isUuid } from '@/lib/ids';
 import { Boxes, CalendarClock, Cloud, ExternalLink, KeyRound, MapPin, Users } from 'lucide-react';
 import { ninjaOrganizationUrl } from '@/lib/ninja/links';
+import { action1OrganizationUrl } from '@/lib/action1/links';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
 import { PageBody, PageHeader } from '@/components/app-shell';
@@ -131,6 +132,16 @@ export default async function OrganizationPage({
       ORDER BY lower(n.name)
     `;
 
+    // The Action1 organizations that import here (1160). Tenant-wide actors
+    // only, by action1_organization's RLS; anybody else gets none.
+    const action1 = await tx<{ action1_org_id: string; name: string; seen_at: Date; base_url: string }[]>`
+      SELECT a.action1_org_id, a.name, a.seen_at, c.base_url
+      FROM action1_organization a
+      JOIN integration_connection c ON c.id = a.connection_id
+      WHERE a.organization_id = ${organizationId}::uuid
+      ORDER BY lower(a.name)
+    `;
+
     // The Proxmox clusters that import here (1110). integration_connection is
     // tenant-wide actors' only, so anybody else gets none.
     const proxmox = await tx<{ id: string; display_name: string; base_url: string; last_success_at: Date | null }[]>`
@@ -142,7 +153,7 @@ export default async function OrganizationPage({
     return {
       organization, sites, contacts, assets, credentials, expiries,
       health, pinned, folders, documents, pages,
-      recentlyUpdated, recentlyViewed, activity, runs, documentationHealth, ninja, proxmox,
+      recentlyUpdated, recentlyViewed, activity, runs, documentationHealth, ninja, action1, proxmox,
       canWriteOrganization: session.permissions.includes('organization:write'),
       canDeleteDocuments: session.permissions.includes('asset:delete'),
       canReadAudit: session.permissions.includes('audit:read'),
@@ -176,7 +187,7 @@ export default async function OrganizationPage({
     organization, sites, contacts, assets, credentials, expiries, health, pinned,
     folders, documents, pages, recentlyUpdated, recentlyViewed, activity, runs,
     canDeleteDocuments, canReadAudit, canSeeAccessCounts,
-    documentationHealth, canWriteOrganization, ninja, proxmox,
+    documentationHealth, canWriteOrganization, ninja, action1, proxmox,
   } = data;
 
   // Which image the avatar loads, and the same rule the clients list and the
@@ -326,6 +337,25 @@ export default async function OrganizationPage({
                 <a key={n.ninja_org_id} href={href} target="_blank" rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-xs text-brand hover:underline">
                   {ninja.length === 1 ? 'Open in NinjaOne' : n.name} <ExternalLink className="size-3" aria-hidden />
+                </a>
+              ) : null;
+            })}
+          </p>
+        )}
+        {action1.length > 0 && (
+          <p className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-muted"
+            title="Kept current by the Action1 sync">
+            <span className="flex items-center gap-1.5 text-ink">
+              <Cloud className="size-3.5 text-ink-faint" aria-hidden />
+              Action1 · synced {formatDateTime(
+                new Date(Math.max(...action1.map((a) => a.seen_at.getTime()))).toISOString())}
+            </span>
+            {action1.map((a) => {
+              const href = action1OrganizationUrl(a.base_url, a.action1_org_id);
+              return href ? (
+                <a key={a.action1_org_id} href={href} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-brand hover:underline">
+                  {action1.length === 1 ? 'Open in Action1' : a.name} <ExternalLink className="size-3" aria-hidden />
                 </a>
               ) : null;
             })}

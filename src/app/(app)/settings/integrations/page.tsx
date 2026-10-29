@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 import { ExternalChecksForm } from '@/components/external-checks-form';
 import { UnifiSettingsCard } from '@/components/unifi-settings';
 import { NinjaSettingsCard } from '@/components/ninja-settings';
+import { Action1SettingsCard } from '@/components/action1-settings';
+import { readAction1Settings } from '@/lib/action1/queries';
 import { M365SettingsCard } from '@/components/m365-settings';
 import { ProxmoxSettingsCard } from '@/components/proxmox-settings';
 import { listProxmoxConnections } from '@/lib/proxmox/queries';
@@ -19,7 +21,7 @@ import { readTenantSummary } from '@/lib/tenant/queries';
 import { requestOrigin } from '@/lib/settings/origin';
 
 /**
- * Administration → Integrations: NinjaOne, Microsoft 365, Proxmox, UniFi, and whether
+ * Administration → Integrations: NinjaOne, Action1, Microsoft 365, Proxmox, UniFi, and whether
  * Helm checks domains and certificates itself.
  */
 export default async function IntegrationSettingsPage() {
@@ -27,10 +29,10 @@ export default async function IntegrationSettingsPage() {
   const origin = await requestOrigin();
 
   const {
-    tenant, unifi, organizations, externalChecks, ninja, m365, proxmox, canManageNetwork, canManageRmm, canManageM365,
+    tenant, unifi, organizations, externalChecks, ninja, action1, m365, proxmox, canManageNetwork, canManageRmm, canManageM365,
     canManageHypervisor, canCreateClients, internalOrganizationId,
   } = await withTenant(actorOf(identity), async (tx, session) => {
-    const [tenant, unifi, organizations, networkRows, externalChecks, ninja, m365, internal, proxmox] = await Promise.all([
+    const [tenant, unifi, organizations, networkRows, externalChecks, ninja, m365, internal, proxmox, action1] = await Promise.all([
       readTenantSummary(tx, identity.actorId),
       listUnifiMappings(tx),
       listOrganizationOptions(tx),
@@ -51,9 +53,10 @@ export default async function IntegrationSettingsPage() {
       listM365Connections(tx),
       tx<{ id: string }[]>`SELECT id FROM organization WHERE is_msp_internal AND deleted_at IS NULL LIMIT 1`,
       listProxmoxConnections(tx),
+      readAction1Settings(tx),
     ]);
     return {
-      tenant, unifi, organizations, externalChecks, ninja, m365, proxmox,
+      tenant, unifi, organizations, externalChecks, ninja, action1, m365, proxmox,
       canManageNetwork: networkRows[0]?.permitted ?? false,
       canManageRmm: session.permissions.includes('integration:rmm:manage'),
       canManageM365: session.permissions.includes('integration:m365:manage'),
@@ -67,7 +70,7 @@ export default async function IntegrationSettingsPage() {
     <>
       <PageHeader
         title="Integrations"
-        description="NinjaOne, Microsoft 365, Proxmox, UniFi, and domain and certificate checking."
+        description="NinjaOne, Action1, Microsoft 365, Proxmox, UniFi, and domain and certificate checking."
         trail={[{ label: 'Administration', href: '/settings' }]}
       />
       <PageBody>
@@ -75,6 +78,14 @@ export default async function IntegrationSettingsPage() {
 
         <NinjaSettingsCard
           initial={ninja}
+          organizations={organizations}
+          canManage={canManageRmm}
+          canCreateClients={canCreateClients}
+          internalOrganizationId={internalOrganizationId}
+        />
+
+        <Action1SettingsCard
+          initial={action1}
           organizations={organizations}
           canManage={canManageRmm}
           canCreateClients={canCreateClients}

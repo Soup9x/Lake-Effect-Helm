@@ -111,7 +111,7 @@ export const alertSeverity = pgEnum('alert_severity', ['info', 'notice', 'warnin
 export const integrationProvider = pgEnum('integration_provider', [
   'ninja_one', 'n_able_ncentral', 'n_able_rmm', 'datto_rmm',
   'connectwise_manage', 'connectwise_automate', 'halo_psa', 'autotask',
-  'microsoft_graph', 'custom', 'proxmox',
+  'microsoft_graph', 'custom', 'proxmox', 'action1',
 ]);
 
 export const integrationStatus = pgEnum('integration_status', ['configured', 'active', 'degraded', 'error', 'disabled']);
