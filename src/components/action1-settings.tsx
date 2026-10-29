@@ -19,11 +19,12 @@
  */
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Input, Label, Select } from './ui/field';
 import { Badge, type BadgeTone } from './ui/badge';
+import { Pager, usePage } from './ui/pager';
 import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from './ui/table';
 import { formatDateTime } from '@/lib/ui/format';
 import { apiFetch, type Feedback } from '@/lib/ui/api';
@@ -59,6 +60,7 @@ const RUN_TONE: Record<string, BadgeTone> = {
 /** The mapping value that asks for a client named like the Action1 organization. */
 const NEW_CLIENT = 'new';
 const DONT_IMPORT = 'none';
+const ORG_PAGE_SIZE = 15;
 
 export function Action1SettingsCard({
   initial, organizations: organizationOptions, canManage, canCreateClients, internalOrganizationId,
@@ -94,6 +96,10 @@ export function Action1SettingsCard({
     initial.organizations.some((o) => standingOf(o) === 'undecided') ? 'undecided' : 'all');
   const [orgQuery, setOrgQuery] = useState('');
   const [orgSort, setOrgSort] = useState<OrgSort>('name');
+  // A long list is folded away once every organization has been decided, so
+  // the card is not mostly a table nobody needs to look at again.
+  const [orgsOpen, setOrgsOpen] = useState(() =>
+    initial.organizations.some((o) => standingOf(o) === 'undecided'));
 
   // Clients created by the last save are mapped before the page's list is
   // refreshed; without them a select would show a value it has no option for.
@@ -111,6 +117,7 @@ export function Action1SettingsCard({
   function adopt(next: Action1Settings) {
     setSettings(next);
     setMapping(mappingOf(next));
+    if (next.organizations.some((o) => standingOf(o) === 'undecided')) setOrgsOpen(true);
   }
 
   async function save(event: FormEvent) {
@@ -208,6 +215,7 @@ export function Action1SettingsCard({
     .sort((a, b) => orgSort === 'devices'
       ? (b.deviceCount ?? -1) - (a.deviceCount ?? -1) || a.name.localeCompare(b.name)
       : a.name.localeCompare(b.name));
+  const orgPage = usePage(shownOrgs, ORG_PAGE_SIZE);
 
   return (
     <Card>
@@ -308,15 +316,21 @@ export function Action1SettingsCard({
           <section className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-medium text-ink">
-                Organizations
-                <span className="ml-2 text-xs font-normal text-ink-faint">
-                  {counts.importing} of {counts.all} imported
-                  {counts.undecided > 0 && ` · ${counts.undecided} not decided`}
-                </span>
+                <button type="button" aria-expanded={orgsOpen} onClick={() => setOrgsOpen((o) => !o)}
+                  className="-ml-1 inline-flex items-center gap-1 rounded px-1 hover:bg-surface-sunken">
+                  {orgsOpen
+                    ? <ChevronDown className="size-4 text-ink-faint" aria-hidden />
+                    : <ChevronRight className="size-4 text-ink-faint" aria-hidden />}
+                  Organizations
+                  <span className="ml-1 text-xs font-normal text-ink-faint">
+                    {counts.importing} of {counts.all} imported
+                    {counts.undecided > 0 && ` · ${counts.undecided} not decided`}
+                  </span>
+                </button>
               </h3>
               {canManage && (
                 <div className="flex items-center gap-2">
-                  {canCreateClients && (
+                  {canCreateClients && orgsOpen && (
                     <Button variant="secondary" size="sm" onClick={newClientForEach} disabled={mappingBusy}>
                       New client for each
                     </Button>
@@ -335,69 +349,74 @@ export function Action1SettingsCard({
                 </div>
               )}
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Select aria-label="Show" className="w-auto" value={orgFilter}
-                onChange={(e) => setOrgFilter(e.target.value as OrgFilter)}>
-                <option value="all">All ({counts.all})</option>
-                <option value="undecided">Not decided ({counts.undecided})</option>
-                <option value="importing">Importing ({counts.importing})</option>
-                <option value="excluded">Not importing ({counts.excluded})</option>
-              </Select>
-              <Input type="search" aria-label="Search organizations" placeholder="Search Action1 or client name"
-                className="w-64 max-w-full" value={orgQuery} onChange={(e) => setOrgQuery(e.target.value)} />
-              <Select aria-label="Sort by" className="w-auto" value={orgSort}
-                onChange={(e) => setOrgSort(e.target.value as OrgSort)}>
-                <option value="name">Sort by name</option>
-                <option value="devices">Sort by endpoints</option>
-              </Select>
-            </div>
             {mappingFeedback && (
               <p role={mappingFeedback.ok ? undefined : 'alert'} className={mappingFeedback.ok ? 'text-sm text-ok' : 'text-sm text-danger'}>
                 {mappingFeedback.message}
               </p>
             )}
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead>Action1 organization</TableHead>
-                  <TableHead className="text-right">Endpoints</TableHead>
-                  <TableHead>Imports to</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {settings.organizations.length === 0 && (
-                  <TableEmpty colSpan={3}>None yet. They are listed when the connection is saved and on every sync.</TableEmpty>
-                )}
-                {settings.organizations.length > 0 && shownOrgs.length === 0 && (
-                  <TableEmpty colSpan={3}>No organizations match.</TableEmpty>
-                )}
-                {shownOrgs.map((org) => (
-                  <TableRow key={org.action1OrgId}>
-                    <TableCell className="font-medium">
-                      {org.name}
-                      {standingOf(org) === 'undecided' && <Badge tone="brand" className="ml-2">Not decided</Badge>}
-                      {org.organizationArchived && <Badge tone="neutral" className="ml-2">Client archived</Badge>}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-ink-muted">{org.deviceCount ?? '—'}</TableCell>
-                    <TableCell>
-                      {canManage ? (
-                        <Select aria-label={`Client for ${org.name}`} value={mapping[org.action1OrgId] ?? ''}
-                          onChange={(e) => setMapping((m) => ({ ...m, [org.action1OrgId]: e.target.value }))}>
-                          {(mapping[org.action1OrgId] ?? '') === '' && <option value="">Not decided</option>}
-                          <option value={DONT_IMPORT}>Don&rsquo;t import</option>
-                          {canCreateClients && <option value={NEW_CLIENT}>New client: {org.name}</option>}
-                          {organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                        </Select>
-                      ) : (
-                        <span className={org.organizationName ? 'text-ink' : 'text-ink-faint'}>
-                          {org.organizationName ?? 'Not imported'}
-                        </span>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            {orgsOpen && (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select aria-label="Show" className="w-auto" value={orgFilter}
+                    onChange={(e) => { setOrgFilter(e.target.value as OrgFilter); orgPage.setPage(0); }}>
+                    <option value="all">All ({counts.all})</option>
+                    <option value="undecided">Not decided ({counts.undecided})</option>
+                    <option value="importing">Importing ({counts.importing})</option>
+                    <option value="excluded">Not importing ({counts.excluded})</option>
+                  </Select>
+                  <Input type="search" aria-label="Search organizations" placeholder="Search Action1 or client name"
+                    className="w-64 max-w-full" value={orgQuery} onChange={(e) => { setOrgQuery(e.target.value); orgPage.setPage(0); }} />
+                  <Select aria-label="Sort by" className="w-auto" value={orgSort}
+                    onChange={(e) => { setOrgSort(e.target.value as OrgSort); orgPage.setPage(0); }}>
+                    <option value="name">Sort by name</option>
+                    <option value="devices">Sort by endpoints</option>
+                  </Select>
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Action1 organization</TableHead>
+                      <TableHead className="text-right">Endpoints</TableHead>
+                      <TableHead>Imports to</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {settings.organizations.length === 0 && (
+                      <TableEmpty colSpan={3}>None yet. They are listed when the connection is saved and on every sync.</TableEmpty>
+                    )}
+                    {settings.organizations.length > 0 && shownOrgs.length === 0 && (
+                      <TableEmpty colSpan={3}>No organizations match.</TableEmpty>
+                    )}
+                    {orgPage.rows.map((org) => (
+                      <TableRow key={org.action1OrgId}>
+                        <TableCell className="font-medium">
+                          {org.name}
+                          {standingOf(org) === 'undecided' && <Badge tone="brand" className="ml-2">Not decided</Badge>}
+                          {org.organizationArchived && <Badge tone="neutral" className="ml-2">Client archived</Badge>}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-ink-muted">{org.deviceCount ?? '—'}</TableCell>
+                        <TableCell>
+                          {canManage ? (
+                            <Select aria-label={`Client for ${org.name}`} value={mapping[org.action1OrgId] ?? ''}
+                              onChange={(e) => setMapping((m) => ({ ...m, [org.action1OrgId]: e.target.value }))}>
+                              {(mapping[org.action1OrgId] ?? '') === '' && <option value="">Not decided</option>}
+                              <option value={DONT_IMPORT}>Don&rsquo;t import</option>
+                              {canCreateClients && <option value={NEW_CLIENT}>New client: {org.name}</option>}
+                              {organizations.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                            </Select>
+                          ) : (
+                            <span className={org.organizationName ? 'text-ink' : 'text-ink-faint'}>
+                              {org.organizationName ?? 'Not imported'}
+                            </span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <Pager {...orgPage} noun="organizations" />
+              </>
+            )}
           </section>
         )}
 
