@@ -104,12 +104,17 @@ const PASSWORD_FIELDS: readonly ImportField[] = [
   { key: 'name', label: 'Name', required: true, maxLength: 200,
     aliases: ['title', 'label', 'account', 'accountname'] },
   { key: 'password', label: 'Password', required: true, maxLength: 65536,
-    aliases: ['secret', 'value', 'pass'] },
-  { key: 'username', label: 'Username', maxLength: 200, aliases: ['user', 'login', 'loginname'] },
-  { key: 'url', label: 'URL', maxLength: 2000, aliases: ['website', 'uri', 'link'] },
-  { key: 'notes', label: 'Notes', maxLength: 4000, aliases: ['comment', 'comments', 'extra'] },
+    aliases: ['secret', 'value', 'pass', 'loginpassword'] },
+  { key: 'username', label: 'Username', maxLength: 200,
+    aliases: ['user', 'login', 'loginname', 'loginusername'] },
+  { key: 'url', label: 'URL', maxLength: 2000,
+    aliases: ['website', 'uri', 'link', 'loginuri', 'loginurl', 'websiteaddress'] },
+  { key: 'notes', label: 'Notes', maxLength: 4000, aliases: ['note', 'comment', 'comments', 'extra'] },
   { key: 'totpSeed', label: 'One-time code seed', maxLength: 4096,
-    aliases: ['totp', 'totpsecret', 'otp', 'otpsecret', 'otpauth', 'authkey'] },
+    aliases: ['totp', 'totpsecret', 'otp', 'otpsecret', 'otpauth', 'authkey', 'logintotp'] },
+  // Becomes a tag, so a vault's folder structure survives as a filter.
+  { key: 'folder', label: 'Folder', maxLength: 200,
+    aliases: ['group', 'grouping', 'collection', 'vault'] },
 ];
 
 const SPECS: readonly ImportSpec[] = [

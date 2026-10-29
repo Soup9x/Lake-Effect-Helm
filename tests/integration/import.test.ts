@@ -219,6 +219,59 @@ describe('passwords', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe('a password manager\'s export, mapped in the browser', () => {
+  const runRows = (rows: Record<string, string>[], extra: Record<string, unknown> = {}) =>
+    importRoute(request({ category: 'passwords', rows, ...extra }), orgParams);
+
+  it('writes mapped rows, with the folder as a tag, and never echoes a value', async () => {
+    const rows = [{ name: 'Export Firewall', username: 'admin', password: 'mapped-secret-1', folder: 'Network Gear' }];
+    const preview = await body(await runRows(rows));
+    expect(preview).toMatchObject({ rows: 1, valid: 1, invalid: 0, duplicates: 0, committed: 0 });
+
+    const committed = await body(await runRows(rows, { commit: true }));
+    expect(committed).toMatchObject({ committed: 1, left_out: 0 });
+    expect(JSON.stringify(committed)).not.toContain('mapped-secret-1');
+    expect(await count(`
+      SELECT count(*)::text AS n FROM asset_node
+      WHERE name = 'Export Firewall' AND tags = ARRAY['network gear']`)).toBe(1);
+  });
+
+  it('flags a credential this client already has, and skips it only when asked', async () => {
+    const rows = [
+      { name: 'export firewall', username: 'ADMIN', password: 'again' },
+      { name: 'Export Switch', username: 'admin', password: 'pw-switch' },
+    ];
+    const preview = await body(await runRows(rows));
+    expect(preview).toMatchObject({ duplicates: 1, duplicates_detail: [{ line: 1, label: 'export firewall' }] });
+
+    const committed = await body(await runRows(rows, { commit: true, skipDuplicates: true }));
+    expect(committed).toMatchObject({ committed: 1, left_out: 1 });
+    expect(await count(`SELECT count(*)::text AS n FROM asset_node WHERE lower(name) = 'export firewall'`)).toBe(1);
+  });
+
+  it('still writes nothing for a bad row, unless told to leave bad rows out', async () => {
+    const rows = [
+      { name: 'Export Good', password: 'pw-good' },
+      { name: 'Export Missing Password', username: 'x' },
+    ];
+    const refused = await runRows(rows, { commit: true });
+    expect(refused.status).toBe(400);
+    expect(await count(`SELECT count(*)::text AS n FROM asset_node WHERE name = 'Export Good'`)).toBe(0);
+
+    const committed = await body(await runRows(rows, { commit: true, skipInvalid: true }));
+    expect(committed).toMatchObject({ committed: 1, left_out: 1, invalid: 1 });
+    expect(await count(`SELECT count(*)::text AS n FROM asset_node WHERE name = 'Export Missing Password'`)).toBe(0);
+  });
+
+  it('refuses a request carrying both a file and rows', async () => {
+    const response = await importRoute(request({
+      category: 'passwords', csv: 'Name,Password\nA,b\n', rows: [{ name: 'A', password: 'b' }],
+    }), orgParams);
+    expect(response.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('what cannot be imported', () => {
   it('refuses documents, which are files rather than rows', async () => {
     const response = await run('documents', 'Name\nanything\n', true);
