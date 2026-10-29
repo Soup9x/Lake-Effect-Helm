@@ -27,6 +27,7 @@
  */
 import { useState } from 'react';
 import { ImportDialog } from './import-dialog';
+import { PasswordImportDialog } from './password-import-dialog';
 import { ContactForm } from './contact-form';
 import { NewProcedureForm } from '../new-procedure-form';
 import { NewAssetForm } from '../new-asset-form';
@@ -86,7 +87,16 @@ export function CategoryActions({
         </Button>
       )}
 
-      {importSpec && (
+      {/* A password manager's export needs its columns checked; Helm's own templates do not. */}
+      {importSpec && category === 'passwords' && (
+        <PasswordImportDialog
+          organizationId={organizationId}
+          templateHeader={importSpec.templateHeader}
+          open={importing}
+          onOpenChange={setImporting}
+        />
+      )}
+      {importSpec && category !== 'passwords' && (
         <ImportDialog
           organizationId={organizationId}
           category={category}
