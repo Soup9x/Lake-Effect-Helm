@@ -41,6 +41,7 @@ export default async function GlobalCredentialsPage({
       rows, options,
       actorRoleRank: rank?.rank ?? 0,
       canDelete: session.permissions.includes('asset:delete'),
+      canDeleteCredentials: session.permissions.includes('secret:delete'),
     };
   });
 
@@ -102,6 +103,7 @@ export default async function GlobalCredentialsPage({
         categoryLabel="Credentials"
         canWrite={canWrite}
         canDelete={data.canDelete}
+        canDeleteCredentials={data.canDeleteCredentials}
         labels={{ secondary: 'Username', type: 'Status', extra: 'Client' }}
         actorRoleRank={data.actorRoleRank}
         columnScope="global-credentials"

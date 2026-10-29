@@ -8,12 +8,14 @@
  * Without this wrapper the page itself would have to be a client component, and
  * every query it runs would have to move to an endpoint.
  *
- * SELECTION, on lists of entries and on Contacts. A list that is all entries —
- * devices, credentials, domains, the global lists — gets checkboxes and the
- * bulk bar: archive or restore, tags, export, and Make copies — and so does a
- * Contacts list, for contacts. A list mixing kinds the bulk actions cannot
- * treat alike (documents with folders, locations) does not, because a checkbox
- * that does nothing is worse than none.
+ * SELECTION, on every list whose rows the bulk actions can treat alike. A list
+ * of entries — devices, credentials, domains, the global lists — gets
+ * checkboxes and the bulk bar: archive or restore, tags, export, Make copies
+ * and Delete; so do Contacts, Locations and Documents (files and written
+ * documents together; a folder row has no checkbox), each with the actions
+ * that apply to it. My passwords gets the bar with Delete alone. A list mixing
+ * kinds the bar cannot treat alike (diagrams) does not, because a checkbox that
+ * does nothing is worse than none.
  *
  * WHAT IT DOES NOT DO: decrypt anything. The OTP badge is a LINK to the credential, not a
  * code — generating one requires secret:reveal and writes an audit row, and a
@@ -26,7 +28,7 @@ import Link from 'next/link';
 import {
   ArchiveRestore, CopyPlus, ExternalLink, EyeOff, KeyRound, Lock, Pencil, Trash2,
 } from 'lucide-react';
-import { BulkBar } from '../bulk-bar';
+import { BulkBar, type BulkTarget } from '../bulk-bar';
 import { CopyEntryDialog } from '../copy-entry-dialog';
 import { isCopyable } from '@/lib/assets/copyable';
 import { FilterToolbar } from './filter-toolbar';
@@ -92,6 +94,16 @@ interface Row extends GridRow {
   record: CategoryRecord;
 }
 
+/** Which bulk target a row's kind is. Folders and diagrams have none. */
+const BULK_OF: Partial<Record<RemoveKind, BulkTarget>> = {
+  node: 'node',
+  contact: 'contact',
+  site: 'site',
+  document: 'document',
+  page: 'document',
+  vault: 'vault',
+};
+
 /**
  * What the four flexible columns are called HERE.
  *
@@ -117,6 +129,7 @@ export function CategoryGrid({
   columnScope,
   extraColumns = [],
   canDelete = false,
+  canDeleteCredentials = false,
   emptyMessage,
   omitColumns,
   archivable = true,
@@ -131,8 +144,10 @@ export function CategoryGrid({
   /** Namespaces the viewer's column choice. One per category. */
   columnScope: string;
   extraColumns?: readonly ExtraColumn[] | undefined;
-  /** asset:delete — offers Delete permanently on archived rows. */
+  /** asset:delete — offers Delete permanently on archived rows, and Delete on a Documents selection. */
   canDelete?: boolean | undefined;
+  /** secret:delete — offers Delete on a selection of passwords. */
+  canDeleteCredentials?: boolean | undefined;
   /** For a list that is not a client's. */
   emptyMessage?: string | undefined;
   /** Columns a list has nothing for, left out rather than shown as dashes. */
@@ -159,17 +174,31 @@ export function CategoryGrid({
   const [selected, setSelected] = useState<string[]>([]);
   const [clearSignal, setClearSignal] = useState(0);
 
-  // Checkboxes only where every row is an entry, or every row a contact: see
-  // the header. A list mixing the two would need two kinds of bulk action.
-  const bulkTarget: 'node' | 'contact' | null =
-    records.length > 0 && records.every((r) => r.removeKind === 'node') ? 'node'
-      : records.length > 0 && records.every((r) => r.removeKind === 'contact') ? 'contact'
-        : null;
+  // Checkboxes only where every row (folders aside) is one bulk kind: see the
+  // header. A list mixing two would need two kinds of bulk action.
+  const bulkTarget = useMemo<BulkTarget | null>(() => {
+    const kinds = new Set(
+      records.filter((r) => r.removeKind !== 'folder').map((r) => (r.removeKind ? BULK_OF[r.removeKind] : undefined)),
+    );
+    const [only] = kinds;
+    return kinds.size === 1 && only ? only : null;
+  }, [records]);
   const selectable = canWrite && bulkTarget !== null;
   const chosen = useMemo(() => {
     const ids = new Set(selected);
     return records.filter((r) => ids.has(r.id));
   }, [records, selected]);
+  // Make copies: entries of a copyable kind, contacts, locations, and written
+  // documents (an uploaded file's stored bytes are not duplicated).
+  const copyable =
+    bulkTarget === 'node' ? chosen.every((r) => isCopyable(r.nodeType))
+      : bulkTarget === 'document' ? chosen.every((r) => r.removeKind === 'page')
+        : bulkTarget === 'contact' || bulkTarget === 'site';
+  // Delete: who may, as one row at a time. Of the entries, only passwords.
+  const deletable =
+    bulkTarget === 'node' ? canDeleteCredentials && chosen.every((r) => r.nodeType === 'credential')
+      : bulkTarget === 'document' ? canDelete
+        : bulkTarget !== null && bulkTarget !== 'client';
 
   /*
    * A row's actions. A folder's is Delete, only ever of an empty folder; an
@@ -219,7 +248,7 @@ export function CategoryGrid({
         : []),
       ...(canWrite && kind
         ? [{
-            label: 'Remove', icon: Trash2, tone: 'danger' as const,
+            label: kind === 'vault' ? 'Delete' : 'Remove', icon: Trash2, tone: 'danger' as const,
             onClick: () => setRemoving({ record, mode: 'remove' }),
           }]
         : []),
@@ -233,7 +262,7 @@ export function CategoryGrid({
         record,
         ...(record.flagged ? { flagged: true } : {}),
         ...(record.folder
-          ? { folder: { label: record.name, ...record.folder } }
+          ? { folder: { label: record.name, ...record.folder }, unselectable: true }
           : {}),
         // Lowercased once here rather than per keystroke in the table.
         search: [record.name, record.subtext, record.secondary, record.type, record.extra,
@@ -385,7 +414,8 @@ export function CategoryGrid({
           ids={chosen.map((r) => r.id)}
           // Restore when everything ticked is archived; Archive otherwise.
           archived={chosen.every((r) => r.archived)}
-          copyable={bulkTarget === 'contact' || chosen.every((r) => isCopyable(r.nodeType))}
+          copyable={copyable}
+          deletable={deletable}
           // Clears both halves: this copy, which hides the bar, and the
           // table's own set, which owns the checkboxes.
           onClear={() => {

@@ -2,15 +2,30 @@
 
 import { useCallback, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Archive, ArchiveRestore, CopyPlus, FileDown, Tag, X } from 'lucide-react';
+import { AlertTriangle, Archive, ArchiveRestore, CopyPlus, FileDown, Loader2, Tag, Trash2, X } from 'lucide-react';
 import { useDismissable } from '@/lib/ui/use-dismissable';
 import { apiFetch } from '@/lib/ui/api';
 import { withStepUp } from '@/lib/ui/step-up';
 import { useStepUp } from './step-up-dialog';
 import { Button } from './ui/button';
 import { FieldHint, Input, Label } from './ui/field';
+import { Modal } from './ui/modal';
 
-export type BulkTarget = 'client' | 'node' | 'contact';
+/**
+ * What is selected. 'document' is a Documents list's files and written
+ * documents together; 'vault' is the signed-in person's own passwords, which
+ * offer Delete and nothing else — no tags, no archive, never exported.
+ */
+export type BulkTarget = 'client' | 'node' | 'contact' | 'document' | 'site' | 'vault';
+
+const NOUNS: Record<BulkTarget, string> = {
+  client: 'client',
+  node: 'item',
+  contact: 'contact',
+  document: 'document',
+  site: 'location',
+  vault: 'password',
+};
 
 /**
  * The bar that appears when something is selected.
@@ -31,6 +46,7 @@ export function BulkBar({
   onClear,
   archived = false,
   copyable = false,
+  deletable = false,
 }: {
   target: BulkTarget;
   ids: string[];
@@ -39,6 +55,12 @@ export function BulkBar({
   archived?: boolean;
   /** Offer "Make copies": entries, none of them a kind that cannot be copied. */
   copyable?: boolean;
+  /**
+   * Offer "Delete": a selection this person may delete permanently — passwords
+   * with secret:delete, documents with asset:delete, contacts, locations, and
+   * their own vault. The server decides either way.
+   */
+  deletable?: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -46,7 +68,9 @@ export function BulkBar({
   const [done, setDone] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  const noun = target === 'client' ? 'client' : target === 'contact' ? 'contact' : 'item';
+  const noun = NOUNS[target];
+  // The person's own vault has no tags, no archive and no export.
+  const managed = target !== 'vault';
   const label = `${ids.length} ${noun}${ids.length === 1 ? '' : 's'} selected`;
 
   async function post(path: string, body: unknown, verb: string) {
@@ -86,25 +110,27 @@ export function BulkBar({
       <div className="flex flex-wrap items-center gap-2 rounded-full border border-border-strong bg-surface-raised px-3 py-2 shadow-lg">
         <span className="px-1 text-sm font-medium text-ink">{label}</span>
 
-        <TagPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />
+        {managed && <TagPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />}
 
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy !== null}
-          onClick={() =>
-            void post('/api/bulk/archive', { target, ids, archived: !archived }, archived ? 'Restored' : 'Archived')
-          }
-        >
-          {archived ? <ArchiveRestore className="size-4" aria-hidden /> : <Archive className="size-4" aria-hidden />}
-          {archived ? 'Restore' : 'Archive'}
-        </Button>
+        {managed && (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy !== null}
+            onClick={() =>
+              void post('/api/bulk/archive', { target, ids, archived: !archived }, archived ? 'Restored' : 'Archived')
+            }
+          >
+            {archived ? <ArchiveRestore className="size-4" aria-hidden /> : <Archive className="size-4" aria-hidden />}
+            {archived ? 'Restore' : 'Archive'}
+          </Button>
+        )}
 
-        <ExportPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />
+        {managed && <ExportPopover target={target} ids={ids} onSubmit={post} busy={busy !== null} />}
 
-        {copyable && !archived && (
+        {copyable && !archived && target !== 'client' && target !== 'vault' && (
           <CopyAction
-            target={target === 'contact' ? 'contact' : 'node'}
+            target={target}
             ids={ids}
             busy={busy !== null}
             onDone={(count) => {
@@ -115,6 +141,10 @@ export function BulkBar({
             }}
             onError={(message) => { setDone(null); setError(message); }}
           />
+        )}
+
+        {deletable && target !== 'client' && (
+          <DeleteAction target={target} ids={ids} onSubmit={post} busy={busy !== null} />
         )}
 
         <button
@@ -299,8 +329,8 @@ function CopyAction({
   onDone,
   onError,
 }: {
-  /** Entries, or contacts (copied without a reveal: they hold no password). */
-  target: 'node' | 'contact';
+  /** Entries; or contacts, locations and written documents, copied without a reveal. */
+  target: 'node' | 'contact' | 'site' | 'document';
   ids: string[];
   busy: boolean;
   onDone: (count: number) => void;
@@ -357,6 +387,104 @@ function CopyAction({
         <CopyPlus className="size-4" aria-hidden />
         {needsReason ? 'Copy with reason' : 'Make copies'}
       </Button>
+    </>
+  );
+}
+
+/** What deleting each kind destroys, said before the person confirms it. */
+const DELETE_COPY: Record<Exclude<BulkTarget, 'client'>, string> = {
+  node: 'Each password and its stored value is destroyed. A value another entry also documents is kept for that entry.',
+  document: 'Each file, or written document with every version and attached file, is destroyed. Anything that linked to it will show it as gone.',
+  contact: 'Each person is removed from Helm for good.',
+  site: 'Each location stops appearing anywhere in Helm. What was recorded there keeps its record and shows no location.',
+  vault: 'Each password is removed from your vault for good.',
+};
+
+/**
+ * "Delete": permanent, so it asks first, and not with a red button muscle
+ * memory dismisses. The dialog names the count and what goes, and the button
+ * stays off until "delete" is typed — less friction than typing a client's
+ * name (DeletePermanently), because a selection has no one name to type.
+ *
+ * Live rows are archived and then deleted by the server, in that order, so the
+ * database's archive-first rule is kept (POST /api/bulk/delete).
+ */
+function DeleteAction({
+  target,
+  ids,
+  onSubmit,
+  busy,
+}: {
+  target: Exclude<BulkTarget, 'client'>;
+  ids: string[];
+  onSubmit: Submit;
+  busy: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [working, setWorking] = useState(false);
+  const count = `${ids.length} ${NOUNS[target]}${ids.length === 1 ? '' : 's'}`;
+
+  async function confirm(event: React.FormEvent) {
+    event.preventDefault();
+    setWorking(true);
+    try {
+      // The bar shows the outcome, success or refusal, under itself.
+      await onSubmit('/api/bulk/delete', { target, ids }, 'Deleted');
+      setOpen(false);
+      setTyped('');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <>
+      <Button variant="secondary" size="sm" disabled={busy} onClick={() => setOpen(true)} className="text-danger">
+        <Trash2 className="size-4" aria-hidden />
+        Delete
+      </Button>
+      <Modal
+        open={open}
+        onOpenChange={(next) => { setOpen(next); if (!next) setTyped(''); }}
+        title={`Delete ${count} permanently?`}
+        icon={Trash2}
+      >
+        <form className="space-y-4" onSubmit={(event) => void confirm(event)}>
+          <p className="text-sm text-ink-muted">{DELETE_COPY[target]}</p>
+          <p className="flex items-start gap-2 rounded-md border border-sev-warning/30 bg-sev-warning/5 px-3 py-2 text-sm text-ink">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-sev-warning" aria-hidden />
+            {target === 'vault'
+              ? 'This cannot be undone.'
+              : 'Anything not yet archived is archived and then deleted. This cannot be undone from Helm.'}
+          </p>
+          <div>
+            <Label htmlFor="bulk-delete-confirm">Type delete to confirm</Label>
+            <Input
+              id="bulk-delete-confirm"
+              value={typed}
+              autoFocus
+              autoComplete="off"
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder="delete"
+            />
+          </div>
+          <div className="flex justify-end gap-2 border-t border-border pt-3">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)} disabled={working}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="danger"
+              size="sm"
+              disabled={working || typed.trim().toLowerCase() !== 'delete'}
+            >
+              {working && <Loader2 className="animate-spin" />}
+              Delete {count}
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </>
   );
 }

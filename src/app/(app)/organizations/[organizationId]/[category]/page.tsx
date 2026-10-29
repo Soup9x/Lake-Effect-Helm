@@ -68,6 +68,7 @@ export default async function CategoryPage({
   const identity = await getServerIdentity();
 
   let canDelete = false;
+  let canDeleteCredentials = false;
   const data = await withTenant(actorOf(identity), async (tx, session) => {
     const [org] = await tx<{ id: string; name: string }[]>`
       SELECT id, name FROM organization WHERE id = ${organizationId}::uuid
@@ -75,6 +76,8 @@ export default async function CategoryPage({
     if (!org) return null;
     // Offers Delete permanently on archived documents; the database decides.
     canDelete = session.permissions.includes('asset:delete');
+    // Offers Delete on a selection of passwords; helm.delete_credential decides.
+    canDeleteCredentials = session.permissions.includes('secret:delete');
 
     // Authoritative, and the same number helm.reveal_secret compares against —
     // rather than mapping a role key to a rank in the browser.
@@ -306,12 +309,12 @@ export default async function CategoryPage({
 
     if (category.source === 'site') {
       const rows = await tx<(Parameters<typeof siteValuesFrom>[0] & {
-        id: string; updated_at: Date; archived: boolean;
+        id: string; updated_at: Date; archived: boolean; tags: string[];
       })[]>`
         SELECT id, name, code, is_primary, address_line1, address_line2, city, region, postal_code,
                country, timezone, main_phone, after_hours_phone,
                ARRAY(SELECT abbrev(ip) FROM unnest(public_ips) AS ip) AS public_ips,
-               access_notes, physical_security, notes, updated_at,
+               access_notes, physical_security, notes, updated_at, tags,
                archived_at IS NOT NULL AS archived
         FROM site
         WHERE organization_id = ${organizationId}::uuid AND deleted_at IS NULL
@@ -334,6 +337,8 @@ export default async function CategoryPage({
           updatedAt: r.updated_at.toISOString(),
           removeKind: 'site',
           archived: r.archived,
+          // Free-text tags (1170), a column of their own and matched by the filter.
+          cells: { tags: r.tags.join(', ') || null },
           // The name opens the location's page; Edit opens the location dialog.
           href: `/locations/${r.id}`,
           editSite: { organizationId, values: siteValuesFrom(r) },
@@ -409,8 +414,9 @@ export default async function CategoryPage({
       tx<{
         id: string; filename: string; content_type: string; byte_size: number;
         uploaded_at: Date; uploaded_by_name: string | null; is_internal_only: boolean; archived: boolean;
+        tags: string[];
       }[]>`
-        SELECT a.id, a.filename, a.content_type, a.byte_size, a.uploaded_at,
+        SELECT a.id, a.filename, a.content_type, a.byte_size, a.uploaded_at, a.tags,
                u.name AS uploaded_by_name, a.is_internal_only, a.archived_at IS NOT NULL AS archived
         FROM attachment a
         LEFT JOIN app_user u ON u.id = a.uploaded_by
@@ -422,9 +428,9 @@ export default async function CategoryPage({
       `,
       tx<{
         id: string; title: string; version: number; updated_at: Date; updated_by_name: string | null;
-        is_internal_only: boolean; archived: boolean;
+        is_internal_only: boolean; archived: boolean; tags: string[];
       }[]>`
-        SELECT p.id, p.title, p.version, p.updated_at, coalesce(u.name, u.email::text) AS updated_by_name,
+        SELECT p.id, p.title, p.version, p.updated_at, coalesce(u.name, u.email::text) AS updated_by_name, p.tags,
                p.is_internal_only, p.archived_at IS NOT NULL AS archived
         FROM document_page p
         LEFT JOIN app_user u ON u.id = p.updated_by
@@ -471,6 +477,7 @@ export default async function CategoryPage({
           updatedBy: p.updated_by_name,
           removeKind: 'page',
           archived: p.archived,
+          cells: { tags: p.tags.join(', ') || null },
         })),
         ...docs.map<CategoryRecord>((d) => ({
           id: d.id,
@@ -483,6 +490,7 @@ export default async function CategoryPage({
           updatedBy: d.uploaded_by_name,
           removeKind: 'document',
           archived: d.archived,
+          cells: { tags: d.tags.join(', ') || null },
           permissions: { internalOnly: d.is_internal_only },
         })),
       ],
@@ -654,6 +662,7 @@ export default async function CategoryPage({
         categoryLabel={category.label}
         canWrite={canWrite}
         canDelete={canDelete}
+        canDeleteCredentials={canDeleteCredentials}
         labels={labels}
         actorRoleRank={data.actorRoleRank}
         columnScope={category.slug}
@@ -670,7 +679,7 @@ export default async function CategoryPage({
                   { key: 'registered', header: 'Registered' },
                   { key: 'expires', header: 'Expires' },
                 ]
-              : category.source === 'contact'
+              : category.source === 'contact' || category.source === 'site' || category.source === 'attachment'
                 ? [{ key: 'tags', header: 'Tags' }]
                 : []
         }

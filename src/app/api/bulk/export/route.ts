@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
-import { MAX_SELECTION, resolveClients, resolveContacts, resolveNodes } from '@/lib/bulk/service';
+import {
+  MAX_SELECTION, auditEntity, resolveClients, resolveContacts, resolveDocuments, resolveNodes, resolveSites,
+} from '@/lib/bulk/service';
 import { getExportService } from '@/lib/exports/service';
 
 const schema = z.object({
-  target: z.enum(['client', 'node', 'contact']),
+  target: z.enum(['client', 'node', 'contact', 'document', 'site']),
   ids: z.array(z.guid()).min(1).max(MAX_SELECTION),
   kind: z
     .enum(['client_offboarding', 'compliance_audit', 'disaster_recovery', 'asset_inventory', 'ad_hoc'])
@@ -28,7 +30,8 @@ const schema = z.object({
  * So a selection of nodes is grouped by the client they belong to, and a
  * selection of clients becomes one job each. A selection of contacts is
  * grouped the same way, and each bundle carries those contacts and nothing
- * else (scope.contactIds). The response lists them.
+ * else (scope.contactIds); so are documents (scope.documentIds) and locations
+ * (scope.siteIds). The response lists them.
  *
  * SECRET MATERIAL IS NOT INCLUDED, and this endpoint cannot ask for it. That
  * restriction MATTERS MORE since 0400, not less. A secret-bearing export needs
@@ -59,11 +62,13 @@ export const POST = tenantRoute(
     const byClient = new Map<string, string[]>();
     if (body.target === 'client') {
       for (const id of await resolveClients(tx, body.ids)) byClient.set(id, []);
-    } else if (body.target === 'contact') {
-      for (const contact of await resolveContacts(tx, body.ids)) {
-        const existing = byClient.get(contact.organizationId);
-        if (existing) existing.push(contact.id);
-        else byClient.set(contact.organizationId, [contact.id]);
+    } else if (body.target === 'contact' || body.target === 'document' || body.target === 'site') {
+      const resolve = body.target === 'contact' ? resolveContacts
+        : body.target === 'document' ? resolveDocuments : resolveSites;
+      for (const row of await resolve(tx, body.ids)) {
+        const existing = byClient.get(row.organizationId);
+        if (existing) existing.push(row.id);
+        else byClient.set(row.organizationId, [row.id]);
       }
     } else {
       for (const node of await resolveNodes(tx, body.ids)) {
@@ -78,7 +83,8 @@ export const POST = tenantRoute(
     // of five behind if the fourth failed. This batch is one unit or it is
     // nothing, exactly like the archive and tag operations above it.
     const jobs: { organizationId: string; exportJobId: string }[] = [];
-    // For a contact selection the ids in each group are contact ids.
+    // For a contact, document or location selection the ids in each group are
+    // that kind's ids, and the bundle carries those and nothing else.
     for (const [organizationId, nodeIds] of byClient) {
       const job = await getExportService().requestInTransaction(tx, {
         organizationId,
@@ -87,9 +93,10 @@ export const POST = tenantRoute(
         reason: body.reason,
         includeSecrets: false,
         ttlHours: body.ttlHours,
-        scope: body.target === 'contact'
-          ? { contactIds: nodeIds }
-          : nodeIds.length > 0 ? { nodeIds } : {},
+        scope: body.target === 'contact' ? { contactIds: nodeIds }
+          : body.target === 'document' ? { documentIds: nodeIds }
+            : body.target === 'site' ? { siteIds: nodeIds }
+              : nodeIds.length > 0 ? { nodeIds } : {},
       });
       jobs.push({ organizationId, exportJobId: job.exportJobId });
     }
@@ -97,7 +104,7 @@ export const POST = tenantRoute(
     await tx`
       SELECT helm.audit(
         'bulk.export',
-        ${body.target === 'client' ? 'organization' : body.target === 'contact' ? 'contact' : 'asset_node'},
+        ${auditEntity(body.target)},
         NULL::uuid,
         'success'::audit_outcome,
         NULL::uuid, NULL::uuid, ${body.reason},

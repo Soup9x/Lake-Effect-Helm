@@ -31,7 +31,13 @@ import { ApiError } from '../api/errors';
 
 export const MAX_SELECTION = 500;
 
-export type BulkTarget = 'client' | 'node' | 'contact';
+/**
+ * What a selection can be of. 'document' is a client's Documents list, which
+ * holds uploaded files (attachment) and written documents (document_page) in
+ * one list: a selection's ids are matched against both tables, which share no
+ * ids, so one selection can hold both.
+ */
+export type BulkTarget = 'client' | 'node' | 'contact' | 'document' | 'site';
 
 export interface BulkOutcome {
   /** Ids the caller asked for. */
@@ -136,19 +142,46 @@ function normaliseTags(raw: string[]): string[] {
 }
 
 /**
- * The two tables a selection can address.
+ * The tables a selection can address.
  *
  * A lookup keyed by a closed union, NOT a name from the request. The statements
- * below interpolate `table.name` into SQL because a table name cannot be a bind
- * parameter; that is only safe because the value can never be anything but one
- * of the two literals here, and BulkTarget is what guarantees it.
+ * below interpolate `name` and `live` into SQL because a table name cannot be a
+ * bind parameter; that is only safe because the values can never be anything
+ * but the literals here, and BulkTarget is what guarantees it.
+ *
+ * `live` narrows to the rows the list shows: not deleted, and for attachments
+ * only the documents in the tree. `touch` is false for attachment, which has no
+ * updated_at.
  */
-const TABLE: Record<BulkTarget, { name: string; archiveColumn: string; label: string }> = {
-  client: { name: 'organization', archiveColumn: 'archived_at', label: 'client' },
-  node: { name: 'asset_node', archiveColumn: 'archived_at', label: 'item' },
+interface BulkTable { name: string; live: string; touch: boolean }
+
+const TABLES: Record<BulkTarget, BulkTable[]> = {
+  client: [{ name: 'organization', live: 'TRUE', touch: true }],
+  node: [{ name: 'asset_node', live: 'TRUE', touch: true }],
   // Archived since 0850, tagged since 1050.
-  contact: { name: 'contact', archiveColumn: 'archived_at', label: 'contact' },
+  contact: [{ name: 'contact', live: 'deleted_at IS NULL', touch: true }],
+  // Tagged since 1170, archived since 0560 and 0810.
+  document: [
+    { name: 'attachment', live: 'is_document AND deleted_at IS NULL', touch: false },
+    { name: 'document_page', live: 'deleted_at IS NULL', touch: true },
+  ],
+  // Archived since 0940, tagged since 1170.
+  site: [{ name: 'site', live: 'deleted_at IS NULL', touch: true }],
 };
+
+/** One UPDATE per table the target spans, every one under the caller's RLS. */
+async function updateEach(
+  tx: HelmTx,
+  target: BulkTarget,
+  statement: (table: BulkTable) => string,
+  params: unknown[],
+): Promise<{ id: string }[]> {
+  const rows: { id: string }[] = [];
+  for (const table of TABLES[target]) {
+    rows.push(...(await tx.unsafe<{ id: string }[]>(statement(table), params as never[])));
+  }
+  return rows;
+}
 
 /**
  * Add tags to every selected row, keeping what is already there.
@@ -166,18 +199,18 @@ export async function bulkAddTags(
 ): Promise<BulkOutcome> {
   const selection = normaliseSelection(ids);
   const clean = normaliseTags(tags);
-  const table = TABLE[target];
 
   return runSelection(
     () =>
-      tx.unsafe<{ id: string }[]>(
-        `UPDATE ${table.name} SET
+      updateEach(
+        tx,
+        target,
+        (table) => `UPDATE ${table.name} SET
            tags = (
              SELECT coalesce(array_agg(DISTINCT t ORDER BY t), '{}'::text[])
              FROM unnest(tags || $2::text[]) AS t
-           ),
-           updated_at = now()
-         WHERE id = ANY($1::uuid[])
+           )${table.touch ? ',\n           updated_at = now()' : ''}
+         WHERE id = ANY($1::uuid[]) AND ${table.live}
          RETURNING id`,
         [selection, clean],
       ),
@@ -194,19 +227,19 @@ export async function bulkRemoveTags(
 ): Promise<BulkOutcome> {
   const selection = normaliseSelection(ids);
   const clean = normaliseTags(tags);
-  const table = TABLE[target];
 
   return runSelection(
     () =>
-      tx.unsafe<{ id: string }[]>(
-        `UPDATE ${table.name} SET
+      updateEach(
+        tx,
+        target,
+        (table) => `UPDATE ${table.name} SET
            tags = (
              SELECT coalesce(array_agg(t ORDER BY t), '{}'::text[])
              FROM unnest(tags) AS t
              WHERE NOT (t = ANY($2::text[]))
-           ),
-           updated_at = now()
-         WHERE id = ANY($1::uuid[])
+           )${table.touch ? ',\n           updated_at = now()' : ''}
+         WHERE id = ANY($1::uuid[]) AND ${table.live}
          RETURNING id`,
         [selection, clean],
       ),
@@ -239,15 +272,18 @@ export async function bulkSetArchived(
   archived: boolean,
 ): Promise<BulkOutcome> {
   const selection = normaliseSelection(ids);
-  const table = TABLE[target];
 
   return runSelection(
     () =>
-      tx.unsafe<{ id: string }[]>(
-        `UPDATE ${table.name} SET
-           ${table.archiveColumn} = CASE WHEN $2::boolean THEN now() ELSE NULL END,
-           updated_at = now()
-         WHERE id = ANY($1::uuid[])${target === 'contact' ? ' AND deleted_at IS NULL' : ''}
+      updateEach(
+        tx,
+        target,
+        (table) => `UPDATE ${table.name} SET
+           archived_at = CASE WHEN $2::boolean THEN now() ELSE NULL END${table.touch ? ',\n           updated_at = now()' : ''}${
+             // An archived location is nobody's head office, as on its own
+             // page: archiving clears the flag so the client can name another.
+             target === 'site' ? ',\n           is_primary = CASE WHEN $2::boolean THEN false ELSE is_primary END' : ''}
+         WHERE id = ANY($1::uuid[]) AND ${table.live}
          RETURNING id`,
         [selection, archived],
       ),
@@ -316,4 +352,165 @@ export async function resolveClients(tx: HelmTx, ids: string[]): Promise<string[
   `;
 
   return requireAll(selection, rows.map((r) => r.id), 'export').affected;
+}
+
+export interface SelectedRow {
+  id: string;
+  organizationId: string;
+}
+
+/**
+ * The documents a selection names — uploaded files and written documents
+ * alike — for export, grouped later by client. Archived ones are not exported,
+ * as archived entries are not.
+ */
+export async function resolveDocuments(tx: HelmTx, ids: string[]): Promise<SelectedRow[]> {
+  const selection = normaliseSelection(ids);
+  const rows = await tx<{ id: string; organization_id: string }[]>`
+    SELECT id, organization_id FROM attachment
+    WHERE id = ANY(${selection}::uuid[]) AND is_document AND deleted_at IS NULL AND archived_at IS NULL
+    UNION ALL
+    SELECT id, organization_id FROM document_page
+    WHERE id = ANY(${selection}::uuid[]) AND deleted_at IS NULL AND archived_at IS NULL
+  `;
+  requireAll(selection, rows.map((r) => r.id), 'export');
+  return rows.map((r) => ({ id: r.id, organizationId: r.organization_id }));
+}
+
+/** The locations a selection names, for export, with the same reach check. */
+export async function resolveSites(tx: HelmTx, ids: string[]): Promise<SelectedRow[]> {
+  const selection = normaliseSelection(ids);
+  const rows = await tx<{ id: string; organization_id: string }[]>`
+    SELECT id, organization_id FROM site
+    WHERE id = ANY(${selection}::uuid[]) AND deleted_at IS NULL AND archived_at IS NULL
+  `;
+  requireAll(selection, rows.map((r) => r.id), 'export');
+  return rows.map((r) => ({ id: r.id, organizationId: r.organization_id }));
+}
+
+// ---------------------------------------------------------------------------
+// Deleting
+// ---------------------------------------------------------------------------
+
+/**
+ * Permanent deletion of a selection, for the targets whose deletion is plain
+ * SQL. Documents go through the document service, one at a time, because each
+ * takes its stored file with it (see POST /api/bulk/delete).
+ *
+ * ARCHIVE FIRST STILL HOLDS, and here it is done for the person: every row is
+ * archived in this transaction before it is deleted, so the database's rail
+ * (helm.delete_credential refuses a live credential) and the per-row routes'
+ * order are both kept. What stands in front of a live row instead is the bar's
+ * confirmation, which names the count and needs "delete" typed.
+ *
+ *   node     credentials only, through helm.delete_credential(), which checks
+ *            secret:delete and removes the password unless something else
+ *            documents it. Other entries archive and stay archived — that is
+ *            a data-retention rule, not a missing branch (see the assets route).
+ *   contact  deleted_at, as DELETE /api/contacts/:id does.
+ *   site     deleted_at, as DELETE /api/sites/:id does; what was recorded
+ *            there keeps its record and shows no location.
+ */
+export async function bulkDelete(
+  tx: HelmTx,
+  target: 'node' | 'contact' | 'site',
+  ids: string[],
+  actorId: string,
+): Promise<BulkOutcome> {
+  const selection = normaliseSelection(ids);
+
+  if (target === 'node') {
+    const found = await tx<{ id: string; node_type: string }[]>`
+      SELECT id, node_type::text FROM asset_node WHERE id = ANY(${selection}::uuid[])
+    `;
+    requireAll(selection, found.map((r) => r.id), 'delete');
+    const other = found.filter((r) => r.node_type !== 'credential').length;
+    if (other > 0) {
+      throw ApiError.invalid(
+        `${other} of the selected items ${other === 1 ? 'is not a password' : 'are not passwords'}. ` +
+          'Only passwords can be deleted; archive the rest. Nothing was changed.',
+      );
+    }
+    await runSelection(
+      () => tx<{ id: string }[]>`
+        UPDATE asset_node SET archived_at = coalesce(archived_at, now()), updated_at = now()
+        WHERE id = ANY(${selection}::uuid[]) RETURNING id
+      `,
+      selection,
+      'delete',
+    );
+    for (const id of selection) {
+      await tx`SELECT helm.delete_credential(${id}::uuid)`;
+    }
+    return { requested: selection, affected: selection };
+  }
+
+  return runSelection(
+    () =>
+      target === 'contact'
+        ? tx<{ id: string }[]>`
+            UPDATE contact SET archived_at = coalesce(archived_at, now()), deleted_at = now(),
+                   updated_at = now(), updated_by = ${actorId}::uuid
+            WHERE id = ANY(${selection}::uuid[]) AND deleted_at IS NULL
+            RETURNING id
+          `
+        : tx<{ id: string }[]>`
+            UPDATE site SET archived_at = coalesce(archived_at, now()), is_primary = false,
+                   deleted_at = now(), updated_at = now(), updated_by = ${actorId}::uuid
+            WHERE id = ANY(${selection}::uuid[]) AND deleted_at IS NULL
+            RETURNING id
+          `,
+    selection,
+    'delete',
+  );
+}
+
+/**
+ * Deleting a selection of the signed-in person's own vault entries. There is no
+ * archive for these (1030): a delete is a delete, as on the entry's page. The
+ * owner policy matches nobody else's, so somebody else's id is a shortfall.
+ */
+export async function bulkDeleteVault(tx: HelmTx, ids: string[]): Promise<BulkOutcome> {
+  const selection = normaliseSelection(ids);
+  return runSelection(
+    () => tx<{ id: string }[]>`
+      DELETE FROM personal_credential WHERE id = ANY(${selection}::uuid[]) RETURNING id
+    `,
+    selection,
+    'delete',
+  );
+}
+
+/**
+ * Archive the documents a selection names, ready for the document service to
+ * delete them one by one, and say which table each id is in.
+ */
+export async function archiveDocumentsForDelete(
+  tx: HelmTx,
+  ids: string[],
+): Promise<{ files: string[]; pages: string[] }> {
+  const selection = normaliseSelection(ids);
+  const files = await tx<{ id: string }[]>`
+    UPDATE attachment SET archived_at = coalesce(archived_at, now())
+    WHERE id = ANY(${selection}::uuid[]) AND is_document AND deleted_at IS NULL
+    RETURNING id
+  `;
+  const pages = await tx<{ id: string }[]>`
+    UPDATE document_page SET archived_at = coalesce(archived_at, now()), updated_at = now()
+    WHERE id = ANY(${selection}::uuid[]) AND deleted_at IS NULL
+    RETURNING id
+  `;
+  requireAll(selection, [...files, ...pages].map((r) => r.id), 'delete');
+  return { files: files.map((r) => r.id), pages: pages.map((r) => r.id) };
+}
+
+/** The entity type a bulk audit row names. 'document' spans two tables; named for the list. */
+export function auditEntity(target: BulkTarget): string {
+  switch (target) {
+    case 'client': return 'organization';
+    case 'contact': return 'contact';
+    case 'document': return 'document';
+    case 'site': return 'site';
+    default: return 'asset_node';
+  }
 }

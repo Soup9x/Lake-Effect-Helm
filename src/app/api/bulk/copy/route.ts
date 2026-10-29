@@ -3,6 +3,8 @@ import { readJson, serviceRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 import { copyEntries } from '@/lib/assets/copy';
 import { copyContacts } from '@/lib/contacts/copy';
+import { copyPages } from '@/lib/documents/copy';
+import { copySites } from '@/lib/sites/copy';
 
 /**
  * POST /api/bulk/copy — "Make copies" on a list's selection: each entry copied
@@ -21,8 +23,12 @@ import { copyContacts } from '@/lib/contacts/copy';
 const MAX_COPIES = 50;
 
 const schema = z.object({
-  /** Entries by default; 'contact' copies a selection of contacts (src/lib/contacts/copy.ts). */
-  target: z.enum(['node', 'contact']).default('node'),
+  /**
+   * Entries by default; 'contact' copies contacts (src/lib/contacts/copy.ts),
+   * 'site' locations (src/lib/sites/copy.ts) and 'document' written documents
+   * (src/lib/documents/copy.ts).
+   */
+  target: z.enum(['node', 'contact', 'site', 'document']).default('node'),
   ids: z.array(z.guid()).min(1).max(MAX_COPIES),
   /** For passwords that require one, recorded with each reveal. */
   reason: z.string().trim().max(500).optional(),
@@ -38,8 +44,9 @@ export const POST = serviceRoute(
       return result.data;
     });
     const unique = [...new Set(body.ids)];
-    if (body.target === 'contact') {
-      const copies = await copyContacts(actor, unique);
+    if (body.target === 'contact' || body.target === 'site' || body.target === 'document') {
+      const copy = body.target === 'contact' ? copyContacts : body.target === 'site' ? copySites : copyPages;
+      const copies = await copy(actor, unique);
       return { affected: copies.length, copies };
     }
     const copies = await copyEntries(actor, unique.map((id) => ({ id })), { reason: body.reason });

@@ -18,10 +18,11 @@ const VAULT_PROMISE =
  * Credentials tab is — name, username, the OTP badge, open the website, search
  * and columns — and no values. Opening one is its page's business.
  *
- * NO BULK, COPY OR PERMISSIONS. Those are an entry's (asset_node's) actions
- * and these are not entries: rows carry no removeKind or nodeType, so the grid
- * offers Edit and nothing else. Nobody else can open them, so there is no
- * visibility to set.
+ * DELETE, ONE OR MANY, AND NOTHING ELSE IN BULK. Rows are removeKind 'vault':
+ * a row's Delete and the bulk bar's Delete (POST /api/bulk/delete) remove them
+ * for good — the vault has no archive. Tag, archive, export and copy are an
+ * entry's (asset_node's) actions, and these are not entries; nobody else can
+ * open them, so there is no visibility to set either.
  */
 export default async function MyPasswordsPage() {
   const identity = await getServerIdentity();
@@ -36,6 +37,7 @@ export default async function MyPasswordsPage() {
     hasTotp: entry.hasTotp,
     externalUrl: entry.url && /^https?:\/\//i.test(entry.url) ? entry.url : null,
     updatedAt: entry.updatedAt,
+    removeKind: 'vault',
     cells: { website: entry.url },
   }));
 

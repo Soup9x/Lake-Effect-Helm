@@ -1804,7 +1804,7 @@ describe('the personal vault, opened from its card', () => {
     expect(propsOf(page, 'VaultLoginRows')).toBeNull();
   });
 
-  it('lists the entries in the credentials grid, each opening its own page, with no entry actions', async () => {
+  it('lists the entries in the credentials grid, each opening its own page, deletable and nothing else', async () => {
     const page = await (await import('../../src/app/(app)/personal/passwords/page')).default();
     const records = propsOf(page, 'CategoryGrid')!.records as {
       id: string; href: string; secondary: string; removeKind?: string; nodeType?: string; permissions?: unknown;
@@ -1812,8 +1812,9 @@ describe('the personal vault, opened from its card', () => {
     expect(records).toContainEqual(expect.objectContaining({
       id: vaultEntryId, href: `/personal/passwords/${vaultEntryId}`, secondary: 'me@example.test',
     }));
-    // Not an asset_node: no bulk bar, no Make a copy, no permissions dialog.
-    expect(records.every((r) => !r.removeKind && !r.nodeType && !r.permissions)).toBe(true);
+    // Not an asset_node: Delete (one or a selection), but no Make a copy and
+    // no permissions dialog.
+    expect(records.every((r) => r.removeKind === 'vault' && !r.nodeType && !r.permissions)).toBe(true);
   });
 
   it('lays an entry out as a credential: notes, then login rows under Edit details', async () => {
