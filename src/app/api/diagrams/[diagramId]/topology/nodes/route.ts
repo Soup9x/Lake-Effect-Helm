@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { readJson, tenantRoute } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
+import { DIAGRAM_COLORS } from '@/lib/topology/style';
 
 /**
  * POST /api/diagrams/{diagramId}/topology/nodes — add a box: drawn by hand, or
@@ -27,6 +28,8 @@ const createSchema = z.object({
   posY: z.number().finite().optional(),
   /** Link the box to a real asset, so clicking it opens that asset's page. */
   assetNodeId: z.guid().optional(),
+  /** A palette name (1190); absent is the default colour. */
+  color: z.enum(DIAGRAM_COLORS).optional(),
 });
 
 export const POST = tenantRoute(
@@ -61,12 +64,12 @@ export const POST = tenantRoute(
       const [node] = await tx<{ id: string }[]>`
         INSERT INTO topology_node (
           tenant_id, diagram_id, asset_node_id, label, ip_address, subnet,
-          device_type, pos_x, pos_y)
+          device_type, pos_x, pos_y, color)
         VALUES (
           helm.require_tenant_id(), ${diagramId}::uuid, ${body.assetNodeId ?? null}::uuid,
           ${body.label}, ${body.ipAddress ?? null}, ${body.subnet ?? null},
           ${body.deviceType}::topology_device_type,
-          ${body.posX ?? null}, ${body.posY ?? null})
+          ${body.posX ?? null}, ${body.posY ?? null}, ${body.color ?? null})
         RETURNING id
       `;
       if (!node) throw ApiError.conflict('the node could not be created');

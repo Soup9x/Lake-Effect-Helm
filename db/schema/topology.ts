@@ -16,7 +16,7 @@
  * machinery it deletes is exactly what that needs, and it was deleted on
  * purpose.
  */
-import { boolean, doublePrecision, index, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { boolean, doublePrecision, index, integer, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { tstz } from './_types';
 import { topologyDeviceType } from './enums';
 import { assetNode } from './assets';
@@ -38,6 +38,10 @@ export const networkDiagram = pgTable('network_diagram', {
   name: text('name').notNull(),
   description: text('description'),
   isInternalOnly: boolean('is_internal_only').notNull().default(false),
+  /** The size somebody dragged the canvas to ((1190)). A floor: the canvas still
+   *  grows to fit a box past the edge. Null is the default size. */
+  canvasWidth: integer('canvas_width'),
+  canvasHeight: integer('canvas_height'),
   createdAt: tstz('created_at').notNull().defaultNow(),
   createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
@@ -84,6 +88,9 @@ export const topologyNode = pgTable('topology_node', {
   posX: doublePrecision('pos_x'),
   posY: doublePrecision('pos_y'),
 
+  /** A palette name ('blue', 'green', …), or null for the default ((1190)). */
+  color: text('color'),
+
   createdAt: tstz('created_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
 }, (t) => [
@@ -94,8 +101,8 @@ export const topologyNode = pgTable('topology_node', {
 /**
  * A line on the diagram.
  *
- * Stored directed, but the direction means only "the order it was drawn": v1
- * renders a plain line either way. A unique index over the unordered pair
+ * Stored directed, but the direction means only "the order it was drawn"; an
+ * arrow ((1190)) is drawn relative to it. A unique index over the unordered pair
  * (declared in 0570, since Drizzle cannot express least/greatest) stops A→B and
  * B→A becoming two lines on top of each other.
  */
@@ -109,6 +116,14 @@ export const topologyLink = pgTable('topology_link', {
 
   /** Port or interface, when somebody types one. "Gi1/0/24", "WAN1". */
   label: text('label'),
+
+  /**
+   * How the line is drawn ((1190)). `arrow` is relative to from → to, the order
+   * it was drawn in; it decorates the one cable, it does not make a second.
+   */
+  lineStyle: text('line_style').notNull().default('solid'),
+  arrow: text('arrow').notNull().default('none'),
+  color: text('color'),
 
   createdAt: tstz('created_at').notNull().defaultNow(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),

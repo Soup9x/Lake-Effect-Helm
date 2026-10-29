@@ -25,7 +25,9 @@ import {
   PATCH as patchNode, DELETE as deleteNode,
 } from '../../src/app/api/diagrams/[diagramId]/topology/nodes/[nodeId]/route';
 import { POST as postLink } from '../../src/app/api/diagrams/[diagramId]/topology/links/route';
-import { DELETE as deleteLink } from '../../src/app/api/diagrams/[diagramId]/topology/links/[linkId]/route';
+import {
+  PATCH as patchLink, DELETE as deleteLink,
+} from '../../src/app/api/diagrams/[diagramId]/topology/links/[linkId]/route';
 
 let h: Harness;
 let currentUser: SessionUser | null = null;
@@ -83,6 +85,7 @@ async function wipe(): Promise<void> {
   try {
     await sql`DELETE FROM topology_link`;
     await sql`DELETE FROM topology_node`;
+    await sql`UPDATE network_diagram SET canvas_width = NULL, canvas_height = NULL`;
     // Diagrams a test created; the three seeded ones stay.
     await sql`DELETE FROM network_diagram WHERE id NOT IN (${NET}::uuid, ${NET_B}::uuid, ${NET_T2}::uuid)`;
   } finally {
@@ -277,6 +280,102 @@ describe('changing one box', () => {
 
     nodes = (await body(await getTopology(request('GET'), siteParams()))).nodes as Record<string, unknown>[];
     expect(nodes[0]).toMatchObject({ subnet: null, ipAddress: '10.0.0.1', posX: 10 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('styling lines and boxes, and sizing the canvas (1190)', () => {
+  const linkOf = async (id: string) =>
+    ((await body(await getTopology(request('GET'), siteParams()))).links as Record<string, unknown>[])
+      .find((l) => l.id === id);
+
+  it('draws a plain solid line unless told otherwise, and takes a style at creation', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const a = await makeNode('Core switch');
+    const b = await makeNode('Edge firewall');
+    const c = await makeNode('VPN peer');
+
+    const plain = (await body(await postLink(request('POST', { fromNodeId: a, toNodeId: b }), siteParams()))).linkId as string;
+    expect(await linkOf(plain)).toMatchObject({ lineStyle: 'solid', arrow: 'none', color: null });
+
+    const styled = (await body(await postLink(request('POST', {
+      fromNodeId: b, toNodeId: c, lineStyle: 'dotted', arrow: 'both', color: 'purple',
+    }), siteParams()))).linkId as string;
+    expect(await linkOf(styled)).toMatchObject({ lineStyle: 'dotted', arrow: 'both', color: 'purple' });
+  });
+
+  it('changes one line’s style, arrow, colour and label, each on its own', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const a = await makeNode('Core switch');
+    const b = await makeNode('Edge firewall');
+    const id = (await body(await postLink(
+      request('POST', { fromNodeId: a, toNodeId: b, label: 'Gi1/0/1' }), siteParams(),
+    ))).linkId as string;
+
+    expect((await patchLink(request('PATCH', { lineStyle: 'dashed' }), linkParams(id))).status).toBe(200);
+    expect((await patchLink(request('PATCH', { arrow: 'end', color: 'green' }), linkParams(id))).status).toBe(200);
+    expect(await linkOf(id)).toMatchObject({ lineStyle: 'dashed', arrow: 'end', color: 'green', label: 'Gi1/0/1' });
+
+    await patchLink(request('PATCH', { label: null, color: null }), linkParams(id));
+    expect(await linkOf(id)).toMatchObject({ lineStyle: 'dashed', arrow: 'end', color: null, label: null });
+  });
+
+  it('reverses a line, so its arrow points the other way, without making a second one', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const a = await makeNode('Core switch');
+    const b = await makeNode('Edge firewall');
+    const id = (await body(await postLink(
+      request('POST', { fromNodeId: a, toNodeId: b, arrow: 'end' }), siteParams(),
+    ))).linkId as string;
+
+    expect((await patchLink(request('PATCH', { reverse: true }), linkParams(id))).status).toBe(200);
+    expect(await linkOf(id)).toMatchObject({ fromNodeId: b, toNodeId: a, arrow: 'end' });
+    const graph = await body(await getTopology(request('GET'), siteParams()));
+    expect(graph.links as unknown[]).toHaveLength(1);
+  });
+
+  it('refuses a style, arrow or colour it does not know', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const a = await makeNode('Core switch');
+    const b = await makeNode('Edge firewall');
+    const id = (await body(await postLink(request('POST', { fromNodeId: a, toNodeId: b }), siteParams()))).linkId as string;
+
+    expect((await patchLink(request('PATCH', { lineStyle: 'wavy' }), linkParams(id))).status).toBe(400);
+    expect((await patchLink(request('PATCH', { arrow: 'sideways' }), linkParams(id))).status).toBe(400);
+    expect((await patchLink(request('PATCH', { color: '#ff0000' }), linkParams(id))).status).toBe(400);
+    expect((await patchNode(request('PATCH', { color: 'red; background:url(x)' }), nodeParams(a))).status).toBe(400);
+    // And the database says the same to anything that skips the route.
+    const sql = superuserSql();
+    try {
+      await expect(sql`UPDATE topology_link SET color = 'teal' WHERE id = ${id}::uuid`).rejects.toThrow();
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  });
+
+  it('colours a box, and a drag leaves the colour alone', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const id = await makeNode('Core switch', { color: 'blue' });
+    await patchNode(request('PATCH', { posX: 20, posY: 40 }), nodeParams(id));
+    let nodes = (await body(await getTopology(request('GET'), siteParams()))).nodes as Record<string, unknown>[];
+    expect(nodes[0]).toMatchObject({ color: 'blue', posX: 20 });
+
+    await patchNode(request('PATCH', { color: null }), nodeParams(id));
+    nodes = (await body(await getTopology(request('GET'), siteParams()))).nodes as Record<string, unknown>[];
+    expect(nodes[0]).toMatchObject({ color: null });
+  });
+
+  it('remembers the canvas size somebody dragged it to, and forgets it on reset', async () => {
+    asUser(IDS.admin1, 'admin@northwind.test');
+    expect((await patchDiagram(request('PATCH', { canvasWidth: 1800, canvasHeight: 900 }), siteParams())).status).toBe(200);
+    let diagram = (await body(await getTopology(request('GET'), siteParams()))).diagram as Record<string, unknown>;
+    expect(diagram).toMatchObject({ canvasWidth: 1800, canvasHeight: 900, name: 'Acme LAN' });
+
+    expect((await patchDiagram(request('PATCH', { canvasWidth: 50 }), siteParams())).status).toBe(400);
+
+    await patchDiagram(request('PATCH', { canvasWidth: null, canvasHeight: null }), siteParams());
+    diagram = (await body(await getTopology(request('GET'), siteParams()))).diagram as Record<string, unknown>;
+    expect(diagram).toMatchObject({ canvasWidth: null, canvasHeight: null });
   });
 });
 
