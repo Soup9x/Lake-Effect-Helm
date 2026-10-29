@@ -160,12 +160,12 @@ const TABLES: Record<BulkTarget, BulkTable[]> = {
   node: [{ name: 'asset_node', live: 'TRUE', touch: true }],
   // Archived since 0850, tagged since 1050.
   contact: [{ name: 'contact', live: 'deleted_at IS NULL', touch: true }],
-  // Tagged since 1150, archived since 0560 and 0810.
+  // Tagged since 1170, archived since 0560 and 0810.
   document: [
     { name: 'attachment', live: 'is_document AND deleted_at IS NULL', touch: false },
     { name: 'document_page', live: 'deleted_at IS NULL', touch: true },
   ],
-  // Archived since 0940, tagged since 1150.
+  // Archived since 0940, tagged since 1170.
   site: [{ name: 'site', live: 'deleted_at IS NULL', touch: true }],
 };
 

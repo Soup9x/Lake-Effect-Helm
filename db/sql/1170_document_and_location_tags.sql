@@ -1,5 +1,5 @@
 -- =============================================================================
--- 1150 — documents and locations can be tagged
+-- 1170 — documents and locations can be tagged
 --
 -- A client's Documents and Locations lists get the bulk bar entries and
 -- contacts already have: Tag, Archive, Export, Make copies and Delete. Tagging
@@ -26,6 +26,6 @@ ALTER TABLE site ADD COLUMN tags text[] NOT NULL DEFAULT '{}';
 ALTER TABLE site ADD CONSTRAINT site_tags_bounded CHECK (cardinality(tags) <= 50);
 CREATE INDEX site_tags_idx ON site USING gin (tags);
 
-COMMENT ON COLUMN attachment.tags IS 'Free-text labels on a document in the tree, lowercased (1150).';
-COMMENT ON COLUMN document_page.tags IS 'Free-text labels, lowercased (1150).';
-COMMENT ON COLUMN site.tags IS 'Free-text labels, lowercased (1150).';
+COMMENT ON COLUMN attachment.tags IS 'Free-text labels on a document in the tree, lowercased (1170).';
+COMMENT ON COLUMN document_page.tags IS 'Free-text labels, lowercased (1170).';
+COMMENT ON COLUMN site.tags IS 'Free-text labels, lowercased (1170).';

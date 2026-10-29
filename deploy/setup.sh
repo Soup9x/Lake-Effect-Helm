@@ -160,12 +160,28 @@ ask() {
   done
 }
 
+# Ask a yes/no question. Enter takes the default; y/yes/n/no in any case are
+# accepted, and anything else re-asks. Succeeds on yes.
+# $1 prompt  $2 default: y or n
+ask_yn() {
+  local prompt=$1 default=$2 hint answer=""
+  if [ "$default" = "y" ]; then hint="Y/n"; else hint="y/N"; fi
+  while :; do
+    printf '    %s [%s]: ' "$prompt" "$hint" > /dev/tty
+    IFS= read -r answer < /dev/tty || die "no input available; supply the value as a flag instead"
+    [ -z "$answer" ] && answer=$default
+    case "$answer" in
+      [yY]|[yY][eE][sS]) return 0 ;;
+      [nN]|[nN][oO]) return 1 ;;
+    esac
+    printf '    %sy or n.%s\n' "$YELLOW" "$RESET" > /dev/tty
+  done
+}
+
+# $1 prompt  $2 default: y or n (n when left out). --yes skips it as a yes.
 confirm() {
   [ "$ASSUME_YES" -eq 1 ] && return 0
-  local answer=""
-  printf '    %s [y/N]: ' "$1" > /dev/tty
-  IFS= read -r answer < /dev/tty || return 1
-  case "$answer" in [yY]|[yY][eE][sS]) return 0 ;; *) return 1 ;; esac
+  ask_yn "$1" "${2:-n}"
 }
 
 # Every secret this deployment has lives in .env, so rewriting it is the most
@@ -573,23 +589,17 @@ configure() {
     note "forged by anything on the LAN. On another machine, Helm has to be"
     note "reachable on the LAN."
     printf '\n'
-    local here
-    here=$(ask "Connector on this host? (yes/no)" "yes" '^(yes|no|y|n)$' "yes or no.")
-    case $here in
-      y|yes)
-        local lan
-        lan=$(ask "Also let the LAN reach Helm directly, bypassing the tunnel? (yes/no)" "no" '^(yes|no|y|n)$' "yes or no.")
-        case $lan in
-          y|yes)
-            bind=0.0.0.0
-            warn "A machine on the LAN can then send its own CF-Connecting-IP header and"
-            warn "name any address it likes in the audit log and the sign-in lockout."
-            ;;
-          *) bind=127.0.0.1 ;;
-        esac
-        ;;
-      *) bind=0.0.0.0 ;;
-    esac
+    if ask_yn "Connector on this host?" n; then
+      if ask_yn "Also let the LAN reach Helm directly, bypassing the tunnel?" n; then
+        bind=0.0.0.0
+        warn "A machine on the LAN can then send its own CF-Connecting-IP header and"
+        warn "name any address it likes in the audit log and the sign-in lockout."
+      else
+        bind=127.0.0.1
+      fi
+    else
+      bind=0.0.0.0
+    fi
   fi
   printf '%s' "$bind" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || die "--bind '$bind' is not an IPv4 address (0.0.0.0 or 127.0.0.1)."
 
@@ -673,7 +683,7 @@ start_stack() {
   if [ "$ASSUME_YES" -eq 0 ]; then
     info "About to build two images and start postgres, migrate, web, worker and caddy."
     info "The first build takes a few minutes."
-    confirm "Go ahead?" || die "stopped before building. Nothing has been started."
+    confirm "Go ahead?" y || die "stopped before building. Nothing has been started."
   fi
 
   # Build separately from `up` so build time is visible as build time, and so

@@ -337,7 +337,7 @@ export default async function CategoryPage({
           updatedAt: r.updated_at.toISOString(),
           removeKind: 'site',
           archived: r.archived,
-          // Free-text tags (1150), a column of their own and matched by the filter.
+          // Free-text tags (1170), a column of their own and matched by the filter.
           cells: { tags: r.tags.join(', ') || null },
           // The name opens the location's page; Edit opens the location dialog.
           href: `/locations/${r.id}`,

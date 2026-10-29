@@ -98,7 +98,7 @@ export const site = pgTable('site', {
   publicIps: inetArray('public_ips').notNull().default(sql`'{}'`),
   /** Archived: off the list and out of search, restorable (0940). */
   archivedAt: tstz('archived_at'),
-  /** 1150: free-text labels, as an entry's and a contact's. */
+  /** 1170: free-text labels, as an entry's and a contact's. */
   tags: textArray('tags').notNull().default([]),
   ...auditColumns,
   ...softDelete,
