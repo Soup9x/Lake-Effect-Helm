@@ -198,6 +198,10 @@ export const domain = pgTable('domain', {
   nextCheckAt: tstz('next_check_at'),
   lastCheckStatus: externalCheckStatus('last_check_status'),
   lastCheckError: text('last_check_error'),
+  /** The rest of the registry's answer, as suggestions a person verifies (1140). */
+  registryDetails: jsonb('registry_details'),
+  /** Per field, the registry value somebody chose not to apply (1140). */
+  registryDismissed: jsonb('registry_dismissed'),
 }, (t) => [
   uniqueIndex('domain_name_uk').on(t.tenantId, t.domainName),
   // Not partial: a NULL nextCheckAt means never checked, which means due.

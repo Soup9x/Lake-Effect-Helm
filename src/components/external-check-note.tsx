@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { CalendarClock, CircleAlert, CircleCheck, CircleHelp, Clock } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
@@ -65,8 +66,18 @@ export function datesDisagree(
   return Math.abs(a - b) > DAY_MS;
 }
 
-export function ExternalCheckNote({ state }: { state: ExternalCheckState }) {
-  const disagrees = datesDisagree(state.recorded, state.observed);
+export function ExternalCheckNote({ state, expiryReviewed = false, children }: {
+  state: ExternalCheckState;
+  /**
+   * Whether the children list the expiry as a field to verify (1140), in which
+   * case that row is where a disagreement is shown and acted on, and this
+   * card's own warning would say it twice.
+   */
+  expiryReviewed?: boolean;
+  /** Anything else the probe learned, under what this card already says. */
+  children?: ReactNode;
+}) {
+  const disagrees = !expiryReviewed && datesDisagree(state.recorded, state.observed);
 
   return (
     <Card>
@@ -139,6 +150,7 @@ export function ExternalCheckNote({ state }: { state: ExternalCheckState }) {
             </span>
           </p>
         )}
+        {children}
       </CardContent>
     </Card>
   );

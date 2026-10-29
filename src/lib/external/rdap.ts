@@ -2,11 +2,15 @@
  * When a domain's registration expires, according to the registry.
  *
  * RDAP (RFC 9082/9083) is the JSON successor to WHOIS, and the one fact this
- * needs is in a well-specified place: an `events` array carrying an entry whose
- * `eventAction` is "expiration". Everything else in an RDAP response —
- * entities, nameservers, statuses — is deliberately ignored here, because a
- * parser that reads ten fields fails in ten ways and Helm already has somewhere
- * for a human to record the rest.
+ * must have is in a well-specified place: an `events` array carrying an entry
+ * whose `eventAction` is "expiration".
+ *
+ * THE REST IS READ TOO, BUT ONLY AS A SUGGESTION (1140). Registrar,
+ * registration date, nameservers, transfer lock and DNSSEC come back in the
+ * same document, and detailsFromRdap() reads each one on its own: a registry
+ * that leaves one out, or shapes it oddly, costs that one field and nothing
+ * else. None of it is written over what a person recorded — the page offers
+ * each difference for somebody to verify, and only then is it applied.
  *
  * THE ENDPOINT IS A SETTING, NOT A CONSTANT. Enabling this sends a client's
  * domain names to whoever answers; 0670 keeps that URL in
@@ -94,7 +98,7 @@ export function expiryFromRdap(document: unknown): RdapExpiry {
 }
 
 /**
- * Ask the configured RDAP service about one domain.
+ * Ask the configured RDAP service when one domain expires.
  *
  * The caller passes the base URL from the tenant's setting, so this function
  * holds no opinion about where to ask — and a test points it at a local server.
@@ -104,6 +108,31 @@ export async function lookupDomainExpiry(
   domainName: string,
   options: { timeoutMs?: number } = {},
 ): Promise<RdapExpiry> {
+  const found = await lookupDomain(baseUrl, domainName, options);
+  if (!found.expiry) throw found.expiryError!;
+  return found.expiry;
+}
+
+/** One lookup's whole answer: the expiry when there is one, and the rest. */
+export interface RdapDomain {
+  expiry: RdapExpiry | null;
+  /** Why there is no expiry, when there is none. */
+  expiryError: RdapError | null;
+  details: RegistryDetails;
+}
+
+/**
+ * Ask the configured RDAP service about one domain, keeping everything it said.
+ *
+ * Throws only when there is no usable document at all. A document with no
+ * expiry still carries a registrar and nameservers worth showing, so that case
+ * comes back as `expiry: null` with the reason beside it.
+ */
+export async function lookupDomain(
+  baseUrl: string,
+  domainName: string,
+  options: { timeoutMs?: number } = {},
+): Promise<RdapDomain> {
   const timeoutMs = options.timeoutMs ?? 10_000;
 
   const base = new URL(baseUrl);
@@ -193,5 +222,108 @@ export async function lookupDomainExpiry(
     throw new RdapError('the registry did not return JSON', 'unreadable');
   }
 
-  return expiryFromRdap(document);
+  let expiry: RdapExpiry | null = null;
+  let expiryError: RdapError | null = null;
+  try {
+    expiry = expiryFromRdap(document);
+  } catch (error) {
+    if (!(error instanceof RdapError)) throw error;
+    expiryError = error;
+  }
+  return { expiry, expiryError, details: detailsFromRdap(document) };
+}
+
+/**
+ * What the registry says about a domain beyond its expiry, keyed by the
+ * `domain` column each value would be applied to, so applying one is a write
+ * through the same catalogue the Edit details form uses.
+ *
+ * A key is absent when the registry did not say; it is never guessed. Dates
+ * are calendar dates (YYYY-MM-DD, UTC), because the recorded columns are
+ * dates and a timestamp beside a date would differ on every row.
+ */
+export interface RegistryDetails {
+  registrar?: string;
+  registered_at?: string;
+  expires_at?: string;
+  nameservers?: string[];
+  transfer_locked?: boolean;
+  dnssec_enabled?: boolean;
+  /** The registry's status values as served, for a reader who wants them. */
+  statuses?: string[];
+}
+
+function eventDate(events: unknown, action: string): string | undefined {
+  if (!Array.isArray(events)) return undefined;
+  const event = (events as RdapEvent[]).find(
+    (e) => typeof e?.eventAction === 'string' && e.eventAction.toLowerCase() === action,
+  );
+  if (typeof event?.eventDate !== 'string') return undefined;
+  const parsed = Date.parse(event.eventDate);
+  return Number.isNaN(parsed) ? undefined : new Date(parsed).toISOString().slice(0, 10);
+}
+
+/** The `fn` (formatted name) of a jCard, RFC 7095: ["vcard", [[name, params, type, value], ...]]. */
+function vcardName(vcard: unknown): string | undefined {
+  if (!Array.isArray(vcard) || !Array.isArray(vcard[1])) return undefined;
+  const fn = (vcard[1] as unknown[]).find(
+    (prop) => Array.isArray(prop) && prop[0] === 'fn' && typeof prop[3] === 'string',
+  ) as unknown[] | undefined;
+  const name = (fn?.[3] as string | undefined)?.trim();
+  return name ? name : undefined;
+}
+
+/**
+ * Read the facts beside the expiry out of an RDAP document.
+ *
+ * Exported and pure, like expiryFromRdap, and it never throws: a field the
+ * registry shaped unexpectedly is simply left out.
+ */
+export function detailsFromRdap(document: unknown): RegistryDetails {
+  if (document === null || typeof document !== 'object') return {};
+  const doc = document as {
+    events?: unknown; entities?: unknown; nameservers?: unknown;
+    status?: unknown; secureDNS?: unknown;
+  };
+  const details: RegistryDetails = {};
+
+  const registered = eventDate(doc.events, 'registration');
+  if (registered) details.registered_at = registered;
+  const expires = eventDate(doc.events, 'expiration');
+  if (expires) details.expires_at = expires;
+
+  if (Array.isArray(doc.entities)) {
+    const registrar = (doc.entities as { roles?: unknown; vcardArray?: unknown }[]).find(
+      (e) => Array.isArray(e?.roles) && e.roles.includes('registrar'),
+    );
+    const name = vcardName(registrar?.vcardArray);
+    if (name) details.registrar = name;
+  }
+
+  if (Array.isArray(doc.nameservers)) {
+    // Lower-case, without the root's trailing dot, sorted and de-duplicated, so
+    // the same set compares equal whichever order the registry served it in.
+    const names = [...new Set(
+      (doc.nameservers as { ldhName?: unknown }[])
+        .map((ns) => (typeof ns?.ldhName === 'string' ? ns.ldhName.trim().toLowerCase().replace(/\.$/, '') : ''))
+        .filter((ns) => ns !== ''),
+    )].sort();
+    if (names.length > 0) details.nameservers = names;
+  }
+
+  if (Array.isArray(doc.status)) {
+    const statuses = (doc.status as unknown[]).filter((s): s is string => typeof s === 'string');
+    details.statuses = statuses;
+    // RFC 8056 maps EPP's clientTransferProhibited to "client transfer
+    // prohibited"; some registries still serve the EPP spelling. Either the
+    // registrar's lock or the registry's counts.
+    details.transfer_locked = statuses.some((s) => /transfer\s*prohibited/i.test(s));
+  }
+
+  const secure = doc.secureDNS as { delegationSigned?: unknown } | undefined;
+  if (typeof secure?.delegationSigned === 'boolean') {
+    details.dnssec_enabled = secure.delegationSigned;
+  }
+
+  return details;
 }

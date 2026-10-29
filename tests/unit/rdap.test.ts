@@ -17,7 +17,7 @@
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
-import { expiryFromRdap, lookupDomainExpiry, RdapError } from '../../src/lib/external/rdap';
+import { detailsFromRdap, expiryFromRdap, lookupDomain, lookupDomainExpiry, RdapError } from '../../src/lib/external/rdap';
 import { FakeRdap, type RdapMode } from '../support/fake-external';
 
 const running: FakeRdap[] = [];
@@ -203,5 +203,61 @@ describe('asking a registry', () => {
     await expect(
       lookupDomainExpiry('https://127.0.0.1:1', 'acme.test', { timeoutMs: 300 }),
     ).rejects.toThrow(RdapError);
+  });
+});
+
+describe('reading the rest of an RDAP document (1140)', () => {
+  it('reads registrar, dates, nameservers, lock and DNSSEC keyed by column', () => {
+    const details = detailsFromRdap({
+      events: [
+        { eventAction: 'Registration', eventDate: '2019-05-04T16:22:10Z' },
+        { eventAction: 'expiration', eventDate: '2027-05-04T16:22:10Z' },
+      ],
+      status: ['client transfer prohibited', 'active'],
+      entities: [
+        { roles: ['technical'], vcardArray: ['vcard', [['fn', {}, 'text', 'Not this one']]] },
+        { roles: ['registrar'], vcardArray: ['vcard', [['version', {}, 'text', '4.0'], ['fn', {}, 'text', 'GoDaddy.com, LLC']]] },
+      ],
+      nameservers: [{ ldhName: 'NS2.Example.com.' }, { ldhName: 'ns1.example.com' }, { ldhName: 'ns1.example.com' }],
+      secureDNS: { delegationSigned: false },
+    });
+    expect(details).toEqual({
+      registered_at: '2019-05-04',
+      expires_at: '2027-05-04',
+      registrar: 'GoDaddy.com, LLC',
+      nameservers: ['ns1.example.com', 'ns2.example.com'],
+      statuses: ['client transfer prohibited', 'active'],
+      transfer_locked: true,
+      dnssec_enabled: false,
+    });
+  });
+
+  it('reads the EPP spelling of a transfer lock too', () => {
+    expect(detailsFromRdap({ status: ['serverTransferProhibited'] }).transfer_locked).toBe(true);
+    expect(detailsFromRdap({ status: ['active'] }).transfer_locked).toBe(false);
+  });
+
+  it('leaves out what the registry did not say, rather than guessing', () => {
+    // No status array means nothing is known about a lock — not "unlocked".
+    expect(detailsFromRdap({ events: [] })).toEqual({});
+    expect(detailsFromRdap(null)).toEqual({});
+    expect(detailsFromRdap({ entities: 'odd', nameservers: [{}], secureDNS: { delegationSigned: 'yes' } })).toEqual({});
+  });
+
+  it('comes back with the details from a live lookup, and the expiry beside them', async () => {
+    const rdap = await service();
+    const found = await lookupDomain(rdap.baseUrl, 'acme.test');
+    expect(found.expiry?.expiresAt.toISOString()).toBe('2027-03-01T00:00:00.000Z');
+    expect(found.details.registrar).toBe('Example Registrar, LLC');
+    expect(found.details.nameservers).toEqual(['ns1.example-dns.test', 'ns2.example-dns.test']);
+    expect(found.details.dnssec_enabled).toBe(true);
+  });
+
+  it('keeps the details when there is no expiry, and says why there is none', async () => {
+    const rdap = await service({ mode: 'no-expiry-event' });
+    const found = await lookupDomain(rdap.baseUrl, 'acme.test');
+    expect(found.expiry).toBeNull();
+    expect(found.expiryError?.reason).toBe('unsupported');
+    expect(found.details.registered_at).toBe('2020-01-01');
   });
 });

@@ -215,6 +215,18 @@ export class FakeRdap {
                 // from a registry, and registries are not consistent about it.
                 { eventAction: 'Expiration', eventDate: expiresAt },
               ],
+              // The rest of a typical answer (1140), shaped as Verisign serves it.
+              status: ['client transfer prohibited', 'server delete prohibited'],
+              entities: [{
+                objectClassName: 'entity',
+                roles: ['registrar'],
+                vcardArray: ['vcard', [['version', {}, 'text', '4.0'], ['fn', {}, 'text', 'Example Registrar, LLC']]],
+              }],
+              nameservers: [
+                { objectClassName: 'nameserver', ldhName: 'NS2.EXAMPLE-DNS.TEST' },
+                { objectClassName: 'nameserver', ldhName: 'ns1.example-dns.test.' },
+              ],
+              secureDNS: { delegationSigned: true },
             };
 
         res.writeHead(200, { 'content-type': 'application/rdap+json' });

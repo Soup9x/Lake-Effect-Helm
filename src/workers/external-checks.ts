@@ -40,7 +40,7 @@
  */
 import { db, withTenant } from '../lib/db/client';
 import { observeCertificate, CertificateProbeError } from '../lib/external/certificate';
-import { lookupDomainExpiry, RdapError } from '../lib/external/rdap';
+import { lookupDomain, RdapError } from '../lib/external/rdap';
 import type { Job, JobContext, JobResult } from './runtime';
 
 interface BacklogRow {
@@ -128,12 +128,32 @@ async function runExternalChecks(ctx: JobContext): Promise<JobResult> {
 
     try {
       if (row.kind === 'domain') {
-        const found = await lookupDomainExpiry(row.rdap_base_url, row.target);
+        const found = await lookupDomain(row.rdap_base_url, row.target);
+        /*
+         * The details are kept even when the expiry is missing: a ccTLD that
+         * publishes no expiration still names its registrar and nameservers,
+         * and those are worth offering. The row is still 'unsupported' then,
+         * because the expiry is what 0670's status is about.
+         */
+        const details = found.details as never;
+        if (!found.expiry) {
+          await withTenant(
+            actor,
+            async (tx) => tx`
+              UPDATE domain SET registry_details = ${tx.json(details)}
+              WHERE id = ${row.row_id}::uuid
+            `,
+            { role: 'worker' },
+          );
+          throw found.expiryError!;
+        }
+        const expiry = found.expiry;
         await withTenant(
           actor,
           async (tx) => tx`
             UPDATE domain SET
-              registry_expires_at = ${found.expiresAt},
+              registry_expires_at = ${expiry.expiresAt},
+              registry_details    = ${tx.json(details)},
               last_checked_at     = now(),
               next_check_at       = now() + make_interval(hours => ${row.interval_hours}),
               last_check_status   = 'ok',
