@@ -42,6 +42,9 @@ import { listInterfaces } from '@/lib/assets/devices';
 import { NinjaProfileCard } from '@/components/ninja-profile-card';
 import type { NinjaProfile } from '@/lib/ninja/devices';
 import { ninjaDeviceUrl } from '@/lib/ninja/links';
+import { Action1ProfileCard } from '@/components/action1-profile-card';
+import type { Action1Profile } from '@/lib/action1/devices';
+import { action1EndpointsUrl } from '@/lib/action1/links';
 import { ProxmoxProfileCard } from '@/components/proxmox-profile-card';
 import type { ProxmoxProfile } from '@/lib/proxmox/machines';
 import { proxmoxResourceUrl } from '@/lib/proxmox/links';
@@ -354,6 +357,15 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
       ORDER BY ei.last_synced_at DESC LIMIT 1
     `;
 
+    // What Action1 reports beyond the device's own fields (1160).
+    const [action1Profile] = await tx<{ profile: Action1Profile; last_synced_at: Date; base_url: string }[]>`
+      SELECT ei.profile, ei.last_synced_at, c.base_url
+      FROM external_identity ei
+      JOIN integration_connection c ON c.id = ei.connection_id
+      WHERE ei.node_id = ${node.id}::uuid AND ei.external_type = 'action1_device' AND ei.profile IS NOT NULL
+      ORDER BY ei.last_synced_at DESC LIMIT 1
+    `;
+
     // What Proxmox reports for a host or guest (1110).
     const [proxmoxProfile] = await tx<{ profile: ProxmoxProfile; last_synced_at: Date; base_url: string }[]>`
       SELECT ei.profile, ei.last_synced_at, c.base_url
@@ -365,7 +377,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
     `;
 
     return {
-      synced, ninjaProfile: ninjaProfile ?? null, proxmoxProfile: proxmoxProfile ?? null,
+      synced, ninjaProfile: ninjaProfile ?? null, action1Profile: action1Profile ?? null, proxmoxProfile: proxmoxProfile ?? null,
       node, detail: detailRows.shown, detailRaw: detailRows.raw, edges, secrets, sites, record, template, schedules, runs, diagrams,
       attachments, documents, device,
       canDeleteAttachments: session.permissions.includes('asset:delete'),
@@ -384,7 +396,7 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
 
   if (!data) notFound();
   const {
-    synced, ninjaProfile, proxmoxProfile,
+    synced, ninjaProfile, action1Profile, proxmoxProfile,
     node, detail, detailRaw, edges, secrets, sites, record, template, schedules, runs, diagrams, totp, canReveal, canManageSeed, canChangePassword,
     canAuthorProcedures, canRunChecklists, assignable, checkSetting, checkRow,
     attachments, documents, canDeleteAttachments, device, history,
@@ -901,6 +913,13 @@ export default async function AssetPage({ params }: { params: Promise<{ nodeId: 
                 profile={ninjaProfile.profile}
                 syncedAt={ninjaProfile.last_synced_at.toISOString()}
                 ninjaUrl={ninjaDeviceUrl(ninjaProfile.portal, ninjaProfile.external_id)}
+              />
+            )}
+            {action1Profile && (
+              <Action1ProfileCard
+                profile={action1Profile.profile}
+                syncedAt={action1Profile.last_synced_at.toISOString()}
+                action1Url={action1EndpointsUrl(action1Profile.base_url, action1Profile.profile.orgId)}
               />
             )}
             {proxmoxProfile && (

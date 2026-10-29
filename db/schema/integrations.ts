@@ -105,6 +105,25 @@ export const ninjaOrganization = pgTable('ninja_organization', {
 ]);
 
 /**
+ * Action1's organizations and the client each imports to (1160), as NinjaOne's
+ * are: a null organization is listed and not imported, and excludedAt says
+ * whether somebody chose that or nobody has decided yet.
+ */
+export const action1Organization = pgTable('action1_organization', {
+  tenantId: uuid('tenant_id').notNull(),
+  connectionId: uuid('connection_id').notNull(),
+  action1OrgId: text('action1_org_id').notNull(),
+  name: text('name').notNull(),
+  organizationId: uuid('organization_id'),
+  excludedAt: tstz('excluded_at'),
+  deviceCount: integer('device_count'),
+  seenAt: tstz('seen_at').notNull().defaultNow(),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.connectionId, t.action1OrgId] }),
+]);
+
+/**
  * NinjaOne's locations and the site each became (1080). applied is what the
  * sync last wrote to the site, so a field somebody edited is left alone.
  */

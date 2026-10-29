@@ -65,7 +65,7 @@ export function deviceTypeFor(device: Pick<NinjaDevice, 'nodeClass' | 'system'>)
 }
 
 /** Serial numbers that mean "the manufacturer did not set one". */
-const PLACEHOLDER_SERIAL = /^(0+|none|n\/?a|default string|to be filled by o\.?e\.?m\.?|system serial number|chassis serial number|123456789|not specified|invalid)$/i;
+export const PLACEHOLDER_SERIAL = /^(0+|none|n\/?a|default string|to be filled by o\.?e\.?m\.?|system serial number|chassis serial number|123456789|not specified|invalid)$/i;
 
 export function serialFor(device: Pick<NinjaDevice, 'system'>): string | null {
   for (const raw of [device.system?.serialNumber, device.system?.biosSerialNumber]) {
