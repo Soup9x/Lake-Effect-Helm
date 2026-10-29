@@ -86,7 +86,7 @@ async function resolveTokenIdentity(
       logRejection(`device_signature_${signed.reason}`);
       throw ApiError.unauthenticated('invalid API token');
     }
-    // And only to the routes the extension itself calls (1180): its scopes
+    // And only to the routes the extension itself calls (1200): its scopes
     // include writing credentials, which every write route would accept.
     if (!extensionMayCall(request.method, request.nextUrl.pathname)) {
       throw ApiError.forbidden('the browser extension cannot call this');

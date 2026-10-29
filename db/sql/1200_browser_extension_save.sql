@@ -1,5 +1,5 @@
 -- =============================================================================
--- 1180 — the browser extension saves and updates logins
+-- 1200 — the browser extension saves and updates logins
 --
 -- Until now the extension only read: look a site up, copy, fill. It now offers,
 -- as Bitwarden does, to save a login the person just signed in with, to update
@@ -12,7 +12,7 @@
 --    gain secret:write and asset:write, narrowed as before to what the person
 --    holds. An existing pairing keeps the scopes it was approved with: renewal
 --    copies them, and nothing here widens a live token. Saving from a browser
---    paired before 1180 asks the person to pair it again, which takes their
+--    paired before 1200 asks the person to pair it again, which takes their
 --    password (and authenticator code) again, so the wider token is something
 --    they agreed to, not something that arrived with an upgrade.
 --
@@ -110,7 +110,7 @@ BEGIN
   END IF;
 
   -- What it may do: the four permissions looking up and copying a credential
-  -- needs, and since 1180 the two saving one needs, narrowed to the ones this
+  -- needs, and since 1200 the two saving one needs, narrowed to the ones this
   -- person holds. Somebody whose role cannot write credentials pairs a browser
   -- that can look up and fill, and is never offered a save.
   SELECT coalesce(array_agg(p ORDER BY p), '{}') INTO v_scopes
@@ -206,7 +206,7 @@ $$;
 
 COMMENT ON FUNCTION helm.extension_secret_write_guard() IS
   'A request made by the browser extension creates standard secrets only and '
-  'cannot change any secret''s protection, client, or deletion (1180).';
+  'cannot change any secret''s protection, client, or deletion (1200).';
 
 CREATE TRIGGER secret_extension_write_guard
   BEFORE INSERT OR UPDATE ON secret
@@ -236,7 +236,7 @@ $$;
 
 COMMENT ON FUNCTION helm.extension_version_write_guard() IS
   'A request made by the browser extension writes a new version of a standard '
-  'password only (1180).';
+  'password only (1200).';
 
 REVOKE ALL ON FUNCTION helm.extension_version_write_guard() FROM PUBLIC;
 
@@ -296,7 +296,7 @@ $$;
 COMMENT ON FUNCTION helm.extension_password_state(uuid, bytea) IS
   'For the browser extension after a sign-in: whether a typed password''s blind '
   'index matches the stored standard password''s current version. Same, changed '
-  'or unknown; decrypts nothing (1180).';
+  'or unknown; decrypts nothing (1200).';
 
 REVOKE ALL ON FUNCTION helm.extension_password_state(uuid, bytea) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION helm.extension_password_state(uuid, bytea) TO helm_app;
@@ -342,7 +342,7 @@ BEGIN
       AND p.prosrc LIKE '%is_tenant_wide%'
       AND p.prosrc LIKE '%helm.api_token_id%'
   ) THEN
-    RAISE EXCEPTION '1180: pair_browser_extension must require a step-up, a session and a tenant-wide role';
+    RAISE EXCEPTION '1200: pair_browser_extension must require a step-up, a session and a tenant-wide role';
   END IF;
 
   -- The personal vault: the owner from a session, and the owner's extension
@@ -354,14 +354,14 @@ BEGIN
         'personal_credential_owner', 'personal_credential_owner_extension',
         'personal_credential_owner_extension_insert', 'personal_credential_owner_extension_update')
   ) THEN
-    RAISE EXCEPTION '1180: an unexpected policy on personal_credential';
+    RAISE EXCEPTION '1200: an unexpected policy on personal_credential';
   END IF;
   IF EXISTS (
     SELECT 1 FROM pg_policies
     WHERE tablename = 'personal_credential' AND policyname LIKE 'personal_credential_owner_extension%'
       AND cmd IN ('ALL', 'DELETE')
   ) THEN
-    RAISE EXCEPTION '1180: the extension must not delete from a personal vault';
+    RAISE EXCEPTION '1200: the extension must not delete from a personal vault';
   END IF;
 END
 $guard$;

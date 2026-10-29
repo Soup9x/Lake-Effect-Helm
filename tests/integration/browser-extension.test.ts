@@ -19,11 +19,13 @@
  *   PERSONAL     a personal API token cannot read the vault at all (closing a
  *                gap 1030's comment said did not exist).
  *   LIFETIME     renewal replaces the token; unpairing stops it at once.
+ *   TIDYING      a person renames their own browsers, and clears removed or
+ *                lapsed ones off their list, never a live one (1180).
  *   ADMIN        somebody holding user:write sees every pairing and can
  *                revoke one; nobody else can.
  *   SUGGESTIONS  a site with no match offers what the person copied lately,
  *                and what MSP staff copy most; search finds near misses.
- *   SAVING       (1180) after a sign-in, Helm says whether it has the login
+ *   SAVING       (1200) after a sign-in, Helm says whether it has the login
  *                and the password without revealing it; the extension saves
  *                a standard login to a client or the vault and updates the
  *                password of one matched to the site, and nothing else: no
@@ -45,7 +47,8 @@ import {
 } from './harness';
 
 import { GET as listInstalls, POST as pair } from '../../src/app/api/extension/installs/route';
-import { DELETE as unpair } from '../../src/app/api/extension/installs/[installId]/route';
+import { DELETE as unpair, PATCH as renameInstall } from '../../src/app/api/extension/installs/[installId]/route';
+import { POST as clearInstalls } from '../../src/app/api/extension/installs/clear/route';
 import { DELETE as adminRevoke } from '../../src/app/api/extension/admin/installs/[installId]/route';
 import { DELETE as signOut, GET as me } from '../../src/app/api/extension/me/route';
 import { POST as renew } from '../../src/app/api/extension/renew/route';
@@ -65,7 +68,7 @@ import { POST as rotateRoute } from '../../src/app/api/secrets/[secretId]/rotate
 import { POST as createAsset } from '../../src/app/api/assets/route';
 import type { ExtensionDestinations, ExtensionLoginCheck, ExtensionSaved } from '../../src/lib/extension/types';
 
-// Comparing a typed password with a stored one uses the blind index (1180).
+// Comparing a typed password with a stored one uses the blind index (1200).
 process.env.HELM_BLIND_INDEX_KEY_B64 = Buffer.alloc(32, 7).toString('base64');
 
 let h: Harness;
@@ -636,6 +639,101 @@ describe('renewing and unpairing', () => {
   });
 });
 
+describe('renaming and clearing your browsers', () => {
+  // Earlier blocks leave live pairings behind, and a person may have ten.
+  beforeAll(async () => {
+    await su((sql) => sql`
+      UPDATE browser_extension_install SET revoked_at = now()
+      WHERE user_id = ${IDS.tech1}::uuid AND revoked_at IS NULL`);
+  });
+
+  const listMine = async (user: SessionUser = TECH) => {
+    currentUser = user;
+    const response = await listInstalls(sessionRequest('/api/extension/installs'));
+    currentUser = null;
+    return (await json<{ browsers: { id: string; label: string; live: boolean }[] }>(response)).browsers;
+  };
+  const renameAs = async (user: SessionUser, id: string, label: string) => {
+    currentUser = user;
+    const response = await renameInstall(
+      sessionRequest(`/api/extension/installs/${id}`, 'PATCH', { label }),
+      params('installId', id),
+    );
+    currentUser = null;
+    return response;
+  };
+  const clearAs = async (user: SessionUser, payload: Record<string, unknown> = {}) => {
+    currentUser = user;
+    const response = await clearInstalls(sessionRequest('/api/extension/installs/clear', 'POST', payload));
+    currentUser = null;
+    return response;
+  };
+
+  it('renames a browser and its token, audited with both names, and the extension keeps working', async () => {
+    const device = newDevice();
+    const paired = await json<ExtensionPairing>(await pairAs(TECH, device, 'Old name'));
+    const response = await renameAs(TECH, paired.installId, '  Front desk PC  ');
+    expect(response.status, await response.clone().text()).toBe(200);
+
+    expect((await listMine()).find((b) => b.id === paired.installId)?.label).toBe('Front desk PC');
+    const [token] = await su((sql) => sql<{ name: string }[]>`
+      SELECT name FROM api_token WHERE token_prefix = ${paired.token.split('.')[0]!}`);
+    expect(token?.name).toBe('Browser extension: Front desk PC');
+    const audit = await su((sql) => sql<{ metadata: Record<string, string> }[]>`
+      SELECT metadata FROM audit_log
+      WHERE action = 'browser_extension.renamed' AND entity_id = ${paired.installId}::uuid`);
+    expect(audit[0]?.metadata).toMatchObject({ from: 'Old name', to: 'Front desk PC' });
+    expect((await me(signed(device, paired.token, '/api/extension/me'))).status).toBe(200);
+  });
+
+  it('refuses an empty name, and somebody else\'s browser', async () => {
+    const paired = await json<ExtensionPairing>(await pairAs(TECH, newDevice(), 'Mine'));
+    expect((await renameAs(TECH, paired.installId, '   ')).status).toBe(400);
+    expect((await renameAs({ id: IDS.admin1, email: 'admin@northwind.test' }, paired.installId, 'Taken')).status)
+      .toBe(404);
+    expect((await listMine()).find((b) => b.id === paired.installId)?.label).toBe('Mine');
+  });
+
+  it('clears a removed browser off the list, and never a live one', async () => {
+    const live = await json<ExtensionPairing>(await pairAs(TECH, newDevice(), 'Still here'));
+    const gone = await json<ExtensionPairing>(await pairAs(TECH, newDevice(), 'Uninstalled'));
+    currentUser = TECH;
+    await unpair(sessionRequest(`/api/extension/installs/${gone.installId}`, 'DELETE'), params('installId', gone.installId));
+    currentUser = null;
+
+    expect((await clearAs(TECH, { id: live.installId })).status).toBe(404);
+    const one = await clearAs(TECH, { id: gone.installId });
+    expect(one.status, await one.clone().text()).toBe(200);
+    expect(await json(one)).toMatchObject({ cleared: 1 });
+
+    const mine = await listMine();
+    expect(mine.some((b) => b.id === gone.installId)).toBe(false);
+    expect(mine.some((b) => b.id === live.installId)).toBe(true);
+  });
+
+  it('clears every removed or lapsed browser at once, and an administrator still sees them', async () => {
+    const lapsed = await json<ExtensionPairing>(await pairAs(TECH, newDevice(), 'Lapsed'));
+    await su((sql) => sql`
+      UPDATE api_token SET expires_at = now() - interval '1 day'
+      WHERE token_prefix = ${lapsed.token.split('.')[0]!}`);
+    const removed = await json<ExtensionPairing>(await pairAs(TECH, newDevice(), 'Removed'));
+    currentUser = TECH;
+    await unpair(sessionRequest(`/api/extension/installs/${removed.installId}`, 'DELETE'), params('installId', removed.installId));
+    currentUser = null;
+
+    const response = await clearAs(TECH);
+    expect(response.status).toBe(200);
+    expect((await json<{ cleared: number }>(response)).cleared).toBeGreaterThanOrEqual(2);
+
+    const mine = await listMine();
+    expect(mine.every((b) => b.live)).toBe(true);
+    const kept = await su((sql) => sql<{ id: string }[]>`
+      SELECT id FROM browser_extension_install
+      WHERE id IN (${lapsed.installId}::uuid, ${removed.installId}::uuid) AND hidden_at IS NOT NULL`);
+    expect(kept).toHaveLength(2);
+  });
+});
+
 describe('every paired browser, for an administrator', () => {
   const ADMIN: SessionUser = { id: IDS.admin1, email: 'admin@northwind.test' };
   const asUser = async <T>(user: SessionUser, fn: () => Promise<T>) => {
@@ -687,7 +785,7 @@ describe('every paired browser, for an administrator', () => {
 });
 
 
-describe('saving and updating logins (1180)', () => {
+describe('saving and updating logins (1200)', () => {
   let device: Device;
   let token: string;
   const SITE = 'https://portal.acme-corp.test/login?next=%2F';
@@ -827,7 +925,7 @@ describe('saving and updating logins (1180)', () => {
     expect(personal.status).toBe(403);
   });
 
-  it('refuses to save from a pairing made before 1180, which says so', async () => {
+  it('refuses to save from a pairing made before 1200, which says so', async () => {
     const old = newDevice();
     const paired = await json<ExtensionPairing>(await pairAs(TECH, old, 'Before saving'));
     await su((sql) => sql`

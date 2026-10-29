@@ -113,7 +113,7 @@ describe('the Helm address the extension accepts', () => {
   });
 });
 
-describe('the routes an extension token reaches (1180)', () => {
+describe('the routes an extension token reaches (1200)', () => {
   const id = '0f0e0d0c-0b0a-4908-8706-050403020100';
 
   it('reaches what the extension calls', () => {

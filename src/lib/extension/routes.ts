@@ -1,7 +1,7 @@
 /**
- * The only routes an extension token reaches (1180).
+ * The only routes an extension token reaches (1200).
  *
- * A token's scopes say what kind of thing it may do, and from 1180 an
+ * A token's scopes say what kind of thing it may do, and from 1200 an
  * extension's include writing credentials and assets, which every write route
  * in Helm accepts. So a signed request from a compromised browser profile
  * could otherwise reach any of them: archive a device, edit a document,

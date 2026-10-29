@@ -1,5 +1,5 @@
 /**
- * Saving a login from the browser extension (1180): where it can go, whether
+ * Saving a login from the browser extension (1200): where it can go, whether
  * a sign-in matches what Helm has, and the save and the update themselves.
  *
  * NARROWER THAN THE WEB INTERFACE. The extension saves a standard password
@@ -7,7 +7,7 @@
  * or in the person's own vault, and changes only the password of one that
  * already exists. It never sets a sensitivity, a step-up, a reason or a rank:
  * the database refuses anything but a standard password from an extension
- * token anyway (1180's triggers), so asking would only offer a choice that
+ * token anyway (1200's triggers), so asking would only offer a choice that
  * fails.
  *
  * THE PASSWORD IS NEVER ECHOED. Every function here takes one and returns
@@ -30,7 +30,7 @@ import { matchSite } from './lookup';
 import type { Site } from './site';
 import type { ExtensionDestinations, ExtensionEntry, ExtensionLoginCheck } from './types';
 
-/** The permissions a save needs, which a pairing from before 1180 does not carry. */
+/** The permissions a save needs, which a pairing from before 1200 does not carry. */
 export const SAVE_PERMISSIONS = ['secret:write', 'asset:write'] as const;
 
 export function canSave(permissions: readonly string[]): boolean {

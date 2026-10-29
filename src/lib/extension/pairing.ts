@@ -107,6 +107,21 @@ export async function revokeMyBrowser(tx: HelmTx, id: string): Promise<boolean> 
   return row?.revoked === true;
 }
 
+export async function renameMyBrowser(tx: HelmTx, id: string, label: string): Promise<boolean> {
+  const [row] = await tx<{ renamed: boolean }[]>`
+    SELECT helm.rename_my_browser_extension(${id}::uuid, ${label}) AS renamed
+  `;
+  return row?.renamed === true;
+}
+
+/** Clear a removed or lapsed pairing from your list, or all of them when `id` is null. */
+export async function clearMyBrowsers(tx: HelmTx, id: string | null): Promise<number> {
+  const [row] = await tx<{ cleared: number }[]>`
+    SELECT helm.clear_my_browser_extensions(${id}::uuid) AS cleared
+  `;
+  return row?.cleared ?? 0;
+}
+
 /** A row of helm.tenant_browser_extensions(): somebody's pairing, for an administrator. */
 export interface TenantBrowserRow extends Omit<PairedBrowserRow, 'current'> {
   userId: string;

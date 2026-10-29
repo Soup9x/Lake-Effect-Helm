@@ -8,7 +8,7 @@ import type { ExtensionDestinations } from '@/lib/extension/types';
  * the clients the person can see, each with its sites, for the picker in the
  * save prompt and the popup's add form. The person's own vault is always
  * there and is not listed. Empty, with canSave false, for a pairing that
- * cannot save (1180).
+ * cannot save (1200).
  */
 export const GET = tenantRoute(async ({ tx, identity, session }): Promise<ExtensionDestinations> => {
   requireExtensionCaller(identity, session);

@@ -55,7 +55,7 @@ export interface ExtensionMe {
   tenantId: string;
   tenantName: string;
   expiresAt: string;
-  /** Whether this pairing may save and update logins (1180); false for one paired before. */
+  /** Whether this pairing may save and update logins (1200); false for one paired before. */
   canSave: boolean;
 }
 
@@ -70,7 +70,7 @@ export interface ExtensionPairing {
 /** Where the extension may save a login: the person's own vault, or a client and one of its sites. */
 export interface ExtensionDestinations {
   /**
-   * False when this pairing was approved before saving existed (1180), or for
+   * False when this pairing was approved before saving existed (1200), or for
    * somebody whose role cannot write credentials. The extension then says
    * how to get it: pair again.
    */

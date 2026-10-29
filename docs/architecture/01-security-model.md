@@ -425,7 +425,7 @@ gains an offline verification oracle for guessed plaintexts. The column is
 nullable; deployments that do not want that tradeoff leave
 `HELM_BLIND_INDEX_KEY_B64` unset and get no reuse detection.
 
-### 4.6 The browser extension (1120, 1121, 1180)
+### 4.6 The browser extension (1120, 1121, 1200)
 
 A Chrome, Edge and Brave extension that looks up the credentials for the site
 in front of a technician, and copies or fills a username, a standard password
@@ -518,12 +518,12 @@ token could, relying on a token's actor never being a person; a personal token
 (0750) is one. The owner policy now requires a request with no token, and the
 extension's read-only policy admits only its own token type.
 
-**Saving and updating (1180).** The extension offers to save a login after a
+**Saving and updating (1200).** The extension offers to save a login after a
 sign-in, to update a password that changed, and to add one from the popup. It
 is a write path from a browser, so it is narrow, and each limit is enforced in
 the database, not only the routes:
 
-- *Write comes with a new pairing.* Pairings from 1180 carry `secret:write` and
+- *Write comes with a new pairing.* Pairings from 1200 carry `secret:write` and
   `asset:write`, narrowed to what the person holds; renewal copies a token's
   scopes, so a browser paired before keeps read-only until it is paired again,
   with the password.

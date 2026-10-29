@@ -12,7 +12,7 @@ import type { ExtensionSaved } from '@/lib/extension/types';
  * A standard password, a username and a website, under a client (and one of
  * its sites) or in the person's own vault. Nothing else is settable here, and
  * the database refuses anything but a standard password from an extension
- * token whatever this route says (1180). The response names where it went.
+ * token whatever this route says (1200). The response names where it went.
  */
 const schema = z.object({
   destination: z.discriminatedUnion('kind', [

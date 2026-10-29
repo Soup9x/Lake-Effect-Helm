@@ -37,7 +37,7 @@
  * TWO MORE VIEWS, in the popup itself rather than a page of their own: the
  * settings (settings.ts), behind the gear, and adding a login, behind the +.
  * Adding saves a standard password to the person's own vault or a client,
- * through the same route the save prompt uses (1180). There is no password
+ * through the same route the save prompt uses (1200). There is no password
  * generator, on purpose.
  */
 import type { ExtensionDestinations, ExtensionEntry, ExtensionLookup, ExtensionSaved } from '../../src/lib/extension/types';
