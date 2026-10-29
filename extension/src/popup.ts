@@ -33,12 +33,20 @@
  * cards below it. The site's matches first; when there are none, what the
  * person used lately and what MSP staff use most (1121). Typing searches as
  * it goes, near misses included, and Escape goes back to the site.
+ *
+ * TWO MORE VIEWS, in the popup itself rather than a page of their own: the
+ * settings (settings.ts), behind the gear, and adding a login, behind the +.
+ * Adding saves a standard password to the person's own vault or a client,
+ * through the same route the save prompt uses (1180). There is no password
+ * generator, on purpose.
  */
-import type { ExtensionEntry, ExtensionLookup } from '../../src/lib/extension/types';
+import type { ExtensionDestinations, ExtensionEntry, ExtensionLookup, ExtensionSaved } from '../../src/lib/extension/types';
 import { call, renewIfDue, type Result } from './api';
 import { formInPage, type FillValues, type FormProbe } from './fill';
 import { MAX_FAILURES, getLock, lockNow, lockState, unlock, type LockConfig } from './lock';
-import { getPairing, getServer, getSettings } from './store';
+import { destinationPicker } from './picker';
+import { mountSettings } from './settings';
+import { getPairing, getServer, getSettings, setSettings } from './store';
 import { applyRememberedTheme, applyTheme } from './theme';
 
 applyRememberedTheme();
@@ -70,6 +78,9 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
   open: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  back: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
 } as const;
 
 function icon(name: keyof typeof ICONS): SVGSVGElement {
@@ -512,33 +523,170 @@ function showUnlock(lock: LockConfig): void {
   input.focus();
 }
 
+/* ------------------------------------------------------------------------- *
+ * The other views: settings, and adding a login
+ * ------------------------------------------------------------------------- */
+
+const viewHead = $('view-head');
+const viewTitle = $('view-title');
+const searchBox = $('search-box');
+const addButton = $<HTMLButtonElement>('add');
+
+function showView(title: string | null): void {
+  viewHead.hidden = title === null;
+  searchBox.hidden = title !== null;
+  viewTitle.textContent = title ?? '';
+}
+
+function openSettings(): void {
+  showView('Settings');
+  const container = el('div', { class: 'settings' });
+  render(container);
+  mountSettings(container);
+}
+
 $('settings').append(icon('settings'));
-$('settings').addEventListener('click', () => {
-  void chrome.runtime.openOptionsPage();
-  window.close();
+$('settings').addEventListener('click', openSettings);
+$('back').append(icon('back'));
+$('back').addEventListener('click', () => {
+  showView(null);
+  void start();
 });
+addButton.append(icon('plus'));
+addButton.addEventListener('click', () => void openAdd());
 document.querySelector('.search-icon')?.append(icon('search'));
+
+function field(label: string, input: HTMLElement, extra?: HTMLElement): HTMLElement {
+  return el('div', { class: 'field' }, el('label', { for: input.id }, label),
+    extra ? el('div', { class: 'with-button' }, input, extra) : input);
+}
+
+async function openAdd(): Promise<void> {
+  showView('Add a login');
+  render(el('p', { class: 'loading' }, 'One moment…'));
+  const destinations = await call<ExtensionDestinations>('/api/extension/destinations');
+  if (!destinations.ok) {
+    render(emptyCard(destinations.message));
+    return;
+  }
+  if (!destinations.value.canSave) {
+    const repair = el('button', { type: 'button', class: 'primary' }, 'Open settings');
+    repair.addEventListener('click', openSettings);
+    render(el('section', { class: 'card empty' },
+      el('p', {}, 'This browser was paired before the extension could save logins. Pair it again in settings to add logins from here.'),
+      repair));
+    return;
+  }
+
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let origin = '';
+  let host = '';
+  try {
+    const url = new URL(active?.url ?? '');
+    if (url.protocol === 'https:' || url.protocol === 'http:') {
+      origin = url.origin;
+      host = url.hostname.replace(/^www\./, '');
+    }
+  } catch {}
+
+  const name = el('input', { id: 'add-name', type: 'text', maxlength: '200', required: '', autocomplete: 'off' }) as HTMLInputElement;
+  name.value = host;
+  const username = el('input', { id: 'add-username', type: 'text', maxlength: '320', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
+  const password = el('input', { id: 'add-password', type: 'password', maxlength: '4096', required: '', autocomplete: 'new-password' }) as HTMLInputElement;
+  const reveal = el('button', { type: 'button', class: 'icon-button', title: 'Show the password', 'aria-label': 'Show the password' }, icon('eye')) as HTMLButtonElement;
+  reveal.addEventListener('click', () => {
+    password.type = password.type === 'password' ? 'text' : 'password';
+    reveal.title = password.type === 'password' ? 'Show the password' : 'Hide the password';
+  });
+  const website = el('input', { id: 'add-url', type: 'text', maxlength: '2000', autocomplete: 'off', spellcheck: 'false', placeholder: 'https://' }) as HTMLInputElement;
+  website.value = origin;
+  const picker = destinationPicker(destinations.value, 'add');
+  const message = el('p', { class: 'error', role: 'status' });
+  const submit = el('button', { type: 'submit', class: 'primary' }, 'Save to Helm') as HTMLButtonElement;
+  const form = el('form', { class: 'card add-form' },
+    field('Name', name),
+    field('Username', username),
+    field('Password', password, reveal),
+    field('Website', website),
+    picker.element,
+    message,
+    el('div', { class: 'row' }, submit),
+  ) as HTMLFormElement;
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!name.value.trim() || !password.value) {
+      message.textContent = 'A login needs a name and a password.';
+      return;
+    }
+    submit.disabled = true;
+    message.textContent = '';
+    const picked = picker.value();
+    void call<ExtensionSaved>('/api/extension/logins', {
+      json: {
+        destination: picked.destination, name: name.value.trim(), username: username.value.trim(),
+        password: password.value, url: website.value.trim() || null, tags: picked.tags,
+      },
+    }).then((result) => {
+      submit.disabled = false;
+      if (!result.ok) {
+        message.textContent = result.message;
+        return;
+      }
+      password.value = '';
+      showView(null);
+      void start().then(() => setStatus(`Saved ${result.value.name} to Helm.`, 'ok'));
+    });
+  });
+  render(form);
+  name.focus();
+}
+
+/** Once, while neither is on: offer the icon in sign-in fields and the save prompt. */
+async function autofillNudge(): Promise<HTMLElement | null> {
+  const settings = await getSettings();
+  const { autofillNudged } = (await chrome.storage.local.get('autofillNudged')) as { autofillNudged?: boolean };
+  if (settings.inlineMenu || settings.offerToSave || autofillNudged) return null;
+  const on = el('button', { type: 'button', class: 'primary' }, 'Turn on');
+  const later = el('button', { type: 'button' }, 'Not now');
+  const card = el('section', { class: 'card nudge' },
+    el('p', {}, 'Show Helm in sign-in fields, and offer to save logins after you sign in?'),
+    el('div', { class: 'row' }, on, later));
+  on.addEventListener('click', () => {
+    // From the click itself: the browser asks only for a user gesture.
+    chrome.permissions.request({ origins: ['https://*/*'] }, (granted) => {
+      void chrome.storage.local.set({ autofillNudged: true });
+      if (!granted) {
+        card.remove();
+        return;
+      }
+      void setSettings({ inlineMenu: true, offerToSave: true }).then(() => {
+        card.replaceChildren(el('p', {}, 'On. Reload a sign-in page to see Helm in its fields. Change this in settings.'));
+      });
+    });
+  });
+  later.addEventListener('click', () => {
+    void chrome.storage.local.set({ autofillNudged: true });
+    card.remove();
+  });
+  return card;
+}
 
 async function start(): Promise<void> {
   const [configured, pairing] = await Promise.all([getServer(), getPairing()]);
   if (!configured || !pairing) {
     tenant.textContent = 'Not set up';
-    const button = el('button', { type: 'button', class: 'primary' }, 'Open settings');
-    button.addEventListener('click', () => {
-      void chrome.runtime.openOptionsPage();
-      window.close();
-    });
-    render(el('section', { class: 'card empty' },
-      el('p', {}, 'Pair this browser with your Helm server to look credentials up here.'),
-      button,
-    ));
     searchInput.disabled = true;
+    addButton.hidden = true;
+    openSettings();
+    $('back').hidden = true;
     return;
   }
+  $('back').hidden = false;
   server = configured;
   tenant.textContent = pairing.tenantName;
   const locked = await lockState();
   lockButton.hidden = locked !== 'unlocked';
+  addButton.hidden = locked === 'locked';
   if (locked === 'locked') {
     const lock = await getLock();
     if (lock) {
@@ -566,16 +714,18 @@ async function start(): Promise<void> {
     tabHasSite = result.value.site !== null;
     for (const entry of entries) matched.add(entryKey(entry));
   }
+  const nudge = await autofillNudge();
   siteView = () => {
     if (entries.length) {
-      render(section(host ? `For ${host}` : 'For this page', entries));
+      render(section(host ? `For ${host}` : 'For this page', entries), ...(nudge ? [nudge] : []));
       return;
     }
-    const cards: HTMLElement[] = [];
+    const cards: HTMLElement[] = nudge ? [nudge] : [];
     if (host) cards.push(emptyCard(`Nothing in Helm names ${host}. Search above, or pick one below.`));
     if (suggestions?.recent.length) cards.push(section('Recently used', suggestions.recent));
     if (suggestions?.popular.length) cards.push(section('Popular with your team', suggestions.popular));
-    render(...(cards.length ? cards : [emptyCard('Search Helm above.')]));
+    if (cards.length === (nudge ? 1 : 0)) cards.push(emptyCard('Search Helm above.'));
+    render(...cards);
   };
   // Typed into while the lookup was running: that search wins.
   if (searchInput.value.trim() === '') siteView();

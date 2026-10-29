@@ -9,10 +9,11 @@
  * A 401 means the pairing is gone — removed in Helm, lapsed, or the person
  * offboarded — so the local pairing is forgotten and the popup says so.
  *
- * Locked (lock.ts), there is no token to send, and nothing is sent.
+ * Locked (lock.ts), there is no token to send, and nothing is sent. Past the
+ * timeout with "sign out" chosen, the next call signs out instead.
  */
 import { canonicalRequest } from '../../src/lib/extension/signature';
-import { currentToken, getLock, replaceToken } from './lock';
+import { currentToken, getLock, replaceToken, timeoutDue, tokenForSignOut } from './lock';
 import { clearPairing, getKey, getPairing, getServer, sha256Hex, toBase64Url } from './store';
 
 export type Result<T> =
@@ -21,19 +22,33 @@ export type Result<T> =
 
 const NETWORK = 'Helm did not answer. Check the address in settings and your connection.';
 
-export async function call<T>(
-  path: string,
-  options: { method?: 'GET' | 'POST' | 'DELETE'; json?: unknown } = {},
-): Promise<Result<T>> {
+type Options = {
+  method?: 'GET' | 'POST' | 'DELETE';
+  json?: unknown;
+  /** Asked by a page loading, not by the person: does not count as use for the timeout. */
+  passive?: boolean;
+};
+
+export async function call<T>(path: string, options: Options = {}): Promise<Result<T>> {
   const [server, pairing, key] = await Promise.all([getServer(), getPairing(), getKey('device')]);
   if (!server || !pairing || !key) {
     return { ok: false, status: 401, code: 'not_paired', message: 'This browser is not paired with Helm.' };
   }
-  const token = await currentToken();
+  if ((await timeoutDue()) === 'signout') {
+    await signOut();
+    return {
+      ok: false, status: 401, code: 'not_paired',
+      message: 'Helm signed this browser out after it sat unused. Pair it again from settings.',
+    };
+  }
+  const token = await currentToken(!options.passive);
   if (!token) {
     return { ok: false, status: 423, code: 'locked', message: 'Helm is locked. Unlock it with your PIN or password.' };
   }
+  return send<T>(server, key.privateKey, token, path, options);
+}
 
+async function send<T>(server: string, privateKey: CryptoKey, token: string, path: string, options: Options): Promise<Result<T>> {
   const method = options.method ?? (options.json === undefined ? 'GET' : 'POST');
   const body = options.json === undefined ? '' : JSON.stringify(options.json);
   const bodyBytes = new TextEncoder().encode(body);
@@ -45,7 +60,7 @@ export async function call<T>(
     bodySha256: await sha256Hex(bodyBytes),
   });
   const signature = new Uint8Array(
-    await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key.privateKey, new TextEncoder().encode(data)),
+    await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privateKey, new TextEncoder().encode(data)),
   );
 
   let response: Response;
@@ -86,6 +101,19 @@ export async function call<T>(
     code: error?.code ?? 'http',
     message: error?.message ?? `Helm answered ${response.status}.`,
   };
+}
+
+/**
+ * Sign out: unpair in Helm first, so the token is dead even if the local copy
+ * survived, then forget the pairing here. Locked, there is no token to unpair
+ * with, and forgetting the device key is what makes the token useless.
+ */
+export async function signOut(): Promise<void> {
+  const [server, key, token] = await Promise.all([getServer(), getKey('device'), tokenForSignOut()]);
+  if (server && key && token) {
+    await send(server, key.privateKey, token, '/api/extension/me', { method: 'DELETE' }).catch(() => null);
+  }
+  await clearPairing();
 }
 
 /** Renew the token once it is in its last week. Quiet on failure: the next call says why. Not while locked. */

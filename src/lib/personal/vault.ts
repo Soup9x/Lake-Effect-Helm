@@ -350,6 +350,21 @@ export async function revealPassword(
   return { value: payload.password, auditEventUid };
 }
 
+/**
+ * The password, for comparing with one the person just signed in with
+ * (src/lib/extension/save.ts). Not a reveal and not audited as one: it never
+ * leaves the server, and the caller answers only "same" or "changed".
+ */
+export async function passwordOf(tx: HelmTx, tenantId: string, id: string): Promise<string | null> {
+  const [row] = await tx<EnvelopeRow[]>`
+    SELECT data_key_id, secret_version, secret_ciphertext, secret_nonce, secret_tag, secret_aad
+    FROM personal_credential WHERE id = ${id}::uuid
+  `;
+  if (!row) throw ApiError.notFound('no such entry');
+  const payload = await open(tx, tenantId, id, row);
+  return payload.password ?? null;
+}
+
 /** The current one-time code, generated here from the seed, which never leaves. */
 export async function currentCode(
   tx: HelmTx, tenantId: string, id: string,

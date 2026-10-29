@@ -425,7 +425,7 @@ gains an offline verification oracle for guessed plaintexts. The column is
 nullable; deployments that do not want that tradeoff leave
 `HELM_BLIND_INDEX_KEY_B64` unset and get no reuse detection.
 
-### 4.6 The browser extension (1120, 1121)
+### 4.6 The browser extension (1120, 1121, 1180)
 
 A Chrome, Edge and Brave extension that looks up the credentials for the site
 in front of a technician, and copies or fills a username, a standard password
@@ -488,7 +488,7 @@ copy limits above.
 AES-GCM with a key from PBKDF2-SHA-256 (600,000 rounds) over the PIN or
 password; unlocked, the plaintext token is held in `chrome.storage.session`,
 which is memory only, so closing the browser or restarting the computer always
-locks it, and an optional idle timeout locks it sooner. Five wrong tries in a
+locks it, and the timeout (below) can lock it sooner. Five wrong tries in a
 row forget the pairing. This is a local control: the PIN never reaches Helm,
 Helm does not know which browsers are locked, and a copy of the browser
 profile can be guessed against offline (a short PIN quickly, a password far
@@ -517,6 +517,50 @@ them under RLS, so nothing the person could not open is listed.
 token could, relying on a token's actor never being a person; a personal token
 (0750) is one. The owner policy now requires a request with no token, and the
 extension's read-only policy admits only its own token type.
+
+**Saving and updating (1180).** The extension offers to save a login after a
+sign-in, to update a password that changed, and to add one from the popup. It
+is a write path from a browser, so it is narrow, and each limit is enforced in
+the database, not only the routes:
+
+- *Write comes with a new pairing.* Pairings from 1180 carry `secret:write` and
+  `asset:write`, narrowed to what the person holds; renewal copies a token's
+  scopes, so a browser paired before keeps read-only until it is paired again,
+  with the password.
+- *Its own routes only.* `resolveIdentity()` refuses an extension token on any
+  path not in `src/lib/extension/routes.ts` (match, search, the reveal and code
+  routes, and the extension's save, update and check routes), so its write
+  scopes never reach Helm's other write routes.
+- *Standard passwords only.* Triggers on `secret` and `secret_version` refuse,
+  for an extension token, a secret that is not standard (or that asks for a
+  step-up, a reason, a higher rank, or is a TOTP seed), any change to a
+  secret's protection, client or deletion, and a new version of anything but a
+  standard password. An update is a new version, audited with the site as its
+  reason, and only of a login the server itself matches to the page.
+- *"Same password?" without a reveal.* `helm.extension_password_state()`
+  compares the blind index of what was typed with the current version's and
+  returns same, changed or unknown, only for a standard secret the person could
+  reveal anyway. Nothing is decrypted, so a sign-in is not an audited reveal.
+- *The personal vault.* The extension may insert and update its person's
+  entries (two policies) and still cannot delete one. Saves are audited as
+  `personal_vault.saved`, without the entry's name.
+
+In the browser, a script runs on https pages only once the person turns on the
+field icon or the save prompt, and is trusted no further than the page: it can
+report a sign-in form or a sign-in, and never asks for a credential. The list
+of logins and the save prompt are extension pages in frames
+(`web_accessible_resources` with `use_dynamic_url`), so the page cannot read
+them; clicks in them are ignored while the browser reports them hidden or
+covered (`IntersectionObserver` with `trackVisibility`). Filling is asked for by
+the list frame and done by the background into the frame it was opened over,
+after the frame reports the same host. A typed login is held in
+`chrome.storage.session` (memory, not readable by content scripts) until the
+person answers, five minutes, or the tab closes. Nothing fills on page load, and
+nothing presses Sign in.
+
+**The timeout.** Settings choose how long unused (a page asking does not count)
+and what then happens: lock, with a PIN or password set, or sign out, which
+revokes the pairing in Helm and forgets it locally.
 
 ### 4.7 Cross-site requests
 

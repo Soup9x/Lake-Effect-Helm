@@ -23,6 +23,11 @@
  *                revoke one; nobody else can.
  *   SUGGESTIONS  a site with no match offers what the person copied lately,
  *                and what MSP staff copy most; search finds near misses.
+ *   SAVING       (1180) after a sign-in, Helm says whether it has the login
+ *                and the password without revealing it; the extension saves
+ *                a standard login to a client or the vault and updates the
+ *                password of one matched to the site, and nothing else: no
+ *                elevated secret, no other route, no pairing from before.
  */
 import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import { NextRequest } from 'next/server';
@@ -52,6 +57,16 @@ import { POST as createEntry, GET as listVault } from '../../src/app/api/persona
 import { POST as personalReveal } from '../../src/app/api/personal/vault/[entryId]/reveal/route';
 import { DELETE as personalDelete } from '../../src/app/api/personal/vault/[entryId]/route';
 import { POST as issueToken } from '../../src/app/api/account/tokens/route';
+import { GET as destinations } from '../../src/app/api/extension/destinations/route';
+import { POST as checkRoute } from '../../src/app/api/extension/check/route';
+import { POST as saveRoute } from '../../src/app/api/extension/logins/route';
+import { POST as updateRoute } from '../../src/app/api/extension/logins/update/route';
+import { POST as rotateRoute } from '../../src/app/api/secrets/[secretId]/rotate/route';
+import { POST as createAsset } from '../../src/app/api/assets/route';
+import type { ExtensionDestinations, ExtensionLoginCheck, ExtensionSaved } from '../../src/lib/extension/types';
+
+// Comparing a typed password with a stored one uses the blind index (1180).
+process.env.HELM_BLIND_INDEX_KEY_B64 = Buffer.alloc(32, 7).toString('base64');
 
 let h: Harness;
 let currentUser: SessionUser | null = null;
@@ -201,7 +216,7 @@ describe('pairing', () => {
     const [token] = await su((sql) => sql<{ token_type: string; scopes: string[]; expires_at: Date }[]>`
       SELECT token_type, scopes, expires_at FROM api_token WHERE token_prefix = ${paired.token.split('.')[0]!}`);
     expect(token!.token_type).toBe('browser_extension');
-    expect(token!.scopes).toEqual(['asset:read', 'organization:read', 'secret:read', 'secret:reveal']);
+    expect(token!.scopes).toEqual(['asset:read', 'asset:write', 'organization:read', 'secret:read', 'secret:reveal', 'secret:write']);
     expect(token!.expires_at.getTime() - Date.now()).toBeLessThanOrEqual(31 * 24 * 3600 * 1000);
 
     const [audit] = await su((sql) => sql<{ metadata: Record<string, unknown> }[]>`
@@ -668,5 +683,163 @@ describe('every paired browser, for an administrator', () => {
       adminRevoke(sessionRequest(`/api/extension/admin/installs/${paired.installId}`, 'DELETE'),
         params('installId', paired.installId)));
     expect(again.status).toBe(404);
+  });
+});
+
+
+describe('saving and updating logins (1180)', () => {
+  let device: Device;
+  let token: string;
+  const SITE = 'https://portal.acme-corp.test/login?next=%2F';
+
+  beforeAll(async () => {
+    device = newDevice();
+    token = (await json<ExtensionPairing>(await pairAs(TECH, device, 'Save tests'))).token;
+  });
+
+  const check = (payload: Record<string, unknown>) =>
+    checkRoute(signed(device, token, '/api/extension/check', 'POST', payload));
+  const save = (payload: Record<string, unknown>) =>
+    saveRoute(signed(device, token, '/api/extension/logins', 'POST', payload));
+  const update = (payload: Record<string, unknown>) =>
+    updateRoute(signed(device, token, '/api/extension/logins/update', 'POST', payload));
+
+  it('lists the clients a login can go to, with their sites', async () => {
+    const response = await destinations(signed(device, token, '/api/extension/destinations'));
+    expect(response.status, await response.clone().text()).toBe(200);
+    const body = await json<ExtensionDestinations>(response);
+    expect(body.canSave).toBe(true);
+    expect(body.organizations.map((o) => o.id)).toContain(IDS.orgAcme);
+  });
+
+  it('says whether Helm has a sign-in, and whether the password matches, without revealing it', async () => {
+    const before = await su(async (sql) =>
+      (await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM audit_log WHERE action LIKE 'secret.reveal%'`)[0]!.n);
+
+    const same = await json<ExtensionLoginCheck>(await check({ url: SITE, username: 'HelpDesk@acme-corp.test', password: PORTAL_PASSWORD }));
+    expect(same).toMatchObject({ state: 'same', host: 'portal.acme-corp.test', entry: { id: portal.credentialId } });
+
+    const changed = await json<ExtensionLoginCheck>(await check({ url: SITE, username: 'helpdesk@acme-corp.test', password: 'a-new-one' }));
+    expect(changed).toMatchObject({ state: 'changed', entry: { id: portal.credentialId } });
+
+    const other = await json<ExtensionLoginCheck>(await check({ url: SITE, username: 'someone-else', password: 'x' }));
+    expect(other).toMatchObject({ state: 'new', entry: null });
+
+    // Elevated: Helm has it, the extension may not touch it, so it asks nothing.
+    const admin = await json<ExtensionLoginCheck>(await check({ url: 'https://admin.acme-corp.test/', username: 'root', password: 'guess' }));
+    expect(admin.state).toBe('skip');
+
+    const after = await su(async (sql) =>
+      (await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM audit_log WHERE action LIKE 'secret.reveal%'`)[0]!.n);
+    expect(after).toBe(before);
+  });
+
+  it('compares with the personal vault too', async () => {
+    const same = await json<ExtensionLoginCheck>(await check({ url: 'https://www.bank.example/signin', username: 'tech1', password: 'bank-pw-1' }));
+    expect(same).toMatchObject({ state: 'same', entry: { kind: 'personal', id: personalId } });
+    const changed = await json<ExtensionLoginCheck>(await check({ url: 'https://www.bank.example/signin', username: 'tech1', password: 'bank-pw-2' }));
+    expect(changed).toMatchObject({ state: 'changed', entry: { kind: 'personal' } });
+  });
+
+  it('saves a standard login under a client, which then matches the site', async () => {
+    const response = await save({
+      destination: { kind: 'client', organizationId: IDS.orgAcme },
+      name: 'Acme CRM', username: 'crm-admin', password: 'crm-pw-1', url: 'https://crm.acme-corp.test',
+      tags: ['Saved From Browser'],
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const saved = await json<ExtensionSaved>(response);
+    expect(saved).toMatchObject({ kind: 'client', name: 'Acme CRM' });
+    expect(JSON.stringify(saved)).not.toContain('crm-pw-1');
+
+    const [row] = await su((sql) => sql<{ sensitivity: string; tags: string[]; username: string }[]>`
+      SELECT s.sensitivity, n.tags, c.username FROM credential c
+      JOIN asset_node n ON n.id = c.id JOIN secret s ON s.id = c.secret_id WHERE c.id = ${saved.id}::uuid`);
+    expect(row).toEqual({ sensitivity: 'standard', tags: ['saved from browser'], username: 'crm-admin' });
+
+    const again = await json<ExtensionLoginCheck>(await check({ url: 'https://crm.acme-corp.test/', username: 'crm-admin', password: 'crm-pw-1' }));
+    expect(again.state).toBe('same');
+  });
+
+  it('saves to the personal vault, audited without its name', async () => {
+    const response = await save({
+      destination: { kind: 'personal' }, name: 'My forum', username: 'tech1', password: 'forum-pw', url: 'https://forum.example',
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const saved = await json<ExtensionSaved>(response);
+    expect(saved.kind).toBe('personal');
+    const [audit] = await su((sql) => sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata FROM audit_log WHERE action = 'personal_vault.saved' AND entity_id = ${saved.id}::uuid`);
+    expect(audit!.metadata).toMatchObject({ source: 'browser_extension', change: 'created' });
+    expect(JSON.stringify(audit)).not.toContain('My forum');
+  });
+
+  it('updates a client password to a new version, keeping the old, and the check then says same', async () => {
+    const response = await update({ url: SITE, kind: 'client', id: portal.credentialId, password: 'portal-password-2' });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const versions = await su(async (sql) =>
+      (await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM secret_version WHERE secret_id = ${portal.secretId}::uuid`)[0]!.n);
+    expect(versions).toBe(2);
+    const now = await json<ExtensionLoginCheck>(await check({ url: SITE, username: 'helpdesk@acme-corp.test', password: 'portal-password-2' }));
+    expect(now.state).toBe('same');
+  });
+
+  it('updates a personal password', async () => {
+    const response = await update({ url: 'https://www.bank.example/', kind: 'personal', id: personalId, password: 'bank-pw-2' });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const path = `/api/personal/vault/${personalId}/reveal`;
+    const copied = await personalReveal(signed(device, token, path, 'POST', { purpose: 'copy' }), params('entryId', personalId));
+    expect((await json<{ value: string }>(copied)).value).toBe('bank-pw-2');
+  });
+
+  it('will not update a login on a site it does not belong to, or an elevated one', async () => {
+    const elsewhere = await update({ url: 'https://evil.example/', kind: 'client', id: portal.credentialId, password: 'stolen' });
+    expect(elsewhere.status).toBe(404);
+    const high = await update({ url: 'https://admin.acme-corp.test/', kind: 'client', id: elevated.credentialId, password: 'x' });
+    expect(high.status).toBe(403);
+  });
+
+  it('cannot save anything but a standard password, even below the routes', async () => {
+    const [row] = await su((sql) => sql<{ id: string }[]>`
+      SELECT t.id FROM api_token t WHERE t.token_prefix = ${token.split('.')[0]!}`);
+    const actor = { tenantId: IDS.tenant1, actorId: IDS.tech1, apiTokenId: row!.id };
+    await expect(withTenant(actor, (tx) => tx`
+      INSERT INTO secret (tenant_id, organization_id, kind, sensitivity, label, requires_step_up, requires_reason)
+      VALUES (${IDS.tenant1}::uuid, ${IDS.orgAcme}::uuid, 'password', 'critical', 'Sneaky', true, true)
+    `)).rejects.toThrow(/standard passwords only/);
+    await expect(withTenant(actor, (tx) => tx`
+      UPDATE secret SET sensitivity = 'standard', requires_step_up = false, requires_reason = false
+      WHERE id = ${elevated.secretId}::uuid
+    `)).rejects.toThrow(/cannot change how a credential is protected/);
+  });
+
+  it('reaches no route but its own, whatever its scopes allow', async () => {
+    const rotate = await rotateRoute(
+      signed(device, token, `/api/secrets/${elevated.secretId}/rotate`, 'POST', { value: 'x', reason: 'ten characters at least' }),
+      params('secretId', elevated.secretId),
+    );
+    expect(rotate.status).toBe(403);
+    const asset = await createAsset(signed(device, token, '/api/assets', 'POST', {
+      organizationId: IDS.orgAcme, nodeType: 'vendor', name: 'Not from a browser',
+    }));
+    expect(asset.status).toBe(403);
+    const personal = await createEntry(signed(device, token, '/api/personal/vault', 'POST', { name: 'x' }));
+    expect(personal.status).toBe(403);
+  });
+
+  it('refuses to save from a pairing made before 1180, which says so', async () => {
+    const old = newDevice();
+    const paired = await json<ExtensionPairing>(await pairAs(TECH, old, 'Before saving'));
+    await su((sql) => sql`
+      UPDATE api_token SET scopes = ARRAY['asset:read', 'organization:read', 'secret:read', 'secret:reveal']
+      WHERE token_prefix = ${paired.token.split('.')[0]!}`);
+    const who = await json<{ canSave: boolean }>(await me(signed(old, paired.token, '/api/extension/me')));
+    expect(who.canSave).toBe(false);
+    const listed = await json<ExtensionDestinations>(await destinations(signed(old, paired.token, '/api/extension/destinations')));
+    expect(listed).toEqual({ canSave: false, organizations: [] });
+    const refused = await saveRoute(signed(old, paired.token, '/api/extension/logins', 'POST', {
+      destination: { kind: 'personal' }, name: 'x', password: 'y',
+    }));
+    expect(refused.status).toBe(403);
   });
 });
