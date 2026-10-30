@@ -28,12 +28,14 @@ import { TenantSwitcher } from '../tenant-switcher';
 import type { ServerIdentity } from '@/lib/auth/server-identity';
 import { isClientRole } from '@/lib/ui/roles';
 import { IdleWatcher } from '../idle-watcher';
+import { UpdateBanner } from './update-banner';
 
 export function AppChrome({
   identity,
   unreadNotifications,
   idleMinutes,
   avatarUrl,
+  showUpdates,
   children,
 }: {
   identity: ServerIdentity;
@@ -47,6 +49,8 @@ export function AppChrome({
   idleMinutes: number;
   /** The signed-in person's profile picture (1040), or null. */
   avatarUrl: string | null;
+  /** Holds tenant:write: show the strip that says a newer Helm is on GitHub. */
+  showUpdates: boolean;
   children: ReactNode;
 }) {
   const isClient = isClientRole(identity.roleKey);
@@ -86,6 +90,7 @@ export function AppChrome({
             </>
           }
         />
+        {showUpdates && <UpdateBanner />}
         <div className="flex min-w-0 flex-1 flex-col">{children}</div>
       </div>
       <IdleWatcher idleMinutes={idleMinutes} />

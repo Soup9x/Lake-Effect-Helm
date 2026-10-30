@@ -557,6 +557,12 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () => (await import('../../src/app/(app)/settings/backups/page')).default(),
   },
   {
+    // HELM_BUILD_COMMIT is unset here, so this renders "version unknown"
+    // without asking GitHub.
+    name: 'administration, updates',
+    load: async () => (await import('../../src/app/(app)/settings/updates/page')).default(),
+  },
+  {
     name: 'administration, automation',
     load: async () => (await import('../../src/app/(app)/settings/automation/page')).default(),
   },

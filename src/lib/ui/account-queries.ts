@@ -69,10 +69,12 @@ export interface ShellState {
   idleMinutes: number;
   /** Their profile picture (1040), for the account menu, or null. */
   avatarUrl: string | null;
+  /** Holds tenant:write, so is told when a newer Helm is on GitHub. */
+  canManageTenant: boolean;
 }
 
 export async function readShellState(identity: ServerIdentity): Promise<ShellState> {
-  return withTenant(actorOf(identity), async (tx) => {
+  return withTenant(actorOf(identity), async (tx, session) => {
     const [row] = await tx<Row[]>`
       SELECT name, first_name, last_name, timezone, theme
       FROM app_user WHERE id = ${identity.actorId}::uuid
@@ -93,6 +95,7 @@ export async function readShellState(identity: ServerIdentity): Promise<ShellSta
         SELECT idle_minutes FROM helm.my_session_policy()
       `)[0]?.idle_minutes ?? 480,
       avatarUrl: (await avatarUrls(tx, [identity.actorId])).get(identity.actorId) ?? null,
+      canManageTenant: session.permissions.includes('tenant:write'),
     };
   });
 }

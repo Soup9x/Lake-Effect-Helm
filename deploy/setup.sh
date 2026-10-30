@@ -686,6 +686,20 @@ start_stack() {
     confirm "Go ahead?" y || die "stopped before building. Nothing has been started."
   fi
 
+  # Tell the image which commit it is and where this checkout lives, so
+  # Administration → Updates can compare it with GitHub and show the right
+  # commands. The image has no .git of its own. safe.directory because this
+  # runs under sudo and the checkout usually belongs to somebody else, which
+  # git otherwise refuses to read.
+  HELM_BUILD_COMMIT=$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)
+  HELM_INSTALL_DIR="$REPO_ROOT"
+  export HELM_BUILD_COMMIT HELM_INSTALL_DIR
+  if [ -n "$HELM_BUILD_COMMIT" ]; then
+    ok "building commit ${HELM_BUILD_COMMIT:0:7}"
+  else
+    warn "not a git checkout, so Helm will not be able to tell when an update is available"
+  fi
+
   # Build separately from `up` so build time is visible as build time, and so
   # the --wait timeout below measures only how long health takes.
   info "building images..."
@@ -705,6 +719,89 @@ start_stack() {
   ok "every service healthy"
   printf '\n'
   docker compose ps
+}
+
+# -----------------------------------------------------------------------------
+# Updates from the web page
+# -----------------------------------------------------------------------------
+# Administration → Updates can install an update when an administrator asks
+# (now, or at a time they pick). The web tier cannot do that itself and must
+# not be able to — it would need the Docker socket — so a small service on
+# this host does it: deploy/updater.sh, run once a minute by a systemd timer.
+# It pulls the requested commit (only ever one on the configured branch) and
+# runs this script with --yes, which keeps every answer already in .env.
+#
+# Reinstalled on every run, so an update also updates the updater. The copy
+# is moved into place with a rename: a run of the old copy that is in the
+# middle of an update keeps reading the file it started with.
+updater() {
+  step "Updates from Helm's Updates page"
+
+  local current answer default=y
+  current=$(get_env HELM_WEB_UPDATES 2>/dev/null || true)
+  if [ "$ASSUME_YES" -eq 1 ]; then
+    answer=${current:-on}
+  else
+    info "Administrators can install a Helm update from Administration → Updates,"
+    info "straight away or at a time they choose, after re-entering their password."
+    info "A small service on this host does it: it pulls the update from GitHub and"
+    info "re-runs this script with the answers you have already given."
+    printf '\n'
+    [ "$current" = off ] && default=n
+    if ask_yn "Allow updates from Helm's Updates page?" "$default"; then answer=on; else answer=off; fi
+  fi
+  set_env HELM_WEB_UPDATES "$answer"
+
+  if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+    warn "this host does not run systemd, so updates from the web page are not available"
+    note "Update with: cd $REPO_ROOT && git pull && sudo ./deploy/setup.sh"
+    return 0
+  fi
+
+  if [ "$answer" != on ]; then
+    systemctl disable --now helm-updater.timer >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/helm-updater.timer /etc/systemd/system/helm-updater.service /usr/local/sbin/helm-updater
+    systemctl daemon-reload
+    ok "updates from the web page are off"
+    return 0
+  fi
+
+  install -m 0755 "$REPO_ROOT/deploy/updater.sh" /usr/local/sbin/helm-updater.new
+  mv -f /usr/local/sbin/helm-updater.new /usr/local/sbin/helm-updater
+
+  cat > /etc/systemd/system/helm-updater.service <<UNIT
+[Unit]
+Description=Lake Effect Helm updater (installs updates requested on Administration > Updates)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+Environment="HELM_REPO_ROOT=$REPO_ROOT"
+Environment=HOME=/root
+ExecStart=/usr/local/sbin/helm-updater
+# A rebuild takes minutes; this is only a backstop for a hung one.
+TimeoutStartSec=3h
+Nice=5
+UNIT
+
+  cat > /etc/systemd/system/helm-updater.timer <<UNIT
+[Unit]
+Description=Check once a minute for a Helm update requested on the Updates page
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+  systemctl daemon-reload
+  systemctl enable --now helm-updater.timer >/dev/null 2>&1 \
+    || die "could not start helm-updater.timer — see: systemctl status helm-updater.timer"
+  ok "updater installed; Administration → Updates can install updates"
+  note "Its logs: /var/log/helm-updater and journalctl -u helm-updater"
 }
 
 # -----------------------------------------------------------------------------
@@ -889,6 +986,7 @@ main() {
   configure
   start_stack
   bootstrap
+  updater
   finish
 }
 

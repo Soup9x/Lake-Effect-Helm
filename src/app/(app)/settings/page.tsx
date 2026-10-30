@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ComponentType } from 'react';
 import {
-  Activity, Bot, Boxes, Building, Cloud, HardDriveDownload, Mail, Puzzle, ShieldCheck, Users,
+  Activity, ArrowUpCircle, Bot, Boxes, Building, Cloud, HardDriveDownload, Mail, Puzzle, ShieldCheck, Users,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -10,6 +10,7 @@ import { AdminNav } from '@/components/admin-nav';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { ADMIN_SECTIONS, type AdminSection } from '@/lib/settings/sections';
+import { peekUpdateStatus } from '@/lib/updates/check';
 
 /**
  * Administration — every setting that governs the whole MSP, in sections.
@@ -35,6 +36,7 @@ const ICONS: Record<AdminSection['icon'], ComponentType<{ className?: string; 'a
   audit: Activity,
   types: Boxes,
   extensions: Puzzle,
+  updates: ArrowUpCircle,
 };
 
 export default async function AdministrationPage() {
@@ -67,6 +69,11 @@ export default async function AdministrationPage() {
     '/people': { text: `${status?.people ?? 0} active`, tone: 'neutral' },
     '/settings/asset-types': { text: `${status?.types ?? 0} defined`, tone: 'neutral' },
   };
+  // Only what is already known: this page should not wait on GitHub. The
+  // banner across the top asks, so the answer is usually here by now.
+  const update = peekUpdateStatus();
+  if (update?.state === 'available') badge['/settings/updates'] = { text: 'Update available', tone: 'warning' };
+  else if (update?.state === 'up_to_date') badge['/settings/updates'] = { text: 'Up to date', tone: 'ok' };
 
   return (
     <>
