@@ -9,6 +9,7 @@
  * page follows it, through the restart, by asking every few seconds. Without
  * the updater the page shows the commands to run instead.
  */
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowUpCircle, CheckCircle2, ExternalLink, GitCommit, RefreshCw, TriangleAlert } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -285,10 +286,18 @@ export function UpdatesCard({ initial }: { initial: UpdatesSnapshot }) {
       {history.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Updates from this page</CardTitle>
+            <CardTitle className="flex flex-wrap items-center gap-2">
+              Last update from this page
+              <Link
+                href="/settings/updates/history"
+                className="ml-auto text-sm font-normal text-brand underline-offset-4 hover:underline"
+              >
+                Full history
+              </Link>
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <UpdateHistory requests={history} />
+            <UpdateHistory requests={history.slice(0, 1)} />
           </CardContent>
         </Card>
       )}
