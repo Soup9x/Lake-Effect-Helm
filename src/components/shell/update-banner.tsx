@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 import { ArrowUpCircle, X } from 'lucide-react';
 import { apiFetch } from '@/lib/ui/api';
 import type { UpdateStatus } from '@/lib/updates/check';
+import { openRequest, type UpdateRequest } from '@/lib/updates/requests';
 
 const DISMISSED_KEY = 'helm.update.dismissed';
 
@@ -31,18 +32,60 @@ function readDismissed(): string | null {
 
 export function UpdateBanner() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [pending, setPending] = useState<UpdateRequest | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
 
   useEffect(() => {
     setDismissed(readDismissed());
     let cancelled = false;
-    void apiFetch<{ status: UpdateStatus }>('/api/tenant/updates').then((result) => {
-      if (!cancelled && result.ok) setStatus(result.value.status);
-    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => {
+      void apiFetch<{ status: UpdateStatus; requests: UpdateRequest[] }>('/api/tenant/updates').then((result) => {
+        if (cancelled) return;
+        const open = result.ok ? openRequest(result.value.requests) : null;
+        if (result.ok) {
+          setStatus(result.value.status);
+          setPending(open);
+        }
+        // The shell stays mounted across navigation, so while an update is
+        // queued or running keep asking, or the strip would go on saying
+        // "installing" after it finished. A failed ask during the restart
+        // keeps asking too.
+        if (open || !result.ok) timer = setTimeout(load, 30_000);
+      });
+    };
+    load();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, []);
+
+  // An update somebody already asked for is news for every administrator,
+  // and is not dismissable: Helm is about to go away for a few minutes.
+  if (pending) {
+    return (
+      <div
+        role="status"
+        className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-brand/40 bg-brand-tint px-4 py-2 text-sm text-ink"
+      >
+        <ArrowUpCircle className="size-4 shrink-0 text-brand" aria-hidden />
+        <span className="font-medium">
+          {pending.status === 'running' ? (
+            'Helm is installing an update and will restart in a few minutes'
+          ) : (
+            <>
+              A Helm update is scheduled for{' '}
+              {new Date(pending.scheduledFor).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+            </>
+          )}
+        </span>
+        <Link href="/settings/updates" className="font-medium text-brand-strong underline-offset-4 hover:underline">
+          Details
+        </Link>
+      </div>
+    );
+  }
 
   if (status?.state !== 'available' || !status.latest) return null;
   if (dismissed === status.latest.commit) return null;

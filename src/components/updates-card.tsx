@@ -4,11 +4,12 @@
  * Administration → Updates: which build this is, what is newer on GitHub, and
  * the commands that apply it.
  *
- * THE COMMANDS ARE SHOWN, NOT RUN. Applying an update is `git pull` and
- * deploy/setup.sh on the host, as root, and the web tier deliberately has no
- * way to do either — see the header of src/lib/updates/check.ts.
+ * THE WEB TIER INSTALLS NOTHING ITSELF. "Update now" writes a request (1210)
+ * that the updater on the host picks up — see deploy/updater.sh — and this
+ * page follows it, through the restart, by asking every few seconds. Without
+ * the updater the page shows the commands to run instead.
  */
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ArrowUpCircle, CheckCircle2, ExternalLink, GitCommit, RefreshCw, TriangleAlert } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
@@ -17,6 +18,17 @@ import { CopyValueButton } from '@/components/copy-value-button';
 import { apiFetch } from '@/lib/ui/api';
 import { formatDate, formatDateTime } from '@/lib/ui/format';
 import type { UpdateState, UpdateStatus } from '@/lib/updates/check';
+import { openRequest, type UpdateRequest, type UpdaterState } from '@/lib/updates/requests';
+import { InstallButtons, OpenRequest, UpdateHistory } from './update-install';
+
+export interface UpdatesSnapshot {
+  status: UpdateStatus;
+  updater: UpdaterState;
+  requests: UpdateRequest[];
+}
+
+/** How often the page asks while an update is queued or running. */
+const FOLLOW_MS = 5000;
 
 const STATE_BADGE: Record<UpdateState, { text: string; tone: BadgeTone }> = {
   available: { text: 'Update available', tone: 'warning' },
@@ -35,22 +47,46 @@ function short(commit: string | null | undefined): string {
 // and a locale-formatted time would differ between the two.
 const when = formatDateTime;
 
-export function UpdatesCard({ initial }: { initial: UpdateStatus }) {
-  const [status, setStatus] = useState(initial);
+export function UpdatesCard({ initial }: { initial: UpdatesSnapshot }) {
+  const [snapshot, setSnapshot] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  const { status, updater, requests } = snapshot;
+  const open = openRequest(requests);
 
   const checkNow = async () => {
     setBusy(true);
     setFailure(null);
     try {
-      const result = await apiFetch<{ status: UpdateStatus }>('/api/tenant/updates', { method: 'POST' });
-      if (result.ok) setStatus(result.value.status);
+      const result = await apiFetch<UpdatesSnapshot>('/api/tenant/updates', { method: 'POST' });
+      if (result.ok) setSnapshot(result.value);
       else setFailure(result.message);
     } finally {
       setBusy(false);
     }
   };
+
+  const refresh = useCallback(async () => {
+    const result = await apiFetch<UpdatesSnapshot>('/api/tenant/updates');
+    // Nothing answering is what a restart looks like from here. Anything else
+    // that is not ok (a 403 because the session ended, say) is left alone;
+    // the next tick tries again.
+    setRestarting(!result.ok && (result.status === 0 || result.status >= 500 || result.code === 'http'));
+    if (result.ok) setSnapshot(result.value);
+  }, []);
+
+  // Follow a queued or running update until it finishes.
+  const following = open !== null || restarting;
+  useEffect(() => {
+    if (!following) return;
+    const timer = setInterval(() => void refresh(), FOLLOW_MS);
+    return () => clearInterval(timer);
+  }, [following, refresh]);
+
+  const replace = (request: UpdateRequest) =>
+    setSnapshot((s) => ({ ...s, requests: [request, ...s.requests.filter((r) => r.id !== request.id)] }));
+  const history = requests.filter((r) => r !== open);
 
   const commands = [`cd ${status.installDir}`, 'git pull', 'sudo ./deploy/setup.sh'].join('\n');
   const badge = STATE_BADGE[status.state];
@@ -200,33 +236,62 @@ export function UpdatesCard({ initial }: { initial: UpdateStatus }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>How to update</CardTitle>
+          <CardTitle>Install the update</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <p className="text-ink-muted">
-            On the Helm server, in a terminal. setup.sh pulls nothing itself: it rebuilds the images from the checkout,
-            applies any database migrations, and restarts the services that changed. Sign-ins and data are kept.
-          </p>
-          <div className="flex items-start gap-2 rounded-md border border-border bg-surface-sunken p-3">
-            <pre className="min-w-0 flex-1 overflow-x-auto font-mono text-xs leading-relaxed text-ink">{commands}</pre>
-            <CopyValueButton value={commands} label="Copy the update commands" />
-          </div>
-          {status.state === 'available' && status.migrations > 0 && (
+        <CardContent className="space-y-4 text-sm">
+          {open && <OpenRequest request={open} restarting={restarting} onCancelled={replace} />}
+
+          {!open && status.state === 'available' && status.latest && updater.installed && (
+            <div className="space-y-2">
+              <p className="text-ink-muted">
+                Helm installs it itself: the updater on the server pulls {short(status.latest.commit)} from GitHub,
+                rebuilds, applies any database migrations and restarts, keeping every setting from the last setup.
+                Helm is unavailable for a few minutes while it restarts.
+              </p>
+              <InstallButtons latest={status.latest.commit} onRequested={replace} />
+            </div>
+          )}
+
+          {!open && status.state === 'available' && status.migrations > 0 && (
             <p className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-2 text-warning">
               <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
               <span>
                 This update includes {status.migrations === 1 ? 'a database migration' : `${status.migrations} database migrations`}.
-                setup.sh applies {status.migrations === 1 ? 'it' : 'them'} on start. A recent backup (Administration → Backups)
-                is worth having first.
+                They are applied during the update. A recent backup (Administration → Backups) is worth having first.
               </span>
             </p>
           )}
-          <p className="text-xs text-ink-faint">
-            Helm takes a few minutes to rebuild, and pages may not load while the web service restarts. When it is back,
-            this page shows the new version.
-          </p>
+
+          {!updater.installed && (
+            <p className="text-ink-muted">
+              To install updates from this page, run setup.sh on the server once more and answer yes to
+              {' '}<span className="font-medium text-ink">Allow updates from Helm’s Updates page?</span>
+              {updater.lastSeenAt && <> The updater last checked in <span suppressHydrationWarning>{when(updater.lastSeenAt)}</span>, so it may have stopped.</>}
+            </p>
+          )}
+
+          <div className="space-y-2">
+            <p className="text-ink-muted">
+              {updater.installed ? 'Or, on the Helm server in a terminal:' : 'On the Helm server, in a terminal:'}
+            </p>
+            <div className="flex items-start gap-2 rounded-md border border-border bg-surface-sunken p-3">
+              <pre className="min-w-0 flex-1 overflow-x-auto font-mono text-xs leading-relaxed text-ink">{commands}</pre>
+              <CopyValueButton value={commands} label="Copy the update commands" />
+            </div>
+          </div>
         </CardContent>
       </Card>
+
+      {history.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Updates from this page</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <UpdateHistory requests={history} />
+          </CardContent>
+        </Card>
+      )}
     </>
   );
 }

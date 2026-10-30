@@ -42,3 +42,29 @@ export const backupRun = pgTable('backup_run', {
   detail: jsonb('detail').notNull().default({}),
   error: text('error'),
 });
+
+// 1210: updates requested from the Updates page, and when the host's updater
+// last looked for one. Same arrangement as the two above.
+export const helmUpdate = pgTable('helm_update', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  status: text('status').notNull().default('scheduled'),
+  targetCommit: text('target_commit').notNull(),
+  scheduledFor: tstz('scheduled_for').notNull().defaultNow(),
+  requestedAt: tstz('requested_at').notNull().defaultNow(),
+  requestedBy: uuid('requested_by').references(() => appUser.id, { onDelete: 'set null' }),
+  cancelledAt: tstz('cancelled_at'),
+  cancelledBy: uuid('cancelled_by').references(() => appUser.id, { onDelete: 'set null' }),
+  startedAt: tstz('started_at'),
+  finishedAt: tstz('finished_at'),
+  fromCommit: text('from_commit'),
+  toCommit: text('to_commit'),
+  stage: text('stage'),
+  log: text('log'),
+  error: text('error'),
+});
+
+export const helmUpdater = pgTable('helm_updater', {
+  id: smallint('id').primaryKey().default(1),
+  lastSeenAt: tstz('last_seen_at').notNull(),
+  host: text('host'),
+});
