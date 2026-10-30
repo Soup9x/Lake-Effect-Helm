@@ -4,6 +4,7 @@ import { PageBody, PageHeader } from '@/components/app-shell';
 import { AdminNav } from '@/components/admin-nav';
 import { Card, CardContent } from '@/components/ui/card';
 import { UpdatesCard } from '@/components/updates-card';
+import { UpdatesTabs } from '@/components/updates-tabs';
 import { getUpdateStatus } from '@/lib/updates/check';
 import { listUpdateRequests, readUpdater } from '@/lib/updates/requests';
 
@@ -31,6 +32,7 @@ export default async function UpdatesSettingsPage() {
       />
       <PageBody>
         <AdminNav />
+        <UpdatesTabs active="/settings/updates" />
         {snapshot ? (
           <UpdatesCard initial={snapshot} />
         ) : (

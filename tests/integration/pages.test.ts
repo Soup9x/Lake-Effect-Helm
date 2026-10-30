@@ -563,6 +563,10 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () => (await import('../../src/app/(app)/settings/updates/page')).default(),
   },
   {
+    name: 'administration, update history',
+    load: async () => (await import('../../src/app/(app)/settings/updates/history/page')).default(),
+  },
+  {
     name: 'administration, automation',
     load: async () => (await import('../../src/app/(app)/settings/automation/page')).default(),
   },
