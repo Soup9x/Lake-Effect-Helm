@@ -11,6 +11,7 @@ import type { HelmTx } from '../db/client';
 import type {
   NotificationDelivery,
   NotificationDestination,
+  NotificationLogCounts,
 } from '@/components/notification-settings';
 
 interface DestinationRow {
@@ -48,6 +49,7 @@ interface DeliveryRow {
   error: string | null;
   created_at: Date;
   delivered_at: Date | null;
+  archived_at?: Date | null;
 }
 
 /** The subscribable vocabulary, mirroring helm.notification_events(). */
@@ -94,6 +96,7 @@ export function toDelivery(row: DeliveryRow): NotificationDelivery {
     error: row.error,
     createdAt: row.created_at.toISOString(),
     deliveredAt: row.delivered_at?.toISOString() ?? null,
+    archivedAt: row.archived_at?.toISOString() ?? null,
   };
 }
 
@@ -108,4 +111,26 @@ export async function listNotificationDestinations(tx: HelmTx): Promise<Notifica
 export async function listRecentDeliveries(tx: HelmTx, limit = 20): Promise<NotificationDelivery[]> {
   const rows = await tx<DeliveryRow[]>`SELECT * FROM helm.recent_notifications(${limit})`;
   return rows.map(toDelivery);
+}
+
+/** How many rows of the delivery log one side of the archive shows at most. */
+export const DELIVERY_LOG_LIMIT = 500;
+
+/** One side of the delivery log (1220), newest first. */
+export async function listDeliveryLog(tx: HelmTx, archived = false): Promise<NotificationDelivery[]> {
+  const rows = await tx<DeliveryRow[]>`
+    SELECT * FROM helm.notification_log(${archived}, ${DELIVERY_LOG_LIMIT})`;
+  return rows.map(toDelivery);
+}
+
+/** Every delivery counted by status, for the summary line and the archive tab. */
+export async function countDeliveryLog(tx: HelmTx): Promise<NotificationLogCounts> {
+  const rows = await tx<{ status: string; archived: boolean; n: string }[]>`
+    SELECT * FROM helm.notification_log_counts()`;
+  const counts: NotificationLogCounts = { active: {}, archived: 0 };
+  for (const row of rows) {
+    if (row.archived) counts.archived += Number(row.n);
+    else counts.active[row.status] = (counts.active[row.status] ?? 0) + Number(row.n);
+  }
+  return counts;
 }

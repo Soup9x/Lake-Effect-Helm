@@ -51,6 +51,7 @@ import {
 } from './harness';
 
 import { GET as getNotifications, PUT as putNotification } from '../../src/app/api/notifications/route';
+import { GET as getLog, POST as postLog } from '../../src/app/api/notifications/log/route';
 
 let h: Harness;
 let currentUser: SessionUser | null = null;
@@ -1100,5 +1101,101 @@ describe('checklist work in a team channel (0870)', () => {
     } finally {
       await sql.end({ timeout: 5 });
     }
+  });
+});
+
+describe('the delivery log can be archived and cleared (1220)', () => {
+  const logRequest = (method: string, payload?: unknown, query = '') =>
+    new NextRequest(
+      new Request(`https://helm.test/api/notifications/log${query}`, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+      }),
+    );
+
+  /** Four deliveries to one destination: two delivered, one dead, one pending. */
+  async function seedLog(): Promise<{ endpoint: string; ids: Record<string, string> }> {
+    await wipeNotifications();
+    const endpoint = await seedDestination('https://hooks.example.test/log', 'generic');
+    const sql = superuserSql();
+    const ids: Record<string, string> = {};
+    try {
+      for (const [name, status, age] of [
+        ['oldDelivered', 'delivered', '40 days'],
+        ['newDelivered', 'delivered', '1 hour'],
+        ['oldDead', 'dead', '3 days'],
+        ['pending', 'pending', '10 days'],
+      ] as const) {
+        const [row] = await sql<{ id: string }[]>`
+          INSERT INTO webhook_delivery (tenant_id, endpoint_id, event_type, event_uid,
+                                        payload, subject, status, created_at)
+          VALUES (${IDS.tenant1}::uuid, ${endpoint}::uuid, 'export.requested', gen_random_uuid(),
+                  '{}'::jsonb, ${name}, ${status}::webhook_delivery_status,
+                  now() - ${age}::interval)
+          RETURNING id`;
+        ids[name] = row!.id;
+      }
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+    return { endpoint, ids };
+  }
+
+  const subjects = (payload: Record<string, unknown>) =>
+    (payload.deliveries as { subject: string }[]).map((d) => d.subject).sort();
+
+  it('archives by age, never a pending delivery, and restores', async () => {
+    const { ids } = await seedLog();
+    asUser(IDS.admin1, 'admin@northwind.test');
+
+    const archived = await body(await postLog(logRequest('POST', { action: 'archive', olderThanDays: 2 })));
+    expect(archived.count).toBe(2);
+    expect(archived.counts).toEqual({ active: { delivered: 1, pending: 1 }, archived: 2 });
+
+    expect(subjects(await body(await getLog(logRequest('GET'))))).toEqual(['newDelivered', 'pending']);
+    expect(subjects(await body(await getLog(logRequest('GET', undefined, '?archived=1')))))
+      .toEqual(['oldDead', 'oldDelivered']);
+
+    // Selecting the pending one does nothing: it is still going to be sent.
+    const refused = await body(await postLog(logRequest('POST', { action: 'archive', ids: [ids.pending] })));
+    expect(refused.count).toBe(0);
+
+    const restored = await body(await postLog(logRequest('POST', { action: 'restore', ids: [ids.oldDead] })));
+    expect(restored.count).toBe(1);
+    expect(subjects(await body(await getLog(logRequest('GET'))))).toEqual(['newDelivered', 'oldDead', 'pending']);
+  });
+
+  it('takes archived dead deliveries out of the destination’s dead count', async () => {
+    const { ids } = await seedLog();
+    asUser(IDS.admin1, 'admin@northwind.test');
+    const deadCount = async () =>
+      ((await body(await getNotifications(request('GET')))).destinations as { deadCount: number }[])[0]!.deadCount;
+
+    expect(await deadCount()).toBe(1);
+    await postLog(logRequest('POST', { action: 'archive', ids: [ids.oldDead] }));
+    expect(await deadCount()).toBe(0);
+  });
+
+  it('deletes only archived rows, and keeps the last two days', async () => {
+    const { ids } = await seedLog();
+    asUser(IDS.admin1, 'admin@northwind.test');
+
+    // Not archived yet, so nothing goes.
+    expect((await body(await postLog(logRequest('POST', { action: 'delete', ids: [ids.oldDelivered] })))).count).toBe(0);
+
+    await postLog(logRequest('POST', { action: 'archive', olderThanDays: 0 }));
+    const deleted = await body(await postLog(logRequest('POST', { action: 'delete' })));
+    // newDelivered is archived but an hour old: it stays, so its dedupe key does.
+    expect(deleted.count).toBe(2);
+    expect(deleted.counts).toEqual({ active: { pending: 1 }, archived: 1 });
+    expect(subjects(await body(await getLog(logRequest('GET', undefined, '?archived=1'))))).toEqual(['newDelivered']);
+  });
+
+  it('refuses a client-side role, and writes without integration:manage', async () => {
+    await seedLog();
+    asUser(IDS.acmeViewer, 'viewer@acme.test');
+    expect((await getLog(logRequest('GET'))).status).toBeGreaterThanOrEqual(400);
+    expect((await postLog(logRequest('POST', { action: 'archive' }))).status).toBeGreaterThanOrEqual(400);
   });
 });

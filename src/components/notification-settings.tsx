@@ -6,7 +6,8 @@ import { Bell, CheckCircle2, Loader2, Plus, Send, ShieldAlert, Trash2 } from 'lu
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Input, Label } from './ui/field';
-import { Badge, type BadgeTone } from './ui/badge';
+import { Badge } from './ui/badge';
+import { NotificationDeliveryLog } from './notification-delivery-log';
 import { formatDateTime } from '@/lib/ui/format';
 import { apiFetch, type Feedback } from '@/lib/ui/api';
 
@@ -46,6 +47,13 @@ export interface NotificationDelivery {
   error: string | null;
   createdAt: string;
   deliveredAt: string | null;
+  archivedAt: string | null;
+}
+
+/** The whole delivery log counted: the live side by status, and the archive. */
+export interface NotificationLogCounts {
+  active: Record<string, number>;
+  archived: number;
 }
 
 /**
@@ -105,19 +113,6 @@ const BLANK: {
   timeoutMs: 5000,
 };
 
-function statusTone(status: string): BadgeTone {
-  switch (status) {
-    case 'delivered':
-      return 'ok';
-    case 'pending':
-      return 'neutral';
-    case 'dead':
-      return 'danger';
-    default:
-      return 'warning';
-  }
-}
-
 /**
  * Outbound notification destinations.
  *
@@ -145,11 +140,18 @@ function statusTone(status: string): BadgeTone {
 export function NotificationSettingsCard({
   destinations,
   history,
+  historyCounts,
+  historyLimit,
+  canManage,
   events,
   emailConfigured,
 }: {
   destinations: NotificationDestination[];
   history: NotificationDelivery[];
+  historyCounts: NotificationLogCounts;
+  historyLimit: number;
+  /** integration:manage, which archiving and clearing the log needs. */
+  canManage: boolean;
   events: readonly string[];
   /**
    * Whether the tenant has an enabled mail relay. Passed in rather than
@@ -654,28 +656,12 @@ export function NotificationSettingsCard({
           </div>
         )}
 
-        {history.length > 0 && (
-          <div className="space-y-1.5">
-            <h3 className="text-xs font-medium text-ink-muted">Recent deliveries</h3>
-            <div className="divide-y divide-border rounded-md border border-border text-xs">
-              {history.map((delivery) => (
-                <div key={delivery.id} className="flex items-start gap-3 px-3 py-2">
-                  <Badge tone={statusTone(delivery.status)}>{delivery.status}</Badge>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-ink">{delivery.subject}</div>
-                    <div className="text-ink-faint">
-                      {delivery.destination} · {formatDateTime(delivery.createdAt)}
-                      {delivery.attempts > 1 && ` · ${delivery.attempts} attempts`}
-                      {delivery.error && (
-                        <span className="text-danger"> · {delivery.error}</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        <NotificationDeliveryLog
+          initial={history}
+          initialCounts={historyCounts}
+          limit={historyLimit}
+          canManage={canManage}
+        />
       </CardContent>
     </Card>
   );
