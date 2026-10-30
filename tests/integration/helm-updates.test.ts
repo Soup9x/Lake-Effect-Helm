@@ -207,7 +207,7 @@ describe('requesting an update', () => {
   });
 });
 
-describe('the update history (1220)', () => {
+describe('the update history (1230)', () => {
   it('is closed to the app role and needs tenant:write through the function', async () => {
     await expect(withTenant({ tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' }, (tx) =>
       tx`SELECT count(*) FROM helm_deploy`)).rejects.toThrow(/permission denied/);

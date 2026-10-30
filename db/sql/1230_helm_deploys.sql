@@ -1,5 +1,5 @@
 -- =============================================================================
--- 1220  A record of every version of Helm this server has run
+-- 1230  A record of every version of Helm this server has run
 -- =============================================================================
 --
 -- 1210 kept a row per update REQUESTED from the Updates page. That is not the
@@ -40,7 +40,7 @@ CREATE TABLE helm_deploy (
 );
 CREATE INDEX helm_deploy_recent_idx ON helm_deploy (deployed_at DESC);
 
-COMMENT ON TABLE helm_deploy IS 'One row per version of Helm deployed on this server (1220), written by deploy/setup.sh — from the Updates page or by hand. Read through helm.helm_deploys().';
+COMMENT ON TABLE helm_deploy IS 'One row per version of Helm deployed on this server (1230), written by deploy/setup.sh — from the Updates page or by hand. Read through helm.helm_deploys().';
 
 REVOKE ALL ON helm_deploy FROM PUBLIC, helm_app, helm_auth, helm_worker, helm_key_admin, helm_auditor;
 

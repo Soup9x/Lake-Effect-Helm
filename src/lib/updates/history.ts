@@ -1,5 +1,5 @@
 /**
- * Every version of Helm this server has run (1220), for the History tab.
+ * Every version of Helm this server has run (1230), for the History tab.
  *
  * Written by deploy/setup.sh, so it covers updates from the Updates page and
  * updates run by hand alike; read here through helm.helm_deploys(), which
