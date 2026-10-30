@@ -11,7 +11,7 @@ import { readUpdateConfig } from '@/lib/updates/check';
 
 /**
  * Administration → Updates → History: every version this server has run
- * (1230), who put it there and when. tenant:write only, like the rest of
+ * (1220), who put it there and when. tenant:write only, like the rest of
  * Updates. Asks nothing of GitHub: what changed was recorded at deploy time.
  */
 export default async function UpdateHistoryPage() {

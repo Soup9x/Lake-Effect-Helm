@@ -820,7 +820,7 @@ UNIT
 }
 
 # -----------------------------------------------------------------------------
-# The update history (1230)
+# The update history (1220)
 # -----------------------------------------------------------------------------
 # One row per version deployed, so Administration → Updates → History can say
 # what this server has run, when, and who put it there. Written here because

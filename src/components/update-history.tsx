@@ -2,7 +2,7 @@
 
 /**
  * Administration → Updates → History: every version this server has run
- * (1230), and the update requests from the page that did not end in one.
+ * (1220), and the update requests from the page that did not end in one.
  *
  * Each version says who put it there — the Helm user who pressed the button,
  * or "on the server" with the account that ran setup.sh by hand — when, which

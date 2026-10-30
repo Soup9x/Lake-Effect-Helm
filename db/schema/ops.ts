@@ -69,7 +69,7 @@ export const helmUpdater = pgTable('helm_updater', {
   host: text('host'),
 });
 
-// 1230: every version deployed on this server, written by deploy/setup.sh.
+// 1220: every version deployed on this server, written by deploy/setup.sh.
 export const helmDeploy = pgTable('helm_deploy', {
   id: uuid('id').primaryKey().defaultRandom(),
   deployedAt: tstz('deployed_at').notNull().defaultNow(),
