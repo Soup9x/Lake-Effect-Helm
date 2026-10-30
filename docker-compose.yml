@@ -24,6 +24,13 @@ x-helm-image: &helm-image
   build:
     context: .
     target: runtime
+    # Which commit the image was built from, and where the checkout lives, for
+    # Administration → Updates. deploy/setup.sh exports both before building;
+    # a bare `docker compose build` leaves them empty and Helm says it cannot
+    # tell which version it is rather than guessing.
+    args:
+      HELM_BUILD_COMMIT: ${HELM_BUILD_COMMIT:-}
+      HELM_INSTALL_DIR: ${HELM_INSTALL_DIR:-}
   image: lake-effect-helm:local
   restart: unless-stopped
 
@@ -113,6 +120,14 @@ x-helm-env: &helm-env
   HELM_AUDIT_ANCHOR_DIR: /var/lib/helm/anchors
 
   HELM_LOG_LEVEL: ${HELM_LOG_LEVEL:-info}
+
+  # --- Update check ---------------------------------------------------------
+  # The web tier asks GitHub every few hours whether a newer Helm is on the
+  # branch and tells administrators. Off means Helm never contacts GitHub.
+  HELM_UPDATE_CHECK: ${HELM_UPDATE_CHECK:-on}
+  HELM_UPDATE_REPO: ${HELM_UPDATE_REPO:-Soup9x/Lake-Effect-Helm}
+  HELM_UPDATE_BRANCH: ${HELM_UPDATE_BRANCH:-main}
+  HELM_UPDATE_GITHUB_TOKEN: ${HELM_UPDATE_GITHUB_TOKEN:-}
 
 services:
   # ---------------------------------------------------------------------------

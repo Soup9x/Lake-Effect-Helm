@@ -70,6 +70,9 @@ const EXTERNAL: Record<string, string> = {
 const AMBIENT = new Set([
   'NODE_ENV', 'CI', 'PATH', 'HOME', 'TZ', 'VITEST',
   'PGHOST', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGSOCK', 'PGSUPERUSER',
+  // Baked into the image by deploy/setup.sh (Dockerfile build args), not set
+  // in .env: which commit this is and where the checkout lives.
+  'HELM_BUILD_COMMIT', 'HELM_INSTALL_DIR',
 ]);
 
 /**

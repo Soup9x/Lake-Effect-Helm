@@ -101,6 +101,15 @@ COPY --from=builder --chown=helm:helm /app/node_modules/postgres ./node_modules/
 # Writable state. Declared here so the directories exist with the right owner
 # even when an operator forgets to mount a volume — the failure is then "no
 # volume mounted" rather than "EACCES at 3am".
+# Which commit this image was built from and where its checkout lives on the
+# host, for Administration → Updates. Passed by deploy/setup.sh (via the build
+# args in docker-compose.yml) because the build context carries no .git. Late
+# in the stage so a new commit does not invalidate any layer above.
+ARG HELM_BUILD_COMMIT=""
+ARG HELM_INSTALL_DIR=""
+ENV HELM_BUILD_COMMIT=$HELM_BUILD_COMMIT \
+    HELM_INSTALL_DIR=$HELM_INSTALL_DIR
+
 RUN mkdir -p /var/lib/helm/exports /var/lib/helm/passphrases /var/lib/helm/anchors /var/lib/helm/documents \
  && chown -R helm:helm /var/lib/helm \
  && chmod 0700 /var/lib/helm/exports /var/lib/helm/passphrases /var/lib/helm/documents

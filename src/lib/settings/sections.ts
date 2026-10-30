@@ -12,7 +12,7 @@ export interface AdminSection {
   /** Shorter, for the sub-navigation. */
   short: string;
   detail: string;
-  icon: 'general' | 'people' | 'security' | 'email' | 'integrations' | 'backups' | 'automation' | 'audit' | 'types' | 'extensions';
+  icon: 'general' | 'people' | 'security' | 'email' | 'integrations' | 'backups' | 'automation' | 'audit' | 'types' | 'extensions' | 'updates';
 }
 
 export const ADMIN_SECTIONS: readonly AdminSection[] = [
@@ -39,6 +39,10 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
   {
     href: '/settings/backups', title: 'Backups', short: 'Backups', icon: 'backups',
     detail: 'Where backups are written, how long they are kept, and the restore rehearsal.',
+  },
+  {
+    href: '/settings/updates', title: 'Updates', short: 'Updates', icon: 'updates',
+    detail: 'Which version of Helm this is, what is newer on GitHub, and how to install it.',
   },
   {
     href: '/settings/automation', title: 'Automation', short: 'Automation', icon: 'automation',

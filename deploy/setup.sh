@@ -686,6 +686,20 @@ start_stack() {
     confirm "Go ahead?" y || die "stopped before building. Nothing has been started."
   fi
 
+  # Tell the image which commit it is and where this checkout lives, so
+  # Administration → Updates can compare it with GitHub and show the right
+  # commands. The image has no .git of its own. safe.directory because this
+  # runs under sudo and the checkout usually belongs to somebody else, which
+  # git otherwise refuses to read.
+  HELM_BUILD_COMMIT=$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)
+  HELM_INSTALL_DIR="$REPO_ROOT"
+  export HELM_BUILD_COMMIT HELM_INSTALL_DIR
+  if [ -n "$HELM_BUILD_COMMIT" ]; then
+    ok "building commit ${HELM_BUILD_COMMIT:0:7}"
+  else
+    warn "not a git checkout, so Helm will not be able to tell when an update is available"
+  fi
+
   # Build separately from `up` so build time is visible as build time, and so
   # the --wait timeout below measures only how long health takes.
   info "building images..."
