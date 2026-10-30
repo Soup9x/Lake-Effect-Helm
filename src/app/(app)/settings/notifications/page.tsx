@@ -11,7 +11,13 @@ import { ExpiryAlertForm } from '@/components/expiry-alert-form';
 import { readExpiryAlertSetting } from '@/lib/alerts/queries';
 import { listSendingConnections, readSmtpSetting } from '@/lib/email/settings';
 import { readTenantSummary } from '@/lib/tenant/queries';
-import { listNotificationDestinations, listRecentDeliveries, NOTIFICATION_EVENTS } from '@/lib/notifications/queries';
+import {
+  countDeliveryLog,
+  DELIVERY_LOG_LIMIT,
+  listDeliveryLog,
+  listNotificationDestinations,
+  NOTIFICATION_EVENTS,
+} from '@/lib/notifications/queries';
 
 /**
  * Administration → Email & notifications: the mail relay first, because the
@@ -22,9 +28,13 @@ export default async function NotificationSettingsPage() {
   const identity = await getServerIdentity();
 
   const {
-    tenant, smtp, connections, destinations, deliveries, expiryAlerts, canManageAlerts,
+    tenant, smtp, connections, destinations, deliveries, deliveryCounts, expiryAlerts,
+    canManageAlerts, canManageNotifications,
   } = await withTenant(actorOf(identity), async (tx) => {
-    const [tenant, smtp, connections, destinations, deliveries, expiryAlerts, alertPermissionRows] = await Promise.all([
+    const [
+      tenant, smtp, connections, destinations, deliveries, deliveryCounts, expiryAlerts,
+      alertPermissionRows, notificationPermissionRows,
+    ] = await Promise.all([
       readTenantSummary(tx, identity.actorId),
       // The mail relay, without its password: helm_app has no privilege on the
       // envelope columns, so `passwordSet` is a boolean the database computed.
@@ -32,13 +42,16 @@ export default async function NotificationSettingsPage() {
       // The MSP's own Microsoft 365 connections, which mail can go out through (1010).
       listSendingConnections(tx),
       listNotificationDestinations(tx),
-      listRecentDeliveries(tx),
+      listDeliveryLog(tx),
+      countDeliveryLog(tx),
       readExpiryAlertSetting(tx),
       tx<{ allowed: boolean }[]>`SELECT helm.has_permission('alert:manage') AS allowed`,
+      tx<{ allowed: boolean }[]>`SELECT helm.has_permission('integration:manage') AS allowed`,
     ]);
     return {
-      tenant, smtp, connections, destinations, deliveries, expiryAlerts,
+      tenant, smtp, connections, destinations, deliveries, deliveryCounts, expiryAlerts,
       canManageAlerts: alertPermissionRows[0]?.allowed ?? false,
+      canManageNotifications: notificationPermissionRows[0]?.allowed ?? false,
     };
   });
 
@@ -66,6 +79,9 @@ export default async function NotificationSettingsPage() {
         <NotificationSettingsCard
           destinations={destinations}
           history={deliveries}
+          historyCounts={deliveryCounts}
+          historyLimit={DELIVERY_LOG_LIMIT}
+          canManage={canManageNotifications}
           events={NOTIFICATION_EVENTS}
           emailConfigured={smtp.enabled}
         />

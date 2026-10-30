@@ -246,6 +246,8 @@ export const webhookDelivery = pgTable('webhook_delivery', {
   occurredAt: tstz('occurred_at').notNull().defaultNow(),
   createdAt: tstz('created_at').notNull().defaultNow(),
   deliveredAt: tstz('delivered_at'),
+  /** 1220: archived out of the settings page's delivery log. */
+  archivedAt: tstz('archived_at'),
 }, (t) => [
   /** Same event to the same endpoint exactly once. */
   uniqueIndex('webhook_delivery_uk').on(t.endpointId, t.eventUid),
