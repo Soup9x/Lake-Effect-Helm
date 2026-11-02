@@ -2,9 +2,14 @@
 
 import { useCallback, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowDown, ArrowUp, GripVertical, LayoutDashboard, Plus, X } from 'lucide-react';
+import {
+  ArrowDown, ArrowUp, GripVertical, LayoutDashboard, Plus, RectangleHorizontal, RotateCcw, Square,
+  Users, X,
+} from 'lucide-react';
 import { useDismissable } from '@/lib/ui/use-dismissable';
-import { reorder, WIDGETS, WIDGET_KEYS, type WidgetKey } from '@/lib/workspace/widgets';
+import {
+  reorder, WIDGETS, WIDGET_KEYS, type DashboardLayout, type WidgetKey,
+} from '@/lib/workspace/widgets';
 import { cn } from '@/lib/ui/cn';
 import { apiFetch } from '@/lib/ui/api';
 import { Button } from './ui/button';
@@ -35,11 +40,31 @@ import { Button } from './ui/button';
  * The layout saves on every change. An explicit Save button is one more thing
  * to forget, and the cost of being wrong here is one click to put a widget
  * back.
+ *
+ * WIDTH IS PER WIDGET (1230). Each row has a half/full toggle; a widget's own
+ * default (DEFAULT_WIDE) applies until somebody changes one.
+ *
+ * THE TEAM DEFAULT (1230). Somebody who has never arranged their own sees the
+ * layout an administrator set, or Helm's built-in one. Changing anything here
+ * makes it theirs; "Reset" puts them back on the team default. An
+ * administrator (tenant:write — `teamDefault` is only passed to them) can make
+ * their current arrangement the team default, or clear it.
  */
-export function DashboardCustomise({ layout }: { layout: WidgetKey[] }) {
+export function DashboardCustomise({
+  layout,
+  source,
+  teamDefault,
+}: {
+  layout: DashboardLayout;
+  source: 'personal' | 'tenant' | 'built_in';
+  /** The current team default, for somebody allowed to change it; null otherwise. */
+  teamDefault: (DashboardLayout & { set: boolean }) | null;
+}) {
   const [open, setOpen] = useState(false);
-  const [widgets, setWidgets] = useState<WidgetKey[]>(layout);
-  const [failed, setFailed] = useState(false);
+  const [widgets, setWidgets] = useState<WidgetKey[]>(layout.widgets);
+  const [wide, setWide] = useState<WidgetKey[]>(layout.wide);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [, startTransition] = useTransition();
   const router = useRouter();
   const container = useRef<HTMLDivElement>(null);
@@ -49,19 +74,58 @@ export function DashboardCustomise({ layout }: { layout: WidgetKey[] }) {
 
   const available = WIDGET_KEYS.filter((key) => !widgets.includes(key));
 
-  async function save(next: WidgetKey[]) {
-    const previous = widgets;
+  async function save(next: WidgetKey[], nextWide: WidgetKey[] = wide) {
+    const previous = { widgets, wide };
+    const keptWide = nextWide.filter((key) => next.includes(key));
     setWidgets(next);
-    setFailed(false);
+    setWide(keptWide);
+    setFailed(null);
+    setNotice(null);
     const result = await apiFetch('/api/workspace/dashboard', {
       method: 'PUT',
-      json: { widgets: next },
+      json: { widgets: next, wide: keptWide },
     });
     if (!result.ok) {
-      setWidgets(previous);
-      setFailed(true);
+      setWidgets(previous.widgets);
+      setWide(previous.wide);
+      setFailed('Could not save your layout. Nothing was changed — try again.');
       return;
     }
+    startTransition(() => router.refresh());
+  }
+
+  function toggleWidth(key: WidgetKey) {
+    void save(widgets, wide.includes(key) ? wide.filter((w) => w !== key) : [...wide, key]);
+  }
+
+  async function resetToDefault() {
+    setFailed(null);
+    setNotice(null);
+    const result = await apiFetch<DashboardLayout | undefined>('/api/workspace/dashboard', {
+      method: 'DELETE',
+    });
+    if (!result.ok || !result.value) {
+      setFailed('Could not reset your dashboard. Nothing was changed — try again.');
+      return;
+    }
+    setWidgets(result.value.widgets);
+    setWide(result.value.wide);
+    startTransition(() => router.refresh());
+  }
+
+  async function setTeamDefault(clear: boolean) {
+    setFailed(null);
+    setNotice(null);
+    const result = await apiFetch('/api/tenant/dashboard-default', clear
+      ? { method: 'DELETE' }
+      : { method: 'PUT', json: { widgets, wide } });
+    if (!result.ok) {
+      setFailed('Could not change the team default. Nothing was changed — try again.');
+      return;
+    }
+    setNotice(clear
+      ? 'Team default cleared. New colleagues get Helm’s built-in dashboard.'
+      : 'Saved. Everybody who has not arranged their own dashboard now sees this one.');
     startTransition(() => router.refresh());
   }
 
@@ -142,10 +206,14 @@ export function DashboardCustomise({ layout }: { layout: WidgetKey[] }) {
         <div
           role="dialog"
           aria-label="Customise your dashboard"
-          className="absolute right-0 z-30 mt-1 w-80 rounded-md border border-border bg-surface-raised p-3 shadow-lg"
+          className="absolute right-0 z-30 mt-1 max-h-[min(80vh,40rem)] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-md border border-border bg-surface-raised p-3 shadow-lg"
         >
           <p className="pb-2 text-xs text-ink-faint">
-            Yours alone. Colleagues keep their own arrangement.
+            {source === 'personal'
+              ? 'Yours alone. Colleagues keep their own arrangement.'
+              : source === 'tenant'
+                ? 'You are seeing your team’s default. Changing anything makes it yours.'
+                : 'Helm’s starting layout. Changing anything makes it yours.'}
           </p>
 
           <ul className="space-y-1">
@@ -181,6 +249,19 @@ export function DashboardCustomise({ layout }: { layout: WidgetKey[] }) {
                 <span className="min-w-0 flex-1 truncate text-sm text-ink">
                   {WIDGETS[key].title}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => toggleWidth(key)}
+                  title={wide.includes(key) ? 'Full width — make it half' : 'Half width — make it full'}
+                  className="rounded p-1 text-ink-faint hover:bg-surface-sunken hover:text-ink"
+                >
+                  {wide.includes(key)
+                    ? <RectangleHorizontal className="size-3.5" aria-hidden />
+                    : <Square className="size-3.5" aria-hidden />}
+                  <span className="sr-only">
+                    {WIDGETS[key].title}: {wide.includes(key) ? 'full width' : 'half width'}. Change
+                  </span>
+                </button>
                 <button
                   type="button"
                   onClick={() => move(index, -1)}
@@ -241,10 +322,52 @@ export function DashboardCustomise({ layout }: { layout: WidgetKey[] }) {
             </>
           )}
 
+          {(source === 'personal' || teamDefault) && (
+            <div className="mt-3 space-y-1 border-t border-border pt-3">
+              {source === 'personal' && (
+                <button
+                  type="button"
+                  onClick={() => void resetToDefault()}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-ink hover:bg-surface-sunken"
+                >
+                  <RotateCcw className="size-3.5 shrink-0 text-ink-faint" aria-hidden />
+                  Reset to the team default
+                </button>
+              )}
+              {teamDefault && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void setTeamDefault(false)}
+                    className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left hover:bg-surface-sunken"
+                  >
+                    <Users className="mt-0.5 size-3.5 shrink-0 text-ink-faint" aria-hidden />
+                    <span>
+                      <span className="block text-sm text-ink">Make this the team default</span>
+                      <span className="block text-xs text-ink-faint">
+                        What colleagues see until they arrange their own. Nobody’s own layout
+                        is changed.
+                      </span>
+                    </span>
+                  </button>
+                  {teamDefault.set && (
+                    <button
+                      type="button"
+                      onClick={() => void setTeamDefault(true)}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-ink hover:bg-surface-sunken"
+                    >
+                      <X className="size-3.5 shrink-0 text-ink-faint" aria-hidden />
+                      Clear the team default
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {notice && <p role="status" className="pt-2 text-xs text-ok">{notice}</p>}
           {failed && (
-            <p role="alert" className="pt-2 text-xs text-danger">
-              Could not save your layout. Nothing was changed — try again.
-            </p>
+            <p role="alert" className="pt-2 text-xs text-danger">{failed}</p>
           )}
         </div>
       )}

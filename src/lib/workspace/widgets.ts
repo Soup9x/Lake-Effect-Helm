@@ -1,8 +1,8 @@
 /**
  * The dashboard's widget catalogue.
  *
- * WIDGET_KEYS must match helm.dashboard_layout_valid() in
- * db/sql/0370_workspace_and_notes.sql. Two copies of one list is a cost paid
+ * WIDGET_KEYS must match helm.dashboard_layout_valid(), last redefined in
+ * db/sql/1230_dashboard_widgets_v3.sql. Two copies of one list is a cost paid
  * deliberately: the database refuses an unknown key so a malformed layout is
  * never stored, and the interface needs the titles anyway. The test in
  * tests/integration/workspace.test.ts asserts the two lists agree, so adding a
@@ -17,7 +17,16 @@ export const WIDGET_KEYS = [
   'quick_actions',
   'usage_summary',
   'sync_status',
+  'integration_health',
+  'device_attention',
+  'expiring_domains',
+  'expiring_warranties',
+  'notifications',
+  'my_tasks',
 ] as const;
+
+/** The most widgets a layout may hold; the same ceiling the database enforces. */
+export const LAYOUT_MAX = 20;
 
 export type WidgetKey = (typeof WIDGET_KEYS)[number];
 
@@ -68,7 +77,61 @@ export const WIDGETS: Record<WidgetKey, WidgetMeta> = {
     title: 'Network sync',
     description: 'Each UniFi controller Helm polls, and when it last answered.',
   },
+  integration_health: {
+    key: 'integration_health',
+    title: 'Integration health',
+    description: 'NinjaOne, Action1, Microsoft 365 and Proxmox: when each last synced, and what failed.',
+  },
+  device_attention: {
+    key: 'device_attention',
+    title: 'Devices needing attention',
+    description: 'Synced devices that are offline, low on disk, behind on critical patches or waiting on a reboot.',
+  },
+  expiring_domains: {
+    key: 'expiring_domains',
+    title: 'Expiring domains',
+    description: 'Domain registrations running out in the next 90 days.',
+  },
+  expiring_warranties: {
+    key: 'expiring_warranties',
+    title: 'Expiring warranties',
+    description: 'Device warranties ending in the next 90 days.',
+  },
+  notifications: {
+    key: 'notifications',
+    title: 'Notifications',
+    description: 'Your unread notifications, without opening the bell.',
+  },
+  my_tasks: {
+    key: 'my_tasks',
+    title: 'My tasks',
+    description: 'Procedure steps assigned to you, most overdue first.',
+  },
 };
+
+/**
+ * Widgets that span the whole row unless somebody narrows them. Tables with
+ * five columns, and the quick-action panel, are unreadable in half the width.
+ */
+export const DEFAULT_WIDE: readonly WidgetKey[] = ['expirations', 'quick_actions', 'device_attention'];
+
+export interface DashboardLayout {
+  widgets: WidgetKey[];
+  /** The widgets on this layout that span the whole row. */
+  wide: WidgetKey[];
+}
+
+/**
+ * Which of `widgets` are full width. A stored `wide` of NULL means "never
+ * chosen", which is each widget's own default; an array is a choice, and an
+ * empty one means every widget is half width.
+ */
+export function readWide(stored: unknown, widgets: readonly WidgetKey[]): WidgetKey[] {
+  const chosen = stored === null || stored === undefined
+    ? new Set<WidgetKey>(DEFAULT_WIDE)
+    : new Set<WidgetKey>(readLayout(stored));
+  return widgets.filter((key) => chosen.has(key));
+}
 
 /**
  * What a first-time user gets.
@@ -84,6 +147,11 @@ export const DEFAULT_LAYOUT: WidgetKey[] = [
   'expirations',
   'client_health',
 ];
+
+/** The built-in starting point, before any administrator has set one. */
+export function builtInLayout(): DashboardLayout {
+  return { widgets: [...DEFAULT_LAYOUT], wide: readWide(null, DEFAULT_LAYOUT) };
+}
 
 const KNOWN = new Set<string>(WIDGET_KEYS);
 
