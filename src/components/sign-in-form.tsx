@@ -26,7 +26,7 @@
  * this component ever grows a branch on "account not found", that is a
  * user-enumeration oracle that the API deliberately does not provide.
  */
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { signIn } from 'next-auth/react';
 import { KeyRound, Loader2, ShieldAlert } from 'lucide-react';
@@ -102,6 +102,21 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
   const [enrolment, setEnrolment] = useState<{ secret: string; uri: string } | null>(null);
   /** Set when this sign-in finished setting up the app: shown once, then on. */
   const [recovery, setRecovery] = useState<{ codes: string[]; destination: string } | null>(null);
+  /*
+   * FIELD VIEW (1250). On a phone-sized screen the sign-in offers the
+   * read-only phone view, ticked by default, and the session is created
+   * read-only rather than made so afterwards. Decided after mount: the server
+   * cannot know the screen, and guessing from the user agent is both wrong and
+   * spoofable — which is fine, because this only ever takes privilege away.
+   */
+  const [onPhone, setOnPhone] = useState(false);
+  const [field, setField] = useState(false);
+  useEffect(() => {
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setOnPhone(true);
+      setField(true);
+    }
+  }, []);
 
   /**
    * Hand off to Auth.js. `redirect: true` means this never returns — the
@@ -112,7 +127,9 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
     setError(null);
     setSsoPending(providerId);
     try {
-      await signIn(providerId, { callbackUrl: next });
+      // The identity provider's round trip cannot carry the flag, so the
+      // landing page takes the session into Field view on arrival.
+      await signIn(providerId, { callbackUrl: field ? '/m?enter=1' : next });
     } catch {
       setError('Could not start single sign-on. Try again, or use a local password below.');
       setSsoPending(null);
@@ -127,9 +144,11 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
     setPending(true);
 
     try {
-      const result = await apiFetch<{ ok?: boolean; mustChange?: boolean; recoveryCodes?: string[] } | undefined>(
+      const result = await apiFetch<
+        { ok?: boolean; mustChange?: boolean; fieldMode?: boolean; recoveryCodes?: string[] } | undefined
+      >(
         '/api/auth/local/login',
-        { json: { email, password, ...(step === 'password' ? {} : { code }) } },
+        { json: { email, password, ...(step === 'password' ? {} : { code }), ...(field ? { field: true } : {}) } },
       );
 
       if (!result.ok) {
@@ -153,7 +172,9 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
       // An administrator-issued password is a temporary one. Sending them
       // straight to the change screen is the difference between a password
       // that gets replaced and one that stays in a handover document forever.
-      const destination = result.value?.mustChange ? '/profile?password=change' : next;
+      const destination = result.value?.mustChange
+        ? '/profile?password=change'
+        : result.value?.fieldMode ? '/m' : next;
       if (result.value?.recoveryCodes?.length) {
         setRecovery({ codes: result.value.recoveryCodes, destination });
         return;
@@ -323,6 +344,23 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
             {error}
           </p>
         ) : null}
+
+        {onPhone && step === 'password' && (
+          <label className="flex items-start gap-2 rounded-md border border-border bg-surface-raised p-2.5 text-sm text-ink">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={field}
+              onChange={(e) => setField(e.target.checked)}
+            />
+            <span>
+              Field view (read-only phone view)
+              <span className="block text-xs text-ink-muted">
+                Look up logins and client details. Switching to the full site asks for your password again.
+              </span>
+            </span>
+          </label>
+        )}
 
         <Button type="submit" variant={ssoConfigured ? 'secondary' : 'primary'} className="w-full" disabled={pending}>
           {pending ? <Loader2 aria-hidden className="animate-spin" /> : null}

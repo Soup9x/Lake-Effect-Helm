@@ -9,6 +9,8 @@ import { installSessionResolver } from '@/lib/auth/bootstrap';
 import { SignedOut } from '@/components/signed-out';
 import { ThemeSync } from '@/components/theme-sync';
 import { readShellState } from '@/lib/ui/account-queries';
+import { redirect } from 'next/navigation';
+import { currentSessionIsField } from '@/lib/auth/field-server';
 
 /**
  * The authenticated shell.
@@ -37,6 +39,14 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     }
     throw error;
   }
+
+  /*
+   * A Field view (phone) session is read-only, and the full site is full of
+   * buttons that would all refuse it (lib/auth/identity.ts). Rather than show
+   * them, send it to Field view, whose "Full site" asks for the password and
+   * lifts the restriction (1250).
+   */
+  if (await currentSessionIsField()) redirect('/m');
 
   /*
    * The account's own preferences and the unread notification count, read here

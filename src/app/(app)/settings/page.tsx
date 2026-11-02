@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ComponentType } from 'react';
 import {
-  Activity, ArrowUpCircle, Bot, Boxes, Building, Cloud, HardDriveDownload, Mail, Puzzle, ShieldCheck, Users,
+  Activity, ArrowUpCircle, Bot, Boxes, Building, Cloud, HardDriveDownload, Mail, Puzzle, ShieldCheck, Smartphone, Users,
 } from 'lucide-react';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
@@ -36,6 +36,7 @@ const ICONS: Record<AdminSection['icon'], ComponentType<{ className?: string; 'a
   audit: Activity,
   types: Boxes,
   extensions: Puzzle,
+  mobile: Smartphone,
   updates: ArrowUpCircle,
 };
 

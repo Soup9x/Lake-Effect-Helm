@@ -108,6 +108,8 @@ export const authSession = pgTable('auth_session', {
   userAgent: text('user_agent'),
   /** When the session was last resolved, to within a minute; idle time runs from here (0890). */
   lastSeenAt: tstz('last_seen_at').notNull().defaultNow(),
+  /** Signed in through Field view: read-only until upgraded with the password (1250). */
+  fieldMode: boolean('field_mode').notNull().default(false),
 });
 
 /**
@@ -124,6 +126,22 @@ export const sessionPolicy = pgTable('session_policy', {
   lockoutMaxMinutes: integer('lockout_max_minutes').notNull().default(15),
   /** Every local sign-in needs an authenticator code (0960). */
   requireLocalTotp: boolean('require_local_totp').notNull().default(false),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
+});
+
+/**
+ * Field view (phone) settings one tenant's administrators set (1250). Reached
+ * only through helm.field_view_policy() / helm.set_field_view_policy().
+ */
+export const fieldViewPolicy = pgTable('field_view_policy', {
+  tenantId: uuid('tenant_id').primaryKey().references(() => tenant.id, { onDelete: 'cascade' }),
+  enabled: boolean('enabled').notNull().default(true),
+  idleMinutes: integer('idle_minutes').notNull().default(10),
+  absoluteHours: integer('absolute_hours').notNull().default(12),
+  criticalOnPhone: text('critical_on_phone').notNull().default('step_up'),
+  sections: textArray('sections').notNull()
+    .default(sql`ARRAY['logins', 'devices', 'contacts', 'locations', 'vault']`),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
   updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
 });
