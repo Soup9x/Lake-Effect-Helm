@@ -8,7 +8,9 @@
  * unexpressible rather than merely unauthorised.
  */
 import type { HelmTx } from '../db/client';
-import { DEFAULT_LAYOUT, readLayout, type WidgetKey } from './widgets';
+import {
+  builtInLayout, readLayout, readWide, type DashboardLayout,
+} from './widgets';
 
 export interface FavoriteClient {
   organizationId: string;
@@ -229,15 +231,45 @@ export async function listRecentInOrganization(
   }));
 }
 
-/** The saved layout, or the default for somebody who has never customised it. */
-export async function getLayout(tx: HelmTx): Promise<WidgetKey[]> {
-  const [row] = await tx<{ widgets: unknown }[]>`SELECT widgets FROM user_dashboard`;
-  if (!row) return [...DEFAULT_LAYOUT];
-  const layout = readLayout(row.widgets);
-  // An empty saved layout is a choice — somebody who removed every widget. A
-  // MISSING row is somebody who has never touched it, and that is the default
-  // above. Only the second case gets one.
-  return layout;
+export interface ResolvedLayout extends DashboardLayout {
+  /** Where it came from: this person's own, the team default, or Helm's. */
+  source: 'personal' | 'tenant' | 'built_in';
+}
+
+/**
+ * The layout to render: this person's own, else the team default an
+ * administrator set (1230), else the built-in one.
+ *
+ * An empty saved layout is a choice — somebody who removed every widget. A
+ * MISSING row is somebody who has never touched it, and only that case falls
+ * through to a default.
+ */
+export async function getLayout(tx: HelmTx): Promise<ResolvedLayout> {
+  // Personal RLS: this can only be the caller's own row.
+  const [row] = await tx<{ widgets: unknown; wide: unknown }[]>`
+    SELECT widgets, wide FROM user_dashboard
+  `;
+  if (row) {
+    const widgets = readLayout(row.widgets);
+    return { widgets, wide: readWide(row.wide, widgets), source: 'personal' };
+  }
+  const team = await readTenantDashboardDefault(tx);
+  return { ...team.layout, source: team.set ? 'tenant' : 'built_in' };
+}
+
+export interface TenantDashboardDefault {
+  layout: DashboardLayout;
+  /** Whether an administrator has set one, or this is Helm's built-in. */
+  set: boolean;
+}
+
+export async function readTenantDashboardDefault(tx: HelmTx): Promise<TenantDashboardDefault> {
+  const [row] = await tx<{ widgets: unknown; wide: unknown }[]>`
+    SELECT widgets, wide FROM tenant_dashboard_default
+  `;
+  if (!row) return { layout: builtInLayout(), set: false };
+  const widgets = readLayout(row.widgets);
+  return { layout: { widgets, wide: readWide(row.wide, widgets) }, set: true };
 }
 
 /**
@@ -254,11 +286,44 @@ export async function getLayout(tx: HelmTx): Promise<WidgetKey[]> {
  * The literal form in a psql prompt works, which is exactly why this was worth
  * a test that goes through the route rather than the SQL.
  */
-export async function setLayout(tx: HelmTx, widgets: WidgetKey[]): Promise<WidgetKey[]> {
+export async function setLayout(tx: HelmTx, layout: DashboardLayout): Promise<DashboardLayout> {
+  // Only the full-width keys that are actually on the layout: a removed widget
+  // does not keep a width somebody can no longer see or change.
+  const wide = layout.wide.filter((key) => layout.widgets.includes(key));
   await tx`
-    INSERT INTO user_dashboard (tenant_id, user_id, widgets)
-    VALUES (helm.current_tenant_id(), helm.current_actor_id(), ${tx.json(widgets)}::jsonb)
-    ON CONFLICT (tenant_id, user_id) DO UPDATE SET widgets = EXCLUDED.widgets
+    INSERT INTO user_dashboard (tenant_id, user_id, widgets, wide)
+    VALUES (helm.current_tenant_id(), helm.current_actor_id(),
+            ${tx.json(layout.widgets)}::jsonb, ${tx.json(wide)}::jsonb)
+    ON CONFLICT (tenant_id, user_id)
+      DO UPDATE SET widgets = EXCLUDED.widgets, wide = EXCLUDED.wide
   `;
-  return widgets;
+  return { widgets: layout.widgets, wide };
+}
+
+/** Forget this person's arrangement, so they see the team default again. */
+export async function clearLayout(tx: HelmTx): Promise<ResolvedLayout> {
+  await tx`DELETE FROM user_dashboard`;
+  return getLayout(tx);
+}
+
+/** tenant:write, enforced by the route AND by the table's RLS policies. */
+export async function setTenantDashboardDefault(
+  tx: HelmTx,
+  layout: DashboardLayout,
+  actorId: string,
+): Promise<DashboardLayout> {
+  const wide = layout.wide.filter((key) => layout.widgets.includes(key));
+  await tx`
+    INSERT INTO tenant_dashboard_default (tenant_id, widgets, wide, updated_by)
+    VALUES (helm.current_tenant_id(), ${tx.json(layout.widgets)}::jsonb,
+            ${tx.json(wide)}::jsonb, ${actorId}::uuid)
+    ON CONFLICT (tenant_id) DO UPDATE
+      SET widgets = EXCLUDED.widgets, wide = EXCLUDED.wide, updated_by = EXCLUDED.updated_by
+  `;
+  return { widgets: layout.widgets, wide };
+}
+
+/** Back to Helm's built-in default for everybody who has not arranged their own. */
+export async function clearTenantDashboardDefault(tx: HelmTx): Promise<void> {
+  await tx`DELETE FROM tenant_dashboard_default`;
 }
