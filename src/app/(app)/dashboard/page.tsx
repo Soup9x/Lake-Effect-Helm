@@ -16,8 +16,18 @@ import {
 import { QuickActionsWidget } from '@/components/widgets/quick-actions';
 import { isClientRole } from '@/lib/ui/roles';
 import { GLOBAL_ASSET_NODE_TYPES } from '@/lib/global/lists';
-import { getLayout, listFavorites, listRecent } from '@/lib/workspace/queries';
-import { countMyOpenTasks } from '@/lib/sops/queries';
+import {
+  getLayout, listFavorites, listRecent, readTenantDashboardDefault,
+} from '@/lib/workspace/queries';
+import { countMyOpenTasks, listMyTasks } from '@/lib/sops/queries';
+import { listInbox, unreadCount } from '@/lib/notifications/inbox';
+import {
+  listDevicesNeedingAttention, listExpiring, listIntegrationHealth,
+} from '@/lib/workspace/dashboard-data';
+import {
+  DeviceAttentionWidget, ExpiringDomainsWidget, ExpiringWarrantiesWidget,
+  IntegrationHealthWidget, MyTasksWidget, NotificationsWidget,
+} from '@/components/widgets/operations';
 import type { WidgetKey } from '@/lib/workspace/widgets';
 
 interface Counts {
@@ -84,10 +94,14 @@ interface UnifiSyncRow {
 export default async function DashboardPage() {
   const identity = await getServerIdentity();
 
-  const data = await withTenant(actorOf(identity), async (tx) => {
+  const data = await withTenant(actorOf(identity), async (tx, session) => {
     // The layout first: everything after it is conditional on what it names.
     const layout = await getLayout(tx);
-    const wants = (key: WidgetKey) => layout.includes(key);
+    const wants = (key: WidgetKey) => layout.widgets.includes(key);
+    // tenant:write may set the team default (1230). The route and the RLS
+    // policy both check again; this only decides whether to offer it.
+    const canSetDefault = session.permissions.includes('tenant:write');
+    const teamDefault = canSetDefault ? await readTenantDashboardDefault(tx) : null;
 
     const [countRow] = await tx<Counts[]>`
       SELECT
@@ -185,6 +199,25 @@ export default async function DashboardPage() {
         : [],
     ]);
 
+    // The integration-era widgets (1230). Sequential rather than added to the
+    // Promise.all above: one transaction runs one statement at a time anyway,
+    // and a second array of eight positional results is how they get swapped.
+    const integrations = wants('integration_health') ? await listIntegrationHealth(tx) : [];
+    const devices = wants('device_attention')
+      ? await listDevicesNeedingAttention(tx, 25)
+      : { rows: [], total: 0 };
+    const domains = wants('expiring_domains')
+      ? await listExpiring(tx, 'domain_registration', 90, 8)
+      : { rows: [], total: 0 };
+    const warranties = wants('expiring_warranties')
+      ? await listExpiring(tx, 'device_warranty', 90, 8)
+      : { rows: [], total: 0 };
+    const unread = wants('notifications') ? await unreadCount(tx) : 0;
+    const inbox = wants('notifications') && unread > 0
+      ? (await listInbox(tx, 20)).filter((item) => !item.read).slice(0, 6)
+      : [];
+    const myTasks = wants('my_tasks') ? await listMyTasks(tx, { limit: 6 }) : [];
+
     // Not conditional on a widget: the strip is fixed, so this runs on every
     // load. Two counts out of one index scan over this actor's own steps.
     const tasks = await countMyOpenTasks(tx);
@@ -192,12 +225,16 @@ export default async function DashboardPage() {
     return {
       layout, counts: countRow, favorites, recent, upcoming, activity, health,
       usage: usage[0], quickClients, mappings, tasks,
+      integrations, devices, domains, warranties, unread, inbox, myTasks,
+      teamDefault,
     };
   });
 
   const {
     layout, counts, favorites, recent, upcoming, activity, health,
     usage, quickClients, mappings, tasks,
+    integrations, devices, domains, warranties, unread, inbox, myTasks,
+    teamDefault,
   } = data;
   const expired = Number(counts?.expired ?? 0);
   const openTasks = tasks.open;
@@ -213,9 +250,9 @@ export default async function DashboardPage() {
     reasons: row.reasons,
   }));
 
-  // Two columns of widgets, except the expirations table, which is a five
-  // column table and unreadable in half the width.
-  const WIDE = new Set<WidgetKey>(['expirations', 'quick_actions']);
+  // Two columns of widgets; each person chooses which span the whole row,
+  // starting from each widget's own default (DEFAULT_WIDE).
+  const wide = new Set<WidgetKey>(layout.wide);
 
   function render(key: WidgetKey) {
     switch (key) {
@@ -265,6 +302,18 @@ export default async function DashboardPage() {
             }))}
           />
         );
+      case 'integration_health':
+        return <IntegrationHealthWidget rows={integrations} />;
+      case 'device_attention':
+        return <DeviceAttentionWidget rows={devices.rows} total={devices.total} />;
+      case 'expiring_domains':
+        return <ExpiringDomainsWidget rows={domains.rows} total={domains.total} />;
+      case 'expiring_warranties':
+        return <ExpiringWarrantiesWidget rows={warranties.rows} total={warranties.total} />;
+      case 'notifications':
+        return <NotificationsWidget items={inbox} unread={unread} />;
+      case 'my_tasks':
+        return <MyTasksWidget tasks={myTasks} open={tasks.open} />;
     }
   }
 
@@ -273,7 +322,13 @@ export default async function DashboardPage() {
       <PageHeader
         title={identity.tenantName}
         description="Everything that needs attention, across every client."
-        actions={<DashboardCustomise layout={layout} />}
+        actions={
+          <DashboardCustomise
+            layout={{ widgets: layout.widgets, wide: layout.wide }}
+            source={layout.source}
+            teamDefault={teamDefault ? { ...teamDefault.layout, set: teamDefault.set } : null}
+          />
+        }
       />
       <PageBody>
         {/*
@@ -326,14 +381,14 @@ export default async function DashboardPage() {
           />
         </div>
 
-        {layout.length === 0 ? (
+        {layout.widgets.length === 0 ? (
           <p className="rounded-[--radius-card] border border-dashed border-border px-4 py-8 text-center text-sm text-ink-muted">
             No widgets on your dashboard. Customise adds them back.
           </p>
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">
-            {layout.map((key) => (
-              <div key={key} className={WIDE.has(key) ? 'lg:col-span-2' : undefined}>
+            {layout.widgets.map((key) => (
+              <div key={key} className={wide.has(key) ? 'lg:col-span-2' : undefined}>
                 {render(key)}
               </div>
             ))}
