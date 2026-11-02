@@ -845,6 +845,77 @@ export function TopologyDesigner({ diagramId, diagramName, canEdit }: TopologyDe
             />
           )}
 
+          {/* The edit bar sits above the canvas and is always there, so selecting a box never shifts the canvas under the pointer. */}
+          {graph && (
+            <div className="flex min-h-[50px] flex-wrap items-center gap-3 rounded-md border border-border bg-surface-raised px-3 py-2">
+              {!selectedNode && !selectedLink && (
+                <span className="text-sm text-ink-muted">
+                  {canEdit ? 'Click a box or a line to edit it.' : 'Click a box or a line to see it.'}
+                </span>
+              )}
+              {selectedNode && (
+                <>
+                  <span className="text-sm font-medium text-ink">{selectedNode.label}</span>
+                  {canEdit && (
+                    <ColorPicker value={selectedNode.color} onChange={(c) => void patchNodeColor(selectedNode, c)} />
+                  )}
+                </>
+              )}
+              {selectedLink && (
+                <>
+                  <span className="text-sm font-medium text-ink">
+                    {nodeById.get(selectedLink.fromNodeId)?.label ?? '?'} — {nodeById.get(selectedLink.toNodeId)?.label ?? '?'}
+                  </span>
+                  {canEdit && (
+                    <>
+                      <LinkLabelInput key={selectedLink.id} link={selectedLink} onSave={(label) => void patchLink(selectedLink, { label })} />
+                      <StylePicker value={selectedLink.lineStyle} onChange={(lineStyle) => void patchLink(selectedLink, { lineStyle })} />
+                      <ArrowPicker value={selectedLink.arrow} onChange={(arrow) => void patchLink(selectedLink, { arrow })} />
+                      <ColorPicker value={selectedLink.color} onChange={(color) => void patchLink(selectedLink, { color })} />
+                    </>
+                  )}
+                </>
+              )}
+
+              {(selectedNode || selectedLink) && (
+                <span className="ml-auto flex items-center gap-2">
+                  {selectedNode?.assetNodeId && (
+                    <Button size="sm" variant="link" onClick={() => openAsset(selectedNode)}>
+                      Open entry
+                    </Button>
+                  )}
+                  {canEdit && selectedNode && (
+                    <Button size="sm" variant="secondary" onClick={() => startLink(selectedNode)}>
+                      <Link2 className="size-4" />
+                      Link from here
+                    </Button>
+                  )}
+                  {canEdit && selectedLink && selectedLink.arrow !== 'none' && selectedLink.arrow !== 'both' && (
+                    <Button size="sm" variant="secondary" onClick={() => void patchLink(selectedLink, { reverse: true })}>
+                      <ArrowRightLeft className="size-4" />
+                      Reverse
+                    </Button>
+                  )}
+                  {canEdit && (
+                    <Button
+                      size="sm" variant="danger"
+                      onClick={() => {
+                        if (selectedNode) return void removeNode(selectedNode);
+                        if (selectedLink) return void removeLink(selectedLink);
+                      }}
+                    >
+                      <Trash2 className="size-4" />
+                      Remove
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={() => setSelected(null)} aria-label="Close">
+                    <X className="size-4" />
+                  </Button>
+                </span>
+              )}
+            </div>
+          )}
+
           <div
             ref={scroller}
             className={cn(
@@ -1089,69 +1160,6 @@ export function TopologyDesigner({ diagramId, diagramName, canEdit }: TopologyDe
               </svg>
             )}
           </div>
-
-          {(selectedNode || selectedLink) && (
-            <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-surface-raised px-3 py-2">
-              {selectedNode && (
-                <>
-                  <span className="text-sm font-medium text-ink">{selectedNode.label}</span>
-                  {canEdit && (
-                    <ColorPicker value={selectedNode.color} onChange={(c) => void patchNodeColor(selectedNode, c)} />
-                  )}
-                </>
-              )}
-              {selectedLink && (
-                <>
-                  <span className="text-sm font-medium text-ink">
-                    {nodeById.get(selectedLink.fromNodeId)?.label ?? '?'} — {nodeById.get(selectedLink.toNodeId)?.label ?? '?'}
-                  </span>
-                  {canEdit && (
-                    <>
-                      <LinkLabelInput key={selectedLink.id} link={selectedLink} onSave={(label) => void patchLink(selectedLink, { label })} />
-                      <StylePicker value={selectedLink.lineStyle} onChange={(lineStyle) => void patchLink(selectedLink, { lineStyle })} />
-                      <ArrowPicker value={selectedLink.arrow} onChange={(arrow) => void patchLink(selectedLink, { arrow })} />
-                      <ColorPicker value={selectedLink.color} onChange={(color) => void patchLink(selectedLink, { color })} />
-                    </>
-                  )}
-                </>
-              )}
-
-              <span className="ml-auto flex items-center gap-2">
-                {selectedNode?.assetNodeId && (
-                  <Button size="sm" variant="link" onClick={() => openAsset(selectedNode)}>
-                    Open entry
-                  </Button>
-                )}
-                {canEdit && selectedNode && (
-                  <Button size="sm" variant="secondary" onClick={() => startLink(selectedNode)}>
-                    <Link2 className="size-4" />
-                    Link from here
-                  </Button>
-                )}
-                {canEdit && selectedLink && selectedLink.arrow !== 'none' && selectedLink.arrow !== 'both' && (
-                  <Button size="sm" variant="secondary" onClick={() => void patchLink(selectedLink, { reverse: true })}>
-                    <ArrowRightLeft className="size-4" />
-                    Reverse
-                  </Button>
-                )}
-                {canEdit && (
-                  <Button
-                    size="sm" variant="danger"
-                    onClick={() => {
-                      if (selectedNode) return void removeNode(selectedNode);
-                      if (selectedLink) return void removeLink(selectedLink);
-                    }}
-                  >
-                    <Trash2 className="size-4" />
-                    Remove
-                  </Button>
-                )}
-                <Button size="sm" variant="ghost" onClick={() => setSelected(null)} aria-label="Close">
-                  <X className="size-4" />
-                </Button>
-              </span>
-            </div>
-          )}
 
           {!full && (
             <FieldHint>
