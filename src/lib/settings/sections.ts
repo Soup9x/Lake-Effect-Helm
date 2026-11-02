@@ -38,7 +38,7 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
   },
   {
     href: '/settings/integrations', title: 'Integrations', short: 'Integrations', icon: 'integrations',
-    detail: 'NinjaOne, Action1, Microsoft 365, Proxmox, UniFi, and domain and certificate checking.',
+    detail: 'NinjaOne, Action1, Microsoft 365, Proxmox, Homarr, UniFi, and domain and certificate checking.',
   },
   {
     href: '/settings/backups', title: 'Backups', short: 'Backups', icon: 'backups',

@@ -12,6 +12,8 @@ import { Action1SettingsCard } from '@/components/action1-settings';
 import { readAction1Settings } from '@/lib/action1/queries';
 import { M365SettingsCard } from '@/components/m365-settings';
 import { ProxmoxSettingsCard } from '@/components/proxmox-settings';
+import { HomarrSettingsCard } from '@/components/homarr-settings';
+import { listBoardLinks, type BoardLinkRow } from '@/lib/homarr/board';
 import { listProxmoxConnections } from '@/lib/proxmox/queries';
 import { readNinjaSettings } from '@/lib/ninja/queries';
 import { listM365Connections } from '@/lib/m365/queries';
@@ -21,7 +23,7 @@ import { readTenantSummary } from '@/lib/tenant/queries';
 import { requestOrigin } from '@/lib/settings/origin';
 
 /**
- * Administration → Integrations: NinjaOne, Action1, Microsoft 365, Proxmox, UniFi, and whether
+ * Administration → Integrations: NinjaOne, Action1, Microsoft 365, Proxmox, Homarr, UniFi, and whether
  * Helm checks domains and certificates itself.
  */
 export default async function IntegrationSettingsPage() {
@@ -30,7 +32,7 @@ export default async function IntegrationSettingsPage() {
 
   const {
     tenant, unifi, organizations, externalChecks, ninja, action1, m365, proxmox, canManageNetwork, canManageRmm, canManageM365,
-    canManageHypervisor, canCreateClients, internalOrganizationId,
+    canManageHypervisor, canCreateClients, internalOrganizationId, homarrLinks,
   } = await withTenant(actorOf(identity), async (tx, session) => {
     const [tenant, unifi, organizations, networkRows, externalChecks, ninja, m365, internal, proxmox, action1] = await Promise.all([
       readTenantSummary(tx, identity.actorId),
@@ -55,8 +57,11 @@ export default async function IntegrationSettingsPage() {
       listProxmoxConnections(tx),
       readAction1Settings(tx),
     ]);
+    // Board links are tenant:write's to see as well as to make; the function
+    // refuses anybody else, so it is only asked for an administrator.
+    const homarrLinks: BoardLinkRow[] = session.permissions.includes('tenant:write') ? await listBoardLinks(tx) : [];
     return {
-      tenant, unifi, organizations, externalChecks, ninja, action1, m365, proxmox,
+      tenant, unifi, organizations, externalChecks, ninja, action1, m365, proxmox, homarrLinks,
       canManageNetwork: networkRows[0]?.permitted ?? false,
       canManageRmm: session.permissions.includes('integration:rmm:manage'),
       canManageM365: session.permissions.includes('integration:m365:manage'),
@@ -70,7 +75,7 @@ export default async function IntegrationSettingsPage() {
     <>
       <PageHeader
         title="Integrations"
-        description="NinjaOne, Action1, Microsoft 365, Proxmox, UniFi, and domain and certificate checking."
+        description="NinjaOne, Action1, Microsoft 365, Proxmox, Homarr, UniFi, and domain and certificate checking."
         trail={[{ label: 'Administration', href: '/settings' }]}
       />
       <PageBody>
@@ -100,6 +105,8 @@ export default async function IntegrationSettingsPage() {
           canManage={canManageHypervisor}
           internalOrganizationId={internalOrganizationId}
         />
+
+        <HomarrSettingsCard initial={homarrLinks} canManage={tenant?.can_write_tenant ?? false} />
 
         <UnifiSettingsCard
           mappings={unifi}

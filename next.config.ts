@@ -24,11 +24,18 @@ const config: NextConfig = {
   async headers() {
     return [
       {
+        // A credential vault must never be framed: clickjacking a reveal
+        // button is a realistic attack on this product specifically. The one
+        // exception is /embed/, the read-only Homarr status page (1240), which
+        // has no buttons, reads no secrets, and sets its own
+        // Content-Security-Policy frame-ancestors naming the Homarr addresses
+        // its link allows.
+        source: '/:path((?!embed/).*)',
+        headers: [{ key: 'X-Frame-Options', value: 'DENY' }],
+      },
+      {
         source: '/:path*',
         headers: [
-          // A credential vault must never be framed: clickjacking a reveal
-          // button is a realistic attack on this product specifically.
-          { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'no-referrer' },
           // Revealed secrets must not reach a browser or proxy cache.
