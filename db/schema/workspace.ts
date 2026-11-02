@@ -56,10 +56,25 @@ export const userDashboard = pgTable('user_dashboard', {
   tenantId: uuid('tenant_id').notNull().references(() => tenant.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => appUser.id, { onDelete: 'cascade' }),
   widgets: jsonb('widgets').notNull().$type<string[]>(),
+  /** Widget keys set to full width (1230). NULL: never chosen, each widget's default. */
+  wide: jsonb('wide').$type<string[]>(),
   updatedAt: tstz('updated_at').notNull().defaultNow(),
 }, (t) => [
   primaryKey({ columns: [t.tenantId, t.userId] }),
 ]);
+
+/**
+ * The dashboard somebody starts with before arranging their own (1230). Like
+ * tenantSidebarDefault below, readable by everyone in the tenant and writable
+ * only with tenant:write.
+ */
+export const tenantDashboardDefault = pgTable('tenant_dashboard_default', {
+  tenantId: uuid('tenant_id').primaryKey().references(() => tenant.id, { onDelete: 'cascade' }),
+  widgets: jsonb('widgets').notNull().$type<string[]>(),
+  wide: jsonb('wide').$type<string[]>(),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
+});
 
 /**
  * `categories` is an ordered array of ORG_CATEGORIES slugs: the drawer's primary
@@ -102,5 +117,6 @@ export const tenantSidebarDefault = pgTable('tenant_sidebar_default', {
 export type UserFavorite = typeof userFavorite.$inferSelect;
 export type UserRecentView = typeof userRecentView.$inferSelect;
 export type UserDashboard = typeof userDashboard.$inferSelect;
+export type TenantDashboardDefault = typeof tenantDashboardDefault.$inferSelect;
 export type UserSidebar = typeof userSidebar.$inferSelect;
 export type TenantSidebarDefault = typeof tenantSidebarDefault.$inferSelect;
