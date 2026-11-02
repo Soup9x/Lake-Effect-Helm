@@ -391,3 +391,28 @@ export const userNotification = pgTable('user_notification', {
   createdAt: tstz('created_at').notNull().defaultNow(),
   readAt: tstz('read_at'),
 });
+
+/**
+ * Homarr board links (1240). Closed to every runtime role; the app reaches the
+ * table only through helm.homarr_board_links(), helm.create_homarr_board_link(),
+ * helm.revoke_homarr_board_link() and helm.homarr_board_view(). Mirrored here
+ * for the drift check.
+ */
+export const homarrBoardLink = pgTable('homarr_board_link', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenant.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  tokenPrefix: text('token_prefix').notNull(),
+  tokenHash: bytea('token_hash').notNull(),
+  allowedOrigins: textArray('allowed_origins').notNull(),
+  showDetails: boolean('show_details').notNull().default(false),
+  createdBy: uuid('created_by').references(() => appUser.id, { onDelete: 'set null' }),
+  createdAt: tstz('created_at').notNull().defaultNow(),
+  lastUsedAt: tstz('last_used_at'),
+  useCount: bigint('use_count', { mode: 'number' }).notNull().default(0),
+  revokedAt: tstz('revoked_at'),
+  revokedBy: uuid('revoked_by').references(() => appUser.id, { onDelete: 'set null' }),
+}, (t) => [
+  uniqueIndex('homarr_board_link_prefix_uk').on(t.tokenPrefix),
+  index('homarr_board_link_tenant_idx').on(t.tenantId, t.createdAt),
+]);
