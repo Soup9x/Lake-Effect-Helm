@@ -173,7 +173,9 @@ export function DataTable<T extends GridRow>({
   const allVisibleSelected = pickable.length > 0 && pickable.every((r) => selected.has(r.id));
 
   return (
-    <div className="w-full overflow-x-auto">
+    // `relative` so absolutely positioned cells (sr-only labels) are clipped by
+    // this scroller instead of widening the whole page on a phone.
+    <div className="relative w-full overflow-x-auto">
       <table className="w-full caption-bottom border-collapse text-sm">
         <thead>
           <tr className="border-b border-canvas-border bg-surface-sunken/60">

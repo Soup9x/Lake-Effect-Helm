@@ -70,7 +70,11 @@ export function AppChrome({
                 has — the recents list its own fetch, the bell a count read with
                 the identity, the switcher the membership list.
               */}
-              <RecentlyViewed />
+              {/* Below `sm` there is no room for it; Personal lists the same
+                  recently viewed records. */}
+              <div className="hidden sm:block">
+                <RecentlyViewed />
+              </div>
               <NotificationBell unread={unreadNotifications} />
               {/* Only when there is somewhere to switch TO. One tenant plus a
                   switcher is a control that exists to say "no". */}

@@ -8,7 +8,9 @@ import { cn } from '@/lib/ui/cn';
  */
 export function Table({ className, ...props }: ComponentProps<'table'>) {
   return (
-    <div className="w-full overflow-x-auto">
+    // `relative` so absolutely positioned cells (sr-only labels) are clipped by
+    // this scroller instead of widening the whole page on a phone.
+    <div className="relative w-full overflow-x-auto">
       <table className={cn('w-full caption-bottom text-sm', className)} {...props} />
     </div>
   );

@@ -25,9 +25,9 @@ import { usePathname } from 'next/navigation';
 import {
   AppWindow, BadgeCheck, Binary, BookOpen, Boxes, Cable, ChevronLeft, ChevronRight,
   FileSignature, FileText, FolderTree, Globe, KeyRound, LayoutGrid, MapPin, MoreHorizontal,
-  Network, Server, Settings2, ShieldCheck, Truck, Users, Workflow,
+  Network, PanelLeftOpen, Server, Settings2, ShieldCheck, Truck, Users, Workflow, X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useShell } from './shell-context';
 import type { CategoryCounts } from '@/lib/nav/org-categories';
 import { splitSidebar } from '@/lib/nav/sidebar-layout';
@@ -130,18 +130,44 @@ export function Sidebar({
   customised: boolean;
 }) {
   const pathname = usePathname() ?? '';
-  const { sidebarCollapsed, toggleSidebar } = useShell();
+  const { sidebarCollapsed, toggleSidebar, drawerOpen, setDrawerOpen } = useShell();
   const [showMore, setShowMore] = useState(false);
 
   const base = `/organizations/${org.id}`;
   const { primary, more: secondary } = splitSidebar(layout);
-  const collapsed = sidebarCollapsed;
+  // Slid in over the page on a phone, the drawer is always the labelled one:
+  // it is a menu there, and icons alone would make it a puzzle.
+  const collapsed = sidebarCollapsed && !drawerOpen;
 
+  // Getting somewhere is the end of the drawer's job on a phone.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname is the trigger, not an input.
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname, setDrawerOpen]);
+
+  /*
+   * BELOW `md` THE DRAWER IS AN OVERLAY. A 240px column on a 390px phone left
+   * the page 150px — a credentials table showed a checkbox and half a name. So
+   * at phone width the column is hidden and MobileDrawerButton, at the top of
+   * the page, slides it in over the content; from `md` up nothing changes.
+   */
   return (
+    <>
+      {drawerOpen && (
+        <button
+          type="button"
+          aria-label="Close the client menu"
+          onClick={() => setDrawerOpen(false)}
+          className="fixed inset-0 top-14 z-30 bg-black/40 md:hidden"
+        />
+      )}
     <aside
       className={cn(
-        'flex shrink-0 flex-col overflow-y-auto bg-nav-side',
-        collapsed ? 'w-14' : 'w-60',
+        'shrink-0 flex-col overflow-y-auto bg-nav-side',
+        drawerOpen
+          ? 'fixed bottom-0 left-0 top-14 z-40 flex w-72 max-w-[85vw] shadow-xl md:static md:z-auto md:w-60 md:max-w-none md:shadow-none'
+          : 'hidden md:flex',
+        !drawerOpen && (collapsed ? 'w-14' : 'w-60'),
       )}
       aria-label={`${org.name} records`}
     >
@@ -165,15 +191,26 @@ export function Sidebar({
             {org.name}
           </Link>
         )}
-        <button
-          type="button"
-          onClick={toggleSidebar}
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}
-          className="flex size-6 shrink-0 items-center justify-center rounded text-nav-ink transition-colors hover:bg-white/10 hover:text-nav-ink-active"
-        >
-          {collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
-        </button>
+        {drawerOpen ? (
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(false)}
+            aria-label="Close the client menu"
+            className="flex size-8 shrink-0 items-center justify-center rounded text-nav-ink transition-colors hover:bg-white/10 hover:text-nav-ink-active"
+          >
+            <X className="size-5" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}
+            className="flex size-6 shrink-0 items-center justify-center rounded text-nav-ink transition-colors hover:bg-white/10 hover:text-nav-ink-active"
+          >
+            {collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+          </button>
+        )}
       </div>
 
       <nav className="flex-1 px-2 pb-3">
@@ -285,5 +322,26 @@ export function Sidebar({
         </div>
       </nav>
     </aside>
+    </>
+  );
+}
+
+/**
+ * Phone width only: the strip at the top of a client's pages that opens the
+ * drawer. Names the client, so it doubles as "where am I".
+ */
+export function MobileDrawerButton({ orgName }: { orgName: string }) {
+  const { drawerOpen, setDrawerOpen } = useShell();
+  return (
+    <button
+      type="button"
+      onClick={() => setDrawerOpen(!drawerOpen)}
+      aria-expanded={drawerOpen}
+      className="flex w-full items-center gap-2 border-b border-nav-border bg-nav-side px-4 py-2.5 text-left text-sm font-medium text-nav-ink-active md:hidden"
+    >
+      <PanelLeftOpen className="size-4 shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1 truncate">{orgName}</span>
+      <span className="shrink-0 text-xs text-nav-ink">Records</span>
+    </button>
   );
 }

@@ -174,8 +174,8 @@ export function SearchBox() {
   let index = -1;
 
   return (
-    <div ref={boxRef} className="relative">
-      <div className="flex h-8 w-44 items-center gap-1.5 rounded-md bg-white/10 pl-2 pr-1 text-nav-ink focus-within:bg-white/15 focus-within:text-nav-ink-active sm:w-64">
+    <div ref={boxRef} className="relative min-w-0 flex-1 sm:flex-none">
+      <div className="flex h-8 w-full items-center gap-1.5 rounded-md bg-white/10 pl-2 pr-1 text-nav-ink focus-within:bg-white/15 focus-within:text-nav-ink-active sm:w-64">
         {loading ? <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden /> : <Search className="size-4 shrink-0" aria-hidden />}
         <input
           type="search"
@@ -205,7 +205,7 @@ export function SearchBox() {
       {showPanel && (
         <div
           id="search-suggestions"
-          className="absolute right-0 top-10 z-40 w-[min(26rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border bg-surface-raised text-sm shadow-lg"
+          className="fixed inset-x-2 top-14 z-40 sm:absolute sm:inset-x-auto sm:right-0 sm:top-10 sm:w-[min(26rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border bg-surface-raised text-sm shadow-lg"
         >
           <fieldset className="flex gap-1 border-b border-border p-2" aria-label="Where to search">
             {scopes.map((s) => (
