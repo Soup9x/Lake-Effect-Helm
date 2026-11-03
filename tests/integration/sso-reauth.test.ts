@@ -176,7 +176,10 @@ function post(path: string, body: unknown): NextRequest {
 }
 
 let ticketCounter = 0;
-const newTicket = () => `ticket-${Date.now()}-${(ticketCounter += 1)}`;
+const newTicket = () => {
+  ticketCounter += 1;
+  return `ticket-${Date.now()}-${ticketCounter}`;
+};
 
 /** Start, let the provider "sign the person in", and land the callback. */
 async function confirm(
