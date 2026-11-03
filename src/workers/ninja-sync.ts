@@ -33,7 +33,7 @@ import type { Job, JobContext, JobResult } from './runtime';
 import { describeError } from './runtime';
 import { getSecretService } from '../lib/services';
 import {
-  NinjaError, fetchToken, listDevices, listLocations, listOrganizations, listQuery,
+  NinjaError, signIn, listDevices, listLocations, listOrganizations, listQuery,
   type NinjaLocation, type NinjaQueryRow, type NinjaTarget,
 } from '../lib/ninja/client';
 import { byDevice, mapDevice, mapLocation, mapProfile, type NinjaReports } from '../lib/ninja/devices';
@@ -213,7 +213,7 @@ async function syncOne(connectionId: string, actor: Actor, log: JobContext['log'
       // Lives for the requests below and is disposed in the finally.
       clientSecret: revealed.value.expose(),
     };
-    const token = await fetchToken(target);
+    const token = await signIn(target);
     organizations = await listOrganizations(target, token);
     devices = await listDevices(target, token);
     locations = await optional('locations', missing, log, () => listLocations(target, token));

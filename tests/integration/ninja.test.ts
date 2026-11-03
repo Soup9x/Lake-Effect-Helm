@@ -512,6 +512,39 @@ describe('the sync worker', () => {
     expect(await runSync()).toMatchObject({ connections: 1 });
   });
 
+  it('is not blocked forever by a run the worker never finished', async () => {
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }];
+    await configure();
+    // A run left open by a worker that stopped mid-sync, three hours ago.
+    const [stale] = await su((sql) => sql<{ id: string }[]>`
+      INSERT INTO integration_sync_run (tenant_id, connection_id, status, trigger_source, started_at)
+      SELECT tenant_id, id, 'running', 'schedule', now() - interval '3 hours'
+      FROM integration_connection WHERE provider = 'ninja_one'
+      RETURNING id
+    `);
+
+    asAdmin();
+    expect((await syncNow(req('POST', '/api/integrations/ninja/sync'))).status).toBe(200);
+    expect(await runSync()).toMatchObject({ connections: 1 });
+
+    const [closed] = await su((sql) => sql<{ status: string; error_summary: string }[]>`
+      SELECT status::text AS status, error_summary FROM integration_sync_run WHERE id = ${stale!.id}::uuid
+    `);
+    expect(closed).toMatchObject({ status: 'failed' });
+    expect(closed!.error_summary).toMatch(/Interrupted/);
+  });
+
+  it('still waits for a run that is only minutes old', async () => {
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }];
+    await configure();
+    await su((sql) => sql`
+      INSERT INTO integration_sync_run (tenant_id, connection_id, status, trigger_source, started_at)
+      SELECT tenant_id, id, 'running', 'schedule', now() - interval '5 minutes'
+      FROM integration_connection WHERE provider = 'ninja_one'
+    `);
+    expect(await runSync()).toEqual({});
+  });
+
   it('stops importing an organisation when it is unmapped, and keeps what it imported', async () => {
     ninja.organizations = [{ id: 11, name: 'Acme Corp' }];
     ninja.devices = [SERVER];
