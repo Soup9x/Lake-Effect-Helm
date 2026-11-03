@@ -26,10 +26,12 @@
  * content, but the state lives here, and a password left in a closed dialog's
  * state is a password still in the tab.
  *
- * WHY A PASSWORD AND NOT A SECOND FACTOR. It is the factor this product has.
- * step_up_verification.method already permits 'webauthn', 'totp' and
- * 'sso_reauth'; 0340's own header describes the password path. When one of the
- * others is built, it belongs here as another way to satisfy the same prompt.
+ * A PASSWORD, OR THE SIGN-IN PROVIDER (1270). A person whose account is
+ * linked to Microsoft 365 (or another OpenID Connect provider) gets a button
+ * that re-runs that sign-in in a small window; when it lands the server has
+ * already written the step-up, so the prompt simply settles true. Somebody
+ * invited for single sign-on has no Helm password, so for them the button is
+ * the prompt.
  */
 import { useCallback, useRef, useState } from 'react';
 import { Loader2, ShieldCheck } from 'lucide-react';
@@ -37,6 +39,7 @@ import { Button } from './ui/button';
 import { Input, Label } from './ui/field';
 import { Modal } from './ui/modal';
 import { apiFetch } from '@/lib/ui/api';
+import { OrDivider, SsoConfirmButton, useReauthOptions } from './sso-confirm';
 
 export interface UseStepUp {
   /**
@@ -53,6 +56,10 @@ export function useStepUp(): UseStepUp {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [usePassword, setUsePassword] = useState(false);
+  const options = useReauthOptions(open);
+  const sso = options?.sso ?? null;
+  const passwordVisible = !sso || options?.password !== false || usePassword;
 
   /**
    * The waiting caller's resolver.
@@ -68,6 +75,7 @@ export function useStepUp(): UseStepUp {
     setPassword('');
     setBusy(false);
     setError(null);
+    setUsePassword(false);
     settle.current?.(verified);
     settle.current = null;
   }, []);
@@ -114,9 +122,23 @@ export function useStepUp(): UseStepUp {
       }}
       title="Confirm it is you"
       icon={ShieldCheck}
-      description="This credential requires a fresh re-authentication. Your password is not stored and no new session is created."
+      description={
+        sso
+          ? `This needs a fresh confirmation. Sign in to ${sso.name} again${passwordVisible ? ' or enter your Helm password' : ''}; no new session is created.`
+          : 'This credential requires a fresh re-authentication. Your password is not stored and no new session is created.'
+      }
     >
       <form onSubmit={submit} className="space-y-3">
+        {sso && (
+          <SsoConfirmButton
+            name={sso.name}
+            disabled={busy}
+            onConfirmed={() => finish(true)}
+            onError={(message) => setError(message)}
+          />
+        )}
+        {sso && passwordVisible && <OrDivider />}
+        {passwordVisible && (
         <div className="space-y-1">
           <Label htmlFor="step-up-password">Your Helm password</Label>
           <Input
@@ -124,12 +146,22 @@ export function useStepUp(): UseStepUp {
             type="password"
             autoComplete="current-password"
             // The dialog exists to be typed into the moment it opens.
-            autoFocus
+            autoFocus={!sso}
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             disabled={busy}
           />
         </div>
+        )}
+        {sso && !passwordVisible && (
+          <button
+            type="button"
+            className="text-xs text-ink-muted underline-offset-2 hover:underline"
+            onClick={() => setUsePassword(true)}
+          >
+            Use a password instead
+          </button>
+        )}
 
         {error && (
           <p className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-ink">
@@ -141,10 +173,12 @@ export function useStepUp(): UseStepUp {
           <Button type="button" variant="ghost" size="sm" onClick={() => finish(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button type="submit" size="sm" disabled={busy || password.length === 0}>
-            {busy && <Loader2 className="animate-spin" aria-hidden />}
-            Verify
-          </Button>
+          {passwordVisible && (
+            <Button type="submit" size="sm" disabled={busy || password.length === 0}>
+              {busy && <Loader2 className="animate-spin" aria-hidden />}
+              Verify
+            </Button>
+          )}
         </div>
       </form>
     </Modal>

@@ -17,6 +17,7 @@ import { Modal } from '@/components/ui/modal';
 import { apiFetch } from '@/lib/ui/api';
 import { fromDateTimeLocalInput, toDateTimeLocalInput } from '@/lib/ui/format';
 import type { UpdateRequest, UpdateRequestStatus } from '@/lib/updates/requests';
+import { ReauthFields, reauthCredentials, ticketSurvives, useReauthOptions } from '@/components/sso-confirm';
 
 const STATUS_BADGE: Record<UpdateRequestStatus, { text: string; tone: BadgeTone }> = {
   scheduled: { text: 'Scheduled', tone: 'info' },
@@ -56,9 +57,13 @@ export function InstallButtons({
   const [wantsCode, setWantsCode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ticket, setTicket] = useState<string | null>(null);
+  const options = useReauthOptions(mode !== null);
+  const askCode = wantsCode || Boolean(ticket && options?.totp);
 
   const open = (next: 'now' | 'later') => {
     setMode(next);
+    setTicket(null);
     setPassword('');
     setCode('');
     setWantsCode(false);
@@ -72,8 +77,12 @@ export function InstallButtons({
     }
   };
 
-  const submit = async (event: React.FormEvent) => {
+  const submit = (event: React.FormEvent) => {
     event.preventDefault();
+    void send(ticket);
+  };
+
+  const send = async (withTicket: string | null) => {
     setError(null);
     const at = mode === 'later' ? fromDateTimeLocalInput(when) : null;
     if (mode === 'later' && !at) {
@@ -83,13 +92,14 @@ export function InstallButtons({
     setBusy(true);
     try {
       const result = await apiFetch<{ request: UpdateRequest }>('/api/tenant/updates/requests', {
-        json: { password, ...(wantsCode ? { code } : {}), at },
+        json: { ...reauthCredentials({ password, ticket: withTicket, code, askCode }), at },
       });
       if (result.ok) {
         setMode(null);
         onRequested(result.value.request);
         return;
       }
+      if (withTicket && !ticketSurvives(result.details)) setTicket(null);
       if (result.details?.secondFactor === 'totp') {
         setWantsCode(true);
         setError(wantsCode ? result.message : 'Enter the code from your authenticator app as well.');
@@ -133,32 +143,24 @@ export function InstallButtons({
               <FieldHint>Your local time. Up to 30 days ahead; you can cancel it until it starts.</FieldHint>
             </div>
           )}
-          <div className="space-y-1">
-            <Label htmlFor="update-password">Your password</Label>
-            <Input
-              id="update-password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoFocus
-            />
-            <FieldHint>Asked every time: this rebuilds and restarts all of Helm.</FieldHint>
-          </div>
-          {wantsCode && (
-            <div className="space-y-1">
-              <Label htmlFor="update-code">Authenticator code</Label>
-              <Input
-                id="update-code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                required
-              />
-            </div>
-          )}
+          <ReauthFields
+            idPrefix="update"
+            options={options}
+            password={password}
+            onPassword={setPassword}
+            ticket={ticket}
+            onTicket={setTicket}
+            askCode={askCode}
+            code={code}
+            onCode={setCode}
+            onError={setError}
+            onSsoConfirmed={(next) => {
+              if (!options?.totp) void send(next);
+            }}
+            passwordHint="Asked every time: this rebuilds and restarts all of Helm."
+            autoFocus
+            disabled={busy}
+          />
           {error && (
             <p className="flex items-start gap-2 text-sm text-danger">
               <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden /> {error}
@@ -166,10 +168,16 @@ export function InstallButtons({
           )}
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="ghost" onClick={() => setMode(null)} disabled={busy}>Cancel</Button>
-            <Button type="submit" variant="primary" disabled={busy}>
-              {busy && <Loader2 className="animate-spin" aria-hidden />}
-              {mode === 'later' ? 'Schedule update' : 'Update now'}
-            </Button>
+            {(ticket || !options?.sso || password.length > 0) && (
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={busy || (ticket ? askCode && code.trim() === '' : password.length === 0)}
+              >
+                {busy && <Loader2 className="animate-spin" aria-hidden />}
+                {mode === 'later' ? 'Schedule update' : 'Update now'}
+              </Button>
+            )}
           </div>
         </form>
       </Modal>

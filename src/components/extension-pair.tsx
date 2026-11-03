@@ -30,6 +30,7 @@ import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { FieldHint, Input, Label } from './ui/field';
 import { apiFetch } from '@/lib/ui/api';
+import { ReauthFields, reauthCredentials, ticketSurvives, useReauthOptions } from './sso-confirm';
 import {
   PAIR_MESSAGE_TYPE,
   type PairMessage,
@@ -91,7 +92,10 @@ export function ExtensionPair({
   const [label, setLabel] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
-  const [askCode, setAskCode] = useState(false);
+  const [serverAskedCode, setAskCode] = useState(false);
+  const [ticket, setTicket] = useState<string | null>(null);
+  const options = useReauthOptions(true);
+  const askCode = serverAskedCode || Boolean(ticket && options?.totp);
   // Read once: the effect clears the fragment, and a second run (React's
   // development double-invoke) would otherwise find it gone.
   const fragment = useRef<PairRequestParams | null | undefined>(undefined);
@@ -115,7 +119,7 @@ export function ExtensionPair({
     );
   }, []);
 
-  const approve = async () => {
+  const approve = async (withTicket: string | null = ticket) => {
     if (state.status !== 'ready' && state.status !== 'error') return;
     const { params, fingerprint } = state;
     setState({ status: 'pairing', params, fingerprint });
@@ -125,8 +129,7 @@ export function ExtensionPair({
         label: label.trim() || 'My browser',
         browser: params.browser || null,
         extensionVersion: params.version || null,
-        password,
-        ...(askCode && code.trim() ? { code: code.trim() } : {}),
+        ...reauthCredentials({ password, ticket: withTicket, code, askCode }),
       },
     });
     setCode('');
@@ -135,13 +138,17 @@ export function ExtensionPair({
       // it stays, and only the code is asked for. Otherwise it was the
       // password, which goes.
       const wantsCode = result.details?.secondFactor === 'totp';
+      if (withTicket && !ticketSurvives(result.details)) setTicket(null);
       if (wantsCode) setAskCode(true);
       else setPassword('');
       setState({
         status: 'error',
         params,
         fingerprint,
-        message: wantsCode && !askCode ? 'Password accepted. Now enter your authenticator code.' : result.message,
+        message:
+          wantsCode && !askCode
+            ? `${withTicket ? 'Sign-in confirmed' : 'Password accepted'}. Now enter your authenticator code.`
+            : result.message,
         prompt: wantsCode && !askCode,
       });
       return;
@@ -254,36 +261,28 @@ export function ExtensionPair({
             void approve();
           }}
         >
-          <div className="space-y-1.5">
-            <Label htmlFor="extension-password">Your Helm password</Label>
-            <Input
-              id="extension-password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              disabled={busy}
-              required
-            />
-            <FieldHint>Pairing gives this browser access for 30 days, so Helm asks who you are again.</FieldHint>
-          </div>
-          {askCode ? (
-            <div className="space-y-1.5">
-              <Label htmlFor="extension-code">Authenticator code</Label>
-              <Input
-                id="extension-code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={code}
-                maxLength={32}
-                onChange={(e) => setCode(e.target.value)}
-                disabled={busy}
-                required
-                autoFocus
-              />
-              <FieldHint>From your authenticator app, or one of your recovery codes.</FieldHint>
-            </div>
-          ) : null}
+          <ReauthFields
+            idPrefix="extension"
+            options={options}
+            password={password}
+            onPassword={setPassword}
+            passwordLabel="Your Helm password"
+            passwordHint="Pairing gives this browser access for 30 days, so Helm asks who you are again."
+            ticket={ticket}
+            onTicket={setTicket}
+            askCode={askCode}
+            code={code}
+            onCode={setCode}
+            onError={(message) => {
+              if (message && (state.status === 'ready' || state.status === 'error')) {
+                setState({ status: 'error', params: state.params, fingerprint: state.fingerprint, message });
+              }
+            }}
+            onSsoConfirmed={(next) => {
+              if (!options?.totp) void approve(next);
+            }}
+            disabled={busy}
+          />
         </form>
 
         {state.status === 'error' ? (
@@ -295,7 +294,12 @@ export function ExtensionPair({
             variant="primary"
             type="submit"
             form="extension-pair-form"
-            disabled={busy || label.trim() === '' || password === '' || (askCode && code.trim() === '')}
+            disabled={
+              busy ||
+              label.trim() === '' ||
+              (ticket ? false : password === '') ||
+              (askCode && code.trim() === '')
+            }
           >
             {busy ? <Loader2 className="animate-spin" aria-hidden /> : null} Pair
           </Button>

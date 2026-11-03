@@ -4,7 +4,7 @@ import { ApiError, zodIssues } from '@/lib/api/errors';
 import { installSessionResolver } from '@/lib/auth/bootstrap';
 import { deviceKeyFingerprint, parseDevicePublicKey } from '@/lib/auth/device-signature';
 import { resolveIdentity } from '@/lib/auth/identity';
-import { reauthenticate } from '@/lib/auth/reauthenticate';
+import { hasReauth, reauthenticate, reauthFields } from '@/lib/auth/reauthenticate';
 import { withTenant } from '@/lib/db/client';
 import { requireExtensionCaller } from '@/lib/extension/http';
 import { formatFingerprint, listMyBrowsers, pairExtension } from '@/lib/extension/pairing';
@@ -33,9 +33,8 @@ const pairSchema = z.object({
   label: z.string().trim().min(1).max(80),
   browser: z.string().trim().max(40).nullable().optional(),
   extensionVersion: z.string().trim().max(20).nullable().optional(),
-  password: z.string().min(1).max(1024),
-  code: z.string().trim().max(32).optional(),
-});
+  ...reauthFields,
+}).refine(hasReauth, { message: 'your password, or a confirmation with your sign-in provider', path: ['password'] });
 
 export const GET = tenantRoute(async ({ tx }) => ({ browsers: await listMyBrowsers(tx) }));
 
@@ -63,6 +62,7 @@ export const POST = publicRoute(async (request, requestId): Promise<ExtensionPai
 
   await reauthenticate(request, identity, {
     password: body.password,
+    ssoTicket: body.ssoTicket,
     code: body.code,
     secondFactor: 'if_enrolled',
   });

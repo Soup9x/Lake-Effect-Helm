@@ -37,6 +37,8 @@ export interface DiscoveryDocument {
   scopesSupported: string[] | null;
   responseTypesSupported: string[];
   codeChallengeMethodsSupported: string[] | null;
+  /** token_endpoint_auth_methods_supported; null when not advertised. */
+  tokenEndpointAuthMethods: string[] | null;
 }
 
 export class OidcDiscoveryError extends Error {
@@ -203,6 +205,7 @@ export async function discover(issuer: string): Promise<DiscoveryDocument> {
     scopesSupported: strArray(doc.scopes_supported),
     responseTypesSupported: responseTypes ?? [],
     codeChallengeMethodsSupported: strArray(doc.code_challenge_methods_supported),
+    tokenEndpointAuthMethods: strArray(doc.token_endpoint_auth_methods_supported),
   };
 }
 

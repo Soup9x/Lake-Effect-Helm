@@ -3,7 +3,7 @@ import { actorFor, publicRoute, readJson } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 import { installSessionResolver } from '@/lib/auth/bootstrap';
 import { resolveIdentity } from '@/lib/auth/identity';
-import { reauthenticate } from '@/lib/auth/reauthenticate';
+import { hasReauth, reauthenticate, reauthFields } from '@/lib/auth/reauthenticate';
 import { withTenant } from '@/lib/db/client';
 import { getUpdateStatus } from '@/lib/updates/check';
 import { readUpdater, requestUpdate } from '@/lib/updates/requests';
@@ -26,11 +26,10 @@ import { readUpdater, requestUpdate } from '@/lib/updates/requests';
  * gives: a RADIUS round trip must not hold a pooled connection open.
  */
 const bodySchema = z.object({
-  password: z.string().min(1).max(1024),
-  code: z.string().trim().max(32).optional(),
+  ...reauthFields,
   /** ISO instant to start at; absent or null for "now". */
   at: z.string().datetime({ offset: true }).nullable().optional(),
-});
+}).refine(hasReauth, { message: 'your password, or a confirmation with your sign-in provider', path: ['password'] });
 
 export const POST = publicRoute(async (request, requestId) => {
   await installSessionResolver();
@@ -47,7 +46,8 @@ export const POST = publicRoute(async (request, requestId) => {
     throw ApiError.conflict('there is no newer version to install');
   }
 
-  await reauthenticate(request, identity, { password: body.password, code: body.code, secondFactor: 'if_enrolled' });
+  await reauthenticate(request, identity, { password: body.password,
+    ssoTicket: body.ssoTicket, code: body.code, secondFactor: 'if_enrolled' });
 
   return withTenant(actorFor(identity, requestId), async (tx, session) => {
     if (!session.permissions.includes('tenant:write')) {
