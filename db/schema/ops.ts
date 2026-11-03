@@ -68,3 +68,17 @@ export const helmUpdater = pgTable('helm_updater', {
   lastSeenAt: tstz('last_seen_at').notNull(),
   host: text('host'),
 });
+
+// 1220: every version deployed on this server, written by deploy/setup.sh.
+export const helmDeploy = pgTable('helm_deploy', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  deployedAt: tstz('deployed_at').notNull().defaultNow(),
+  commit: text('commit').notNull(),
+  previousCommit: text('previous_commit'),
+  title: text('title'),
+  changes: jsonb('changes').notNull().default([]),
+  source: text('source').notNull(),
+  updateId: uuid('update_id').references(() => helmUpdate.id, { onDelete: 'set null' }),
+  hostUser: text('host_user'),
+  host: text('host'),
+});

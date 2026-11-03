@@ -33,7 +33,7 @@ const short = (commit: string | null) => (commit ? commit.slice(0, 7) : '?');
  * picked in. The server renders it in its own, so the first paint can differ
  * from the browser's by the offset; the browser's wins.
  */
-function LocalTime({ iso }: { iso: string }) {
+export function LocalTime({ iso }: { iso: string }) {
   return (
     <time dateTime={iso} suppressHydrationWarning>
       {new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
@@ -238,7 +238,7 @@ export function OpenRequest({
   );
 }
 
-function LogTail({ log }: { log: string }) {
+export function LogTail({ log }: { log: string }) {
   return (
     <pre className="max-h-64 overflow-auto rounded border border-border bg-surface-sunken p-2 font-mono text-[11px] leading-snug text-ink-muted">
       {log.split('\n').slice(-80).join('\n')}

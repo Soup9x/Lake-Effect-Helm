@@ -290,9 +290,24 @@ detect_lan_ip() {
 # --auth-local=scram-sha-256, so even a socket connection as the superuser
 # needs a password. Taking it from the container's own POSTGRES_PASSWORD keeps
 # the credential off this script's command line and out of the host's history.
+# git on this checkout. safe.directory because this runs under sudo and the
+# checkout usually belongs to somebody else, which git otherwise refuses.
+g() {
+  git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" "$@"
+}
+
 psql_in_container() {
   docker compose exec -T postgres \
     sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U postgres -d helm -tAc "$0"' "$1"
+}
+
+# The same, reading the SQL from stdin so `-v name=value` variables are
+# interpolated (:'name' quotes them). Anything that came from git goes in this
+# way, never pasted into the SQL text.
+psql_vars() {
+  local script=$1; shift
+  printf '%s\n' "$script" | docker compose exec -T postgres \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -U postgres -d helm -X -q -t -A -v ON_ERROR_STOP=1 "$@"' sh "$@"
 }
 
 # -----------------------------------------------------------------------------
@@ -691,7 +706,7 @@ start_stack() {
   # commands. The image has no .git of its own. safe.directory because this
   # runs under sudo and the checkout usually belongs to somebody else, which
   # git otherwise refuses to read.
-  HELM_BUILD_COMMIT=$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)
+  HELM_BUILD_COMMIT=$(g rev-parse HEAD 2>/dev/null || true)
   HELM_INSTALL_DIR="$REPO_ROOT"
   export HELM_BUILD_COMMIT HELM_INSTALL_DIR
   if [ -n "$HELM_BUILD_COMMIT" ]; then
@@ -802,6 +817,84 @@ UNIT
     || die "could not start helm-updater.timer — see: systemctl status helm-updater.timer"
   ok "updater installed; Administration → Updates can install updates"
   note "Its logs: /var/log/helm-updater and journalctl -u helm-updater"
+}
+
+# -----------------------------------------------------------------------------
+# The update history (1220)
+# -----------------------------------------------------------------------------
+# One row per version deployed, so Administration → Updates → History can say
+# what this server has run, when, and who put it there. Written here because
+# every way of updating ends in this script: by hand, or from the Updates page
+# through deploy/updater.sh — in which case the request that is 'running' right
+# now is this run, and the row points at it (and so at who asked, and the log).
+#
+# A re-run on the version already recorded (to change a port, say) is not an
+# update and adds nothing. A failure here never fails the deploy: the stack is
+# up, and a missing history line is not worth stopping for.
+record_deploy() {
+  local commit=${HELM_BUILD_COMMIT:-}
+  [ -n "$commit" ] || return 0
+
+  local last
+  last=$(psql_in_container "SELECT commit FROM helm_deploy ORDER BY deployed_at DESC, id DESC LIMIT 1" 2>/dev/null \
+         | tr -d '[:space:]') || { warn "could not record this update in the history"; return 0; }
+  [ "$last" = "$commit" ] && return 0
+
+  # What changed since the last recorded version, as "<pr>\t<title>" lines,
+  # newest first: a merged pull request by its own title, a squash merge by
+  # its subject, and plain commits only when nothing was merged through a PR.
+  local range=("-1" "$commit")
+  if [ -n "$last" ] && g merge-base --is-ancestor "$last" "$commit" 2>/dev/null; then
+    range=("$last..$commit")
+  else
+    last=''
+  fi
+  local changes
+  changes=$(g log --first-parent --format='%s%x1f%b%x1e' "${range[@]}" 2>/dev/null | awk '
+    BEGIN { RS = "\036"; FS = "\037" }
+    {
+      sub(/^\n+/, "", $1); subject = $1; body = $2; title = ""; pr = ""
+      if (match(subject, /^Merge pull request #[0-9]+/)) {
+        pr = substr(subject, 21, RLENGTH - 20)
+        n = split(body, lines, "\n")
+        for (i = 1; i <= n; i++) if (lines[i] ~ /[^[:space:]]/) { title = lines[i]; break }
+        if (title == "") title = subject
+        prs = prs pr "\t" title "\n"; next
+      }
+      if (match(subject, /\(#[0-9]+\)[[:space:]]*$/)) {
+        pr = substr(subject, RSTART + 2, RLENGTH - 3); sub(/[)[:space:]]+$/, "", pr)
+        title = substr(subject, 1, RSTART - 1); sub(/[[:space:]]+$/, "", title)
+        prs = prs pr "\t" title "\n"; next
+      }
+      if (subject ~ /^Merge / || subject == "") next
+      plain = plain "\t" subject "\n"
+    }
+    END { printf "%s", (prs != "" ? prs : plain) }')
+
+  # Updated from the page? Then the request deploy/updater.sh is running is
+  # this one.
+  if psql_vars "
+    WITH change AS (
+      SELECT nullif(split_part(l, E'\t', 1), '')::int AS pr, left(split_part(l, E'\t', 2), 400) AS title, n
+      FROM regexp_split_to_table(:'changes', E'\n') WITH ORDINALITY AS t(l, n)
+      WHERE l <> ''
+    ), running AS (
+      SELECT id FROM helm_update WHERE status = 'running' ORDER BY started_at DESC LIMIT 1
+    )
+    INSERT INTO helm_deploy (commit, previous_commit, title, changes, source, update_id, host_user, host)
+    SELECT :'commit', nullif(:'previous', ''),
+           (SELECT title FROM change ORDER BY n LIMIT 1),
+           coalesce((SELECT jsonb_agg(jsonb_build_object('pr', pr, 'title', title) ORDER BY n) FROM change), '[]'::jsonb),
+           CASE WHEN (SELECT id FROM running) IS NULL THEN 'setup' ELSE 'page' END,
+           (SELECT id FROM running),
+           CASE WHEN (SELECT id FROM running) IS NULL THEN nullif(:'host_user', '') END,
+           nullif(:'host', '');" \
+    -v commit="$commit" -v previous="$last" -v changes="$changes" \
+    -v host_user="${SUDO_USER:-$(id -un)}" -v host="$(hostname 2>/dev/null || true)" >/dev/null 2>&1; then
+    ok "recorded ${commit:0:7} in the update history"
+  else
+    warn "could not record this update in the history"
+  fi
 }
 
 # -----------------------------------------------------------------------------
@@ -985,6 +1078,7 @@ main() {
   secrets
   configure
   start_stack
+  record_deploy
   bootstrap
   updater
   finish

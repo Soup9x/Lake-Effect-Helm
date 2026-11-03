@@ -19,6 +19,7 @@ import { GET as getUpdates } from '../../src/app/api/tenant/updates/route';
 import { POST as requestRoute } from '../../src/app/api/tenant/updates/requests/route';
 import { DELETE as cancelRoute } from '../../src/app/api/tenant/updates/requests/[requestId]/route';
 import { resetUpdateCache } from '../../src/lib/updates/check';
+import { listDeploys } from '../../src/lib/updates/history';
 
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: () => undefined }),
@@ -203,5 +204,40 @@ describe('requesting an update', () => {
       password: PASSWORDS[IDS.admin1],
     })));
     expect(status).toBe(409);
+  });
+});
+
+describe('the update history (1220)', () => {
+  it('is closed to the app role and needs tenant:write through the function', async () => {
+    await expect(withTenant({ tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' }, (tx) =>
+      tx`SELECT count(*) FROM helm_deploy`)).rejects.toThrow(/permission denied/);
+    await expect(withTenant({ tenantId: IDS.tenant1, actorId: IDS.tech1, actorType: 'user' }, (tx) =>
+      listDeploys(tx))).rejects.toThrow(/tenant:write/);
+  });
+
+  it('names who pushed each version, counts them, and carries the log of a page update', async () => {
+    await su(async (sql) => {
+      await sql`DELETE FROM helm_deploy`;
+      await sql`
+        INSERT INTO helm_deploy (deployed_at, commit, source, host_user, title, changes)
+        VALUES (now() - interval '2 days', ${OLD}, 'setup', 'nolan', 'By hand',
+                ${sql.json([{ pr: 110, title: 'Diagram editor' }])})
+      `;
+      const [request] = await sql<{ id: string }[]>`
+        INSERT INTO helm_update (target_commit, status, requested_by, started_at, finished_at, log, to_commit)
+        VALUES (${NEW}, 'succeeded', ${IDS.admin1}, now() - interval '1 hour', now(), 'built fine', ${NEW})
+        RETURNING id
+      `;
+      await sql`
+        INSERT INTO helm_deploy (commit, previous_commit, source, update_id, title)
+        VALUES (${NEW}, ${OLD}, 'page', ${request!.id}, 'From the page')
+      `;
+    });
+
+    const deploys = await withTenant({ tenantId: IDS.tenant1, actorId: IDS.admin1, actorType: 'user' }, (tx) =>
+      listDeploys(tx));
+    expect(deploys.map((d) => [d.iteration, d.source, d.commit.slice(0, 1)])).toEqual([[2, 'page', 'b'], [1, 'setup', 'a']]);
+    expect(deploys[0]).toMatchObject({ requestedBy: expect.any(String), log: 'built fine', previousCommit: OLD });
+    expect(deploys[1]).toMatchObject({ hostUser: 'nolan', requestedBy: null, log: null, changes: [{ pr: 110, title: 'Diagram editor' }] });
   });
 });
