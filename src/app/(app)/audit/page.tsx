@@ -6,6 +6,7 @@ import { EmptyState, PageBody, PageHeader } from '@/components/app-shell';
 import { AdminNav } from '@/components/admin-nav';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
+import { isFieldUserAgent } from '@/lib/auth/field-session';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/ui/format';
 import { cn } from '@/lib/ui/cn';
@@ -23,6 +24,7 @@ interface AuditRow {
   organization_name: string | null;
   reason: string | null;
   ip: string | null;
+  user_agent: string | null;
   chain_seq: string;
 }
 
@@ -68,7 +70,7 @@ export default async function AuditPage({
       tx<AuditRow[]>`
         SELECT a.event_uid, a.occurred_at, a.actor_label, a.actor_type::text, a.actor_role_key,
                a.action, a.outcome::text, a.entity_type, a.entity_id,
-               o.name AS organization_name, a.reason, host(a.ip) AS ip, a.chain_seq
+               o.name AS organization_name, a.reason, host(a.ip) AS ip, a.user_agent, a.chain_seq
         FROM audit_log a
         LEFT JOIN organization o ON o.id = a.organization_id
         ${prefix ? tx`WHERE a.action LIKE ${`${prefix}%`}` : tx``}
@@ -183,6 +185,7 @@ export default async function AuditPage({
                         <div className="text-xs text-ink-faint">
                           {event.actor_role_key ?? event.actor_type}
                           {event.ip && ` · ${event.ip}`}
+                          {isFieldUserAgent(event.user_agent) && ' · from phone (Field view)'}
                         </div>
                       </TableCell>
                       <TableCell>

@@ -122,13 +122,13 @@ export function BackupSettingsCard({
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between gap-2">
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
         <CardTitle className="flex items-center gap-2">
           <Archive className="size-4 text-ink-faint" aria-hidden /> Backups
           {initial.enabled ? <Badge tone="ok">On</Badge> : <Badge tone="warning">Off</Badge>}
         </CardTitle>
         {canManage && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button variant="secondary" size="sm" disabled={busy !== null || !!open || !capabilities.passphraseConfigured}
                     onClick={() => void run('backup')} title={open ? 'A run is already queued' : undefined}>
               {busy === 'backup' ? <Loader2 className="animate-spin" aria-hidden /> : <Play className="size-3.5" aria-hidden />}

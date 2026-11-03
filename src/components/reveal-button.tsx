@@ -81,6 +81,8 @@ export function RevealButton({
   requiresReason,
   requiresStepUp,
   endpoints,
+  large = false,
+  autoHideMs = AUTO_HIDE_MS,
 }: {
   secretId: string;
   label: string;
@@ -92,6 +94,14 @@ export function RevealButton({
    * screen records nothing further — opening it was the audited read.
    */
   endpoints?: { reveal: string; copy?: string } | undefined;
+  /**
+   * Field view (1250): show the value in big, spaced type with digits and
+   * symbols picked out, for reading off a phone and typing on a client's
+   * machine — the usual use on site, where pasting is not an option.
+   */
+  large?: boolean;
+  /** How long a shown value stays up. Field view uses a shorter one. */
+  autoHideMs?: number;
 }) {
   const stepUp = useStepUp();
   const [state, setState] = useState<RevealState>({ status: 'idle' });
@@ -115,6 +125,29 @@ export function RevealButton({
     setState({ status: 'idle' });
     setCopyOutcome(null);
   };
+
+  /*
+   * HIDDEN THE MOMENT THE PAGE IS. Switching apps or tabs, locking the phone:
+   * the browser stops showing the page, and a phone's app switcher takes its
+   * snapshot then — with the password in it, if it was on screen. Dropping the
+   * value on `visibilitychange` keeps it out of that thumbnail and off a
+   * screen nobody is looking at. Coming back means tapping reveal again, which
+   * is one more audit row, and that is the right trade.
+   */
+  useEffect(() => {
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') {
+        if (timer.current) clearTimeout(timer.current);
+        setState((current) => (current.status === 'shown' ? { status: 'idle' } : current));
+      }
+    };
+    document.addEventListener('visibilitychange', onHidden);
+    window.addEventListener('pagehide', onHidden);
+    return () => {
+      document.removeEventListener('visibilitychange', onHidden);
+      window.removeEventListener('pagehide', onHidden);
+    };
+  }, []);
 
   /**
    * One attempt at the reveal, reduced to granted-or-refused.
@@ -156,7 +189,7 @@ export function RevealButton({
         value: result.value.value,
         ...(result.value.auditEventUid ? { auditEventUid: result.value.auditEventUid } : {}),
       });
-      timer.current = setTimeout(hide, AUTO_HIDE_MS);
+      timer.current = setTimeout(hide, autoHideMs);
     } catch {
       setState({ status: 'error', message: 'The request failed. Check your connection and retry.' });
     }
@@ -262,7 +295,7 @@ export function RevealButton({
         }
       >
         {shown ? (
-          <span className="select-all">{state.value}</span>
+          large ? <LargeValue value={state.value ?? ''} /> : <span className="select-all">{state.value}</span>
         ) : (
           // A fixed run of dots, so the mask says nothing about the length.
           <>
@@ -287,7 +320,7 @@ export function RevealButton({
 
       {(shown || copied || copyFailure) && (
         <p className="text-xs text-ink-faint">
-          {shown && `Hides automatically in ${AUTO_HIDE_MS / 1000}s.`}
+          {shown && `Hides automatically in ${Math.round(autoHideMs / 1000)}s, or when you leave the page.`}
           {copied && <span className={cn('text-ok', shown && 'ml-2')}>Copied — recorded as a copy event.</span>}
           {copyFailure && <span className={cn('text-danger', shown && 'ml-2')}>{copyFailure}</span>}
         </p>
@@ -322,5 +355,29 @@ export function RevealButton({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * A password set out to be read and typed: large monospace, a little air
+ * between characters, digits in the brand colour and symbols in amber, so 0/O,
+ * 1/l/I and a stray space are told apart at arm's length. Still selectable.
+ */
+function LargeValue({ value }: { value: string }) {
+  return (
+    <span className="block select-all whitespace-normal break-all py-1 font-mono text-2xl leading-relaxed tracking-[0.08em] text-ink">
+      {Array.from(value).map((ch, i) => (
+        <span
+          key={i}
+          className={
+            ch === ' '
+              ? 'whitespace-pre border-b-2 border-sev-warning'
+              : /[0-9]/.test(ch) ? 'text-brand' : /[A-Za-z]/.test(ch) ? undefined : 'text-sev-warning'
+          }
+        >
+          {ch}
+        </span>
+      ))}
+    </span>
   );
 }

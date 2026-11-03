@@ -28,6 +28,13 @@ interface ShellState {
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
+  /**
+   * Phone width only: the organization drawer slid in over the page. Not
+   * remembered — it is a menu somebody opens to go somewhere, and it closes
+   * when they get there.
+   */
+  drawerOpen: boolean;
+  setDrawerOpen: (open: boolean) => void;
 }
 
 const ShellContext = createContext<ShellState | null>(null);
@@ -45,6 +52,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
    * the server HTML.
    */
   const [sidebarCollapsed, setCollapsed] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     try {
@@ -69,8 +77,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, [sidebarCollapsed, setSidebarCollapsed]);
 
   const value = useMemo<ShellState>(
-    () => ({ sidebarCollapsed, toggleSidebar, setSidebarCollapsed }),
-    [sidebarCollapsed, toggleSidebar, setSidebarCollapsed],
+    () => ({ sidebarCollapsed, toggleSidebar, setSidebarCollapsed, drawerOpen, setDrawerOpen }),
+    [sidebarCollapsed, toggleSidebar, setSidebarCollapsed, drawerOpen],
   );
 
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;

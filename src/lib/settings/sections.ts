@@ -12,7 +12,7 @@ export interface AdminSection {
   /** Shorter, for the sub-navigation. */
   short: string;
   detail: string;
-  icon: 'general' | 'people' | 'security' | 'email' | 'integrations' | 'backups' | 'automation' | 'audit' | 'types' | 'extensions' | 'updates';
+  icon: 'general' | 'people' | 'security' | 'email' | 'integrations' | 'backups' | 'automation' | 'audit' | 'types' | 'extensions' | 'updates' | 'mobile';
 }
 
 export const ADMIN_SECTIONS: readonly AdminSection[] = [
@@ -27,6 +27,10 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
   {
     href: '/settings/security', title: 'Sign-in & security', short: 'Sign-in & security', icon: 'security',
     detail: 'Session limits, single sign-on, RADIUS, two-step for local accounts, and key custody.',
+  },
+  {
+    href: '/settings/mobile', title: 'Mobile access', short: 'Mobile access', icon: 'mobile',
+    detail: 'Field view, the read-only phone view: whether it is offered, its time limits, critical logins and which sections show.',
   },
   {
     href: '/settings/notifications', title: 'Email & notifications', short: 'Email & notifications', icon: 'email',

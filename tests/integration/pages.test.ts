@@ -553,6 +553,10 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     load: async () => (await import('../../src/app/(app)/settings/integrations/page')).default(),
   },
   {
+    name: 'administration, mobile access',
+    load: async () => (await import('../../src/app/(app)/settings/mobile/page')).default(),
+  },
+  {
     name: 'administration, backups',
     load: async () => (await import('../../src/app/(app)/settings/backups/page')).default(),
   },
@@ -629,6 +633,39 @@ const PAGES: { name: string; load: () => Promise<unknown> }[] = [
     name: 'global',
     load: async () => (await import('../../src/app/(app)/global/page')).default(),
   },
+  // Field view (1250), the phone pages under /m. Outside (app), so the
+  // completeness check below does not require them, but they run the same
+  // kind of queries and are listed for the same reason.
+  { name: 'field view, home', load: async () => (await import('../../src/app/m/page')).default() },
+  {
+    name: 'field view, search',
+    load: async () => (await import('../../src/app/m/search/page')).default({ searchParams: p({ q: 'acme' }) }),
+  },
+  ...(['logins', 'devices', 'contacts', 'locations'] as const).map((tab) => ({
+    name: `field view, a client's ${tab}`,
+    load: async () =>
+      (await import('../../src/app/m/c/[organizationId]/page')).default({
+        params: p({ organizationId: IDS.orgAcme }),
+        searchParams: p({ tab }),
+      }),
+  })),
+  {
+    name: 'field view, a login',
+    load: async () =>
+      (await import('../../src/app/m/s/[nodeId]/page')).default({ params: p({ nodeId: credentialId }) }),
+  },
+  {
+    name: 'field view, a device',
+    load: async () =>
+      (await import('../../src/app/m/a/[nodeId]/page')).default({ params: p({ nodeId: IDS.firewall }) }),
+  },
+  { name: 'field view, my vault', load: async () => (await import('../../src/app/m/vault/page')).default() },
+  {
+    name: 'field view, one of my passwords',
+    load: async () =>
+      (await import('../../src/app/m/vault/[entryId]/page')).default({ params: p({ entryId: vaultEntryId }) }),
+  },
+  { name: 'field view, full site', load: async () => (await import('../../src/app/m/full/page')).default() },
   {
     // The Documents directory inside a folder: its own query branch (0810),
     // with the folder's path in the header and pages beside files.

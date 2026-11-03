@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { readJson, serviceRoute } from '@/lib/api/handler';
 import { ApiError } from '@/lib/api/errors';
 import { getSecretService } from '@/lib/services';
+import { assertFieldMayReveal } from '@/lib/field/policy';
 
 const bodySchema = z.object({
   reason: z.string().max(500).optional(),
@@ -22,11 +23,13 @@ const bodySchema = z.object({
  * when" from one lookup, and lets the UI cite it in a break-glass confirmation.
  */
 export const POST = serviceRoute(
-  async ({ request, params, actor }) => {
+  async ({ request, params, actor, identity }) => {
     const secretId = params.secretId;
     if (!secretId || !z.guid().safeParse(secretId).success) {
       throw ApiError.invalid('secretId must be a UUID');
     }
+    // Field view: a critical credential may be off-limits on phones (1250).
+    if (identity.fieldMode) await assertFieldMayReveal(actor, secretId);
 
     const body = await readJson(request, (raw) => {
       const result = bodySchema.safeParse(raw ?? {});

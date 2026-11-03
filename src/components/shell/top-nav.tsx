@@ -21,6 +21,8 @@
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { Menu, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { SearchBox } from './search-box';
 import { cn } from '@/lib/ui/cn';
 import { HelmMark } from '../ui/helm-mark';
@@ -95,17 +97,24 @@ export function TopNav({
   const current = activeTab(pathname);
   const tabs = isClient ? allTabs.filter((t) => !t.adminOnly) : allTabs;
 
+  /*
+   * NARROW SCREENS. Five tabs, the search box and the per-user controls need
+   * about 1,100px in one row; a phone has 390. Below `lg` the tabs move into a
+   * menu behind one button, so the bar never runs past the edge of the screen —
+   * which it used to, taking search, the bell and Sign out off-screen with it.
+   */
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-1 bg-nav-top px-3 text-sm">
+    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-1 bg-nav-top px-2 text-sm sm:px-3">
+      <ScopeMenu tabs={tabs} current={current} />
       <Link
         href="/dashboard"
-        className="mr-2 flex items-center gap-2 rounded-md px-1 py-1 text-nav-ink-active"
+        className="mr-1 flex shrink-0 items-center gap-2 rounded-md px-1 py-1 text-nav-ink-active sm:mr-2"
       >
         <HelmMark className="size-6" />
-        <span className="font-semibold tracking-tight">Helm</span>
+        <span className="hidden font-semibold tracking-tight sm:inline">Helm</span>
       </Link>
 
-      <nav className="flex items-center gap-1" aria-label="Scope">
+      <nav className="hidden items-center gap-1 lg:flex" aria-label="Scope">
         {tabs.map((tab) => {
           const isActive = current?.href === tab.href;
           return (
@@ -126,7 +135,7 @@ export function TopNav({
         })}
       </nav>
 
-      <div className="ml-auto flex items-center gap-0.5">
+      <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-0.5 lg:flex-none">
         {/*
           ONE ICON, AND IT GOES WHERE IT SAYS. Four of the five that used to be
           here did not: Documentation and Help both opened /settings, Assistant
@@ -150,5 +159,82 @@ export function TopNav({
         {utilities}
       </div>
     </header>
+  );
+}
+
+/**
+ * The scope tabs as a menu, for screens too narrow to show them in a row.
+ * Closes on navigation, on a click outside and on Escape.
+ */
+function ScopeMenu({
+  tabs,
+  current,
+}: {
+  tabs: readonly TopNavTab[];
+  current: TopNavTab | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+  const box = useRef<HTMLDivElement>(null);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: closing on navigation is the point; pathname is the trigger, not an input.
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={box} className="relative lg:hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls="scope-menu"
+        aria-label={open ? 'Close the menu' : 'Open the menu'}
+        className="flex size-9 items-center justify-center rounded-md text-nav-ink-active hover:bg-white/10"
+      >
+        {open ? <X className="size-5" aria-hidden /> : <Menu className="size-5" aria-hidden />}
+      </button>
+      {open && (
+        <nav
+          id="scope-menu"
+          aria-label="Scope"
+          className="absolute left-0 top-11 z-40 w-60 overflow-hidden rounded-lg border border-border bg-surface-raised py-1 text-sm shadow-lg"
+        >
+          {tabs.map((tab) => {
+            const isActive = current?.href === tab.href;
+            return (
+              <Link
+                key={tab.href}
+                href={tab.href}
+                aria-current={isActive ? 'page' : undefined}
+                onClick={() => setOpen(false)}
+                className={cn(
+                  'block px-4 py-2.5 font-medium',
+                  isActive ? 'bg-brand-tint text-brand' : 'text-ink hover:bg-surface-sunken',
+                )}
+              >
+                {tab.label}
+              </Link>
+            );
+          })}
+        </nav>
+      )}
+    </div>
   );
 }

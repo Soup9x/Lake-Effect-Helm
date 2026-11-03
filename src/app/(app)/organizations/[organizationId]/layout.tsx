@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { isUuid } from '@/lib/ids';
 import { withTenant } from '@/lib/db/client';
 import { actorOf, getServerIdentity } from '@/lib/auth/server-identity';
-import { Sidebar } from '@/components/shell/sidebar';
+import { MobileDrawerButton, Sidebar } from '@/components/shell/sidebar';
 import { loadOrgNav } from '@/lib/nav/org-sidebar';
 import { getSidebarLayout } from '@/lib/nav/sidebar-queries';
 
@@ -70,7 +70,10 @@ export default async function OrganizationLayout({
         layout={data.layout}
         customised={data.customised}
       />
-      <main className="min-w-0 flex-1 overflow-y-auto bg-canvas">{children}</main>
+      <main className="min-w-0 flex-1 overflow-y-auto bg-canvas">
+        <MobileDrawerButton orgName={data.org.name} />
+        {children}
+      </main>
     </div>
   );
 }

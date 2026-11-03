@@ -86,7 +86,7 @@ export default async function CoveragePage({
           </Card>
         ) : (
           <Card>
-            <CardContent className="overflow-x-auto p-0">
+            <CardContent className="relative overflow-x-auto p-0">
               <table className="w-full border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-border">

@@ -21,12 +21,15 @@ import { readJsonObjectOrEmpty } from '@/lib/api/body';
 import { attemptLocalLogin } from '@/lib/auth/local';
 import { clientIp } from '@/lib/auth/identity';
 import { setSessionCookie } from '@/lib/auth/session-cookie';
+import { fieldPolicyForUser, setSessionField } from '@/lib/auth/field-session';
 
 interface LoginBody {
   email?: unknown;
   password?: unknown;
   /** The second step (0960), when the first answer asked for one. */
   code?: unknown;
+  /** Signing in on a phone: start the session in Field view, read-only (1250). */
+  field?: unknown;
 }
 
 const INVALID = 'Those credentials are not valid.';
@@ -116,8 +119,22 @@ export const POST = publicRoute(async (request) => {
     );
   }
 
+  /*
+   * A phone sign-in is BORN read-only, rather than made so by the next page:
+   * there is no moment in which this session could write. Not offered while
+   * the password still has to be changed, because changing it is a write and
+   * the person would be stuck; and not when an administrator switched Field
+   * view off, in which case the phone gets the full (responsive) site.
+   */
+  let fieldMode = false;
+  if (body.field === true && !result.mustChange && (await fieldPolicyForUser(result.userId)).enabled) {
+    await setSessionField(result.sessionToken, true);
+    fieldMode = true;
+  }
+
   const response = NextResponse.json({
     ok: true,
+    fieldMode,
     mustChange: result.mustChange,
     expires: result.expires.toISOString(),
     // Only when this sign-in just set up an authenticator: shown once.

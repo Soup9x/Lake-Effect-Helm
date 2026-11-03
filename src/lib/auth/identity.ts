@@ -21,6 +21,8 @@ import { bearerFrom, verifyToken, type TokenKind, type TokenRejection } from './
 import { verifyDeviceSignature } from './device-signature';
 import { extensionMayCall } from '../extension/routes';
 import { getSessionUser } from './session';
+import { sessionCookieName } from './session-cookie';
+import { fieldMayCall, markFieldUserAgent, sessionIsField } from './field-session';
 import { isIP } from 'node:net';
 import { envInt } from '../env';
 
@@ -36,6 +38,8 @@ export interface RequestIdentity {
   scopes?: string[];
   ip?: string;
   userAgent?: string;
+  /** A Field view (phone) session: read-only until upgraded (1250). */
+  fieldMode?: boolean;
 }
 
 /** Header a browser client sends when the user belongs to more than one tenant. */
@@ -144,13 +148,29 @@ async function resolveSessionIdentity(
 
   const tenantId = selectTenant(memberships.map((m) => m.tenant_id), requested);
 
+  /*
+   * FIELD VIEW IS READ-ONLY HERE, before any handler runs (1250). The pages a
+   * phone session is shown only link to reads, but the cookie can call any
+   * route; this is what makes "read-only" true rather than a layout choice.
+   * Its user agent is marked so the audit rows its reveals write say so.
+   */
+  const token = request.cookies.get(sessionCookieName())?.value;
+  const fieldMode = token ? await sessionIsField(token) : false;
+  if (fieldMode && !fieldMayCall(request.method, request.nextUrl.pathname)) {
+    throw ApiError.forbidden(
+      'Field view is read-only. Open the full site, which asks for your password again, to make changes.',
+    );
+  }
+
   return {
     tenantId,
     actorId: user.id,
     actorType: 'user',
     method: 'session',
     ...(ip ? { ip } : {}),
-    ...(userAgent ? { userAgent } : {}),
+    ...(fieldMode
+      ? { userAgent: markFieldUserAgent(userAgent), fieldMode: true }
+      : userAgent ? { userAgent } : {}),
   };
 }
 

@@ -264,7 +264,7 @@ export default async function OrganizationPage({
             .join(' · ') || undefined
         }
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {/*
               The logo sits in the header rather than in a settings panel,
               because this is the page where somebody notices it is missing.
