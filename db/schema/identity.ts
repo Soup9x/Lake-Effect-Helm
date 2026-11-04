@@ -278,6 +278,8 @@ export const stepUpVerification = pgTable('step_up_verification', {
   expiresAt: tstz('expires_at').notNull(),
   requestId: text('request_id'),
   ip: inet('ip'),
+  /** An sso_reauth verification spent by a one-shot action (1270). */
+  consumedAt: tstz('consumed_at'),
 }, (t) => [index('step_up_active_idx').on(t.userId, t.expiresAt)]);
 
 export type AppUser = typeof appUser.$inferSelect;

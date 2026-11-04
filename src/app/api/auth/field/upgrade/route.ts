@@ -3,14 +3,13 @@ import { publicRoute, readJson } from '@/lib/api/handler';
 import { ApiError, zodIssues } from '@/lib/api/errors';
 import { installSessionResolver } from '@/lib/auth/bootstrap';
 import { resolveIdentity } from '@/lib/auth/identity';
-import { reauthenticate } from '@/lib/auth/reauthenticate';
+import { hasReauth, reauthenticate, reauthFields } from '@/lib/auth/reauthenticate';
 import { sessionCookieName } from '@/lib/auth/session-cookie';
 import { setSessionField } from '@/lib/auth/field-session';
 
 const bodySchema = z.object({
-  password: z.string().min(1).max(1024),
-  code: z.string().trim().max(32).optional(),
-});
+  ...reauthFields,
+}).refine(hasReauth, { message: 'your password, or a confirmation with your sign-in provider', path: ['password'] });
 
 /**
  * POST /api/auth/field/upgrade — leave Field view for the full site (1250).
@@ -37,6 +36,7 @@ export const POST = publicRoute(async (request) => {
 
   await reauthenticate(request, identity, {
     password: body.password,
+    ssoTicket: body.ssoTicket,
     code: body.code,
     secondFactor: 'if_enrolled',
   });
