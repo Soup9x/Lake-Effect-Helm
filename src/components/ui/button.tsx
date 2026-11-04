@@ -23,7 +23,7 @@ const button = cva(
         /*
          * The shell's two action weights, distinct from `primary`.
          *
-         * `primary` is Lake Effect blue and still marks the primary action
+         * `primary` is Helm blue and still marks the primary action
          * INSIDE a form or dialog. These two are the view-header pair: `cta`
          * creates a record, `action` does something adjacent to creating one
          * (import, export). Keeping them separate means a dialog's submit button

@@ -1,4 +1,4 @@
-# Lake Effect Helm — RADIUS Authentication
+# Helm — RADIUS Authentication
 
 Helm has three doors: Microsoft Entra (SSO), a local password, and RADIUS. This
 document covers the third. It assumes

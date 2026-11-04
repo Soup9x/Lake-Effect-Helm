@@ -1,4 +1,4 @@
-# Lake Effect Helm browser extension
+# Helm browser extension
 
 Looks up the credentials for the site you are on, and fills or copies a
 username, a standard password or a one-time code. Click a credential to fill

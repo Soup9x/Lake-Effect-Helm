@@ -38,7 +38,7 @@ function config(server: FakeSmtp, overrides: Partial<RelayConfig> = {}): RelayCo
     username: null,
     password: null,
     fromAddress: 'helm@msp.test',
-    fromName: 'Lake Effect Helm',
+    fromName: 'Helm',
     ...overrides,
   };
 }
@@ -231,8 +231,8 @@ describe('what arrives', () => {
 
   it('sets a From header with the display name quoted', async () => {
     const server = await relay();
-    await send(config(server, { fromName: 'Lake Effect Helm' }));
-    expect(server.received[0]!.raw).toContain('Lake Effect Helm');
+    await send(config(server, { fromName: 'Helm' }));
+    expect(server.received[0]!.raw).toContain('Helm');
     expect(server.received[0]!.from).toBe('helm@msp.test');
   });
 
@@ -266,8 +266,8 @@ describe('the From header', () => {
   });
 
   it('quotes a display name', () => {
-    expect(fromHeader({ ...base, fromName: 'Lake Effect Helm' }))
-      .toBe('"Lake Effect Helm" <helm@msp.test>');
+    expect(fromHeader({ ...base, fromName: 'Helm' }))
+      .toBe('"Helm" <helm@msp.test>');
   });
 
   it('strips a quote out of the display name rather than producing a broken header', () => {

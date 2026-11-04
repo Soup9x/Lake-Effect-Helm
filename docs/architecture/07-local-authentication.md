@@ -1,4 +1,4 @@
-# Lake Effect Helm — Local Authentication
+# Helm — Local Authentication
 
 Everything about local passwords in Helm follows from one sentence, so it is
 worth putting first:

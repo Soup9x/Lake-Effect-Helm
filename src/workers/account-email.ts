@@ -142,19 +142,19 @@ function render(
   switch (row.kind) {
     case 'access_granted':
       return {
-        subject: `You have access to ${row.tenant_name} in Lake Effect Helm`,
+        subject: `You have access to ${row.tenant_name} in Helm`,
         text: [
           hello, '',
-          `You have been given access to ${row.tenant_name} in Lake Effect Helm.`,
+          `You have been given access to ${row.tenant_name} in Helm.`,
           `Sign in at ${signIn} with your work account (${row.email}).`,
         ].join('\n'),
       };
     case 'password_setup':
       return {
-        subject: `Set up your Lake Effect Helm account for ${row.tenant_name}`,
+        subject: `Set up your Helm account for ${row.tenant_name}`,
         text: [
           hello, '',
-          `An account has been created for you at ${row.tenant_name} in Lake Effect Helm.`,
+          `An account has been created for you at ${row.tenant_name} in Helm.`,
           'Choose your password here:', '',
           link!.url, '',
           `The link works once and expires in ${lasts(link!.expiresAt)}. After that, sign in at ${signIn} with ${row.email}.`,
@@ -163,10 +163,10 @@ function render(
       };
     case 'password_reset':
       return {
-        subject: 'Reset your Lake Effect Helm password',
+        subject: 'Reset your Helm password',
         text: [
           hello, '',
-          `An administrator at ${row.tenant_name} sent you a link to set a new Lake Effect Helm password:`, '',
+          `An administrator at ${row.tenant_name} sent you a link to set a new Helm password:`, '',
           link!.url, '',
           `The link works once and expires in ${lasts(link!.expiresAt)}. Your current password keeps working until you use it.`,
         ].join('\n'),

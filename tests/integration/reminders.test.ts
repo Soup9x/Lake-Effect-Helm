@@ -111,7 +111,7 @@ async function configureRelay(options: {
     VALUES (
       ${IDS.tenant1}::uuid, ${options.enabled ?? true}, ${smtp.host}, ${smtp.port},
       'starttls', true, ${smtp.certificatePem},
-      'helm@northwind.test', 'Lake Effect Helm',
+      'helm@northwind.test', 'Helm',
       ${options.domains ?? []}
     )
     ON CONFLICT (tenant_id) DO UPDATE SET

@@ -1,4 +1,4 @@
-# Lake Effect Helm — Security Model
+# Helm — Security Model
 
 This document states what Helm guarantees, how, and — importantly — what it
 does not guarantee. A credential platform that overstates its protections is

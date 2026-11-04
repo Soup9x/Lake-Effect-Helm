@@ -1,6 +1,6 @@
 # On-Premises Docker Installation Guide
 
-Installing Lake Effect Helm on a single on-premises host with Docker Compose.
+Installing Helm on a single on-premises host with Docker Compose.
 
 **[Quick Start](#quick-start-5-minute-deployment) runs the whole install for
 you.** Everything after it is the reference manual: the same five steps done by

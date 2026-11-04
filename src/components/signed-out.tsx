@@ -16,7 +16,7 @@ export function SignedOut({ reason }: { reason: 'unauthenticated' | 'no-membersh
     <div className="grid min-h-screen place-items-center bg-surface px-6">
       <div className="w-full max-w-sm text-center">
         <HelmMark className="mx-auto size-12" />
-        <h1 className="mt-4 text-lg font-semibold tracking-tight text-ink">Lake Effect Helm</h1>
+        <h1 className="mt-4 text-lg font-semibold tracking-tight text-ink">Helm</h1>
 
         {reason === 'unauthenticated' ? (
           <>

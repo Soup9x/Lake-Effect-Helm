@@ -1,4 +1,4 @@
-# Lake Effect Helm — Generic OpenID Connect
+# Helm — Generic OpenID Connect
 
 Helm now has four doors: Microsoft Entra (SSO), a local password, RADIUS, and
 any identity provider that speaks OpenID Connect. This document covers the

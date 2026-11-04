@@ -365,7 +365,7 @@ function assemble(bodies: string[], meta: DocumentMeta): Buffer {
   // the same way as page content puts mojibake in the reader's title bar, which
   // is the first thing anyone sees.
   objects[infoId] =
-    `<< /Title ${pdfTextString(meta.title)} /Producer (Lake Effect Helm) ` +
+    `<< /Title ${pdfTextString(meta.title)} /Producer (Helm) ` +
     `/CreationDate (D:${pdfDate(new Date())}) >>`;
 
   const chunks: Buffer[] = [Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'latin1')];

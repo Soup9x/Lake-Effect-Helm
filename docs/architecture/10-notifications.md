@@ -1,4 +1,4 @@
-# Lake Effect Helm — Outbound Notifications
+# Helm — Outbound Notifications
 
 `0400` removed two-person approval from credential exports and said, in as many
 words, that detection replaces prevention. Detection that lives only in a log
@@ -47,8 +47,8 @@ too. **Discord refuses it with a 400** — it wants `content` or `embeds` — an
 - **slack** — `{ text, attachments }`. The whole sentence goes in `text`,
   because that is the notification preview.
 - **discord** — `content` **and** `embeds`. Content alone is unreadable in a
-  channel; an embed alone produces a push notification saying only "Lake Effect
-  Helm sent a message". Discord's 25-field and 1024-character embed limits are
+  channel; an embed alone produces a push notification saying only "Helm sent
+  a message". Discord's 25-field and 1024-character embed limits are
   enforced in code — exceeding either is a 400.
 - **teams** — an Adaptive Card inside `{ type: 'message', attachments: [...] }`,
   which is what Power Automate **Workflows** accepts. The `@type: MessageCard`

@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { THEME_SCRIPT } from '@/lib/ui/theme';
 
 export const metadata: Metadata = {
-  title: 'Lake Effect Helm',
+  title: 'Helm',
   description: 'MSP documentation and credential platform',
   // A credential vault has no business in a search index or a link preview.
   robots: { index: false, follow: false, nocache: true },

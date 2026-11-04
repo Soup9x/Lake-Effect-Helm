@@ -72,7 +72,7 @@ fi
 mkdir -p "$SECRETS_DIR"
 chmod 0700 "$SECRETS_DIR"
 
-echo "Generating secrets for Lake Effect Helm"
+echo "Generating secrets for Helm"
 echo
 
 # -----------------------------------------------------------------------------

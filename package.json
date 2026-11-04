@@ -2,7 +2,7 @@
   "name": "lake-effect-helm",
   "version": "0.1.0",
   "private": true,
-  "description": "Lake Effect Helm — multi-tenant MSP documentation and credential platform.",
+  "description": "Helm — multi-tenant MSP documentation and credential platform.",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=26",

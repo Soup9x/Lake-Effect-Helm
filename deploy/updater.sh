@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Lake Effect Helm — the host updater
+# Helm — the host updater
 #
 # Installs an update somebody asked for on Administration → Updates. Run once a
 # minute, as root, by the helm-updater systemd timer that deploy/setup.sh

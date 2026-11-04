@@ -1,4 +1,4 @@
-# Testing Lake Effect Helm
+# Testing Helm
 
 What the suites are, how to run them, how to write a test that would have
 caught the bug in front of you, and which parts of Helm still need tests.
