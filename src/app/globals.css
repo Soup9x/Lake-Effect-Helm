@@ -23,7 +23,7 @@
   --color-ink-muted: oklch(50% 0.012 250);
   --color-ink-faint: oklch(63% 0.010 250);
 
-  /* Lake Effect: a cold, deep blue. */
+  /* Helm: a cold, deep blue. */
   --color-brand: oklch(48% 0.13 235);
   --color-brand-strong: oklch(40% 0.14 235);
   --color-brand-tint: oklch(96% 0.02 235);

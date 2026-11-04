@@ -1,4 +1,4 @@
-# Lake Effect Helm — Cryptographic Operations
+# Helm — Cryptographic Operations
 
 How the secret engine works in practice: what happens on a read, on a write, and
 during a key rotation. Companion to `01-security-model.md`, which covers *why*.

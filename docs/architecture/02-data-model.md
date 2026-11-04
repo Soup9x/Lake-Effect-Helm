@@ -1,4 +1,4 @@
-# Lake Effect Helm — Data Model
+# Helm — Data Model
 
 Companion to `01-security-model.md`. This one covers shape rather than
 protection: why the tables are arranged the way they are, and which alternatives

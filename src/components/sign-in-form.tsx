@@ -206,7 +206,7 @@ export function SignInForm({ entraConfigured, oidcOptions, ssoError, next }: Pro
     <div className="w-full max-w-sm">
       <div className="text-center">
         <HelmMark className="mx-auto size-12" />
-        <h1 className="mt-4 text-lg font-semibold tracking-tight text-ink">Lake Effect Helm</h1>
+        <h1 className="mt-4 text-lg font-semibold tracking-tight text-ink">Helm</h1>
         <p className="mt-1 text-sm text-ink-muted">Sign in to continue.</p>
       </div>
 

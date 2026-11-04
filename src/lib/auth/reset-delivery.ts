@@ -108,7 +108,7 @@ class WebhookResetDelivery implements ResetDelivery {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         to: message.email,
-        subject: 'Reset your Lake Effect Helm password',
+        subject: 'Reset your Helm password',
         text: renderResetText(message),
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
@@ -127,7 +127,7 @@ function renderResetText(message: ResetMessage): string {
   return [
     greeting,
     '',
-    'Somebody asked to reset the local password on your Lake Effect Helm account.',
+    'Somebody asked to reset the local password on your Helm account.',
     'If that was not you, you can ignore this message — the link below does',
     'nothing until it is opened, and your current password still works.',
     '',

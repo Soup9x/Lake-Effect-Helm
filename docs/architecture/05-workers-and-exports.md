@@ -1,4 +1,4 @@
-# Lake Effect Helm — Background Workers and the Export Engine
+# Helm — Background Workers and the Export Engine
 
 Everything in the first four documents happens inside a request. This one covers
 the two subsystems that do not: the jobs that run on a schedule, and the engine

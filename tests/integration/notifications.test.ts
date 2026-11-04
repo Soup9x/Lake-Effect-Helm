@@ -444,7 +444,7 @@ async function configureRelay(options: { enabled?: boolean; domains?: string[] }
       VALUES (
         ${IDS.tenant1}::uuid, ${options.enabled ?? true}, ${smtp.host}, ${smtp.port},
         'starttls', true, ${smtp.certificatePem},
-        'helm@northwind.test', 'Lake Effect Helm', ${options.domains ?? ['northwind.test']})
+        'helm@northwind.test', 'Helm', ${options.domains ?? ['northwind.test']})
       ON CONFLICT (tenant_id) DO UPDATE SET
         enabled = EXCLUDED.enabled, host = EXCLUDED.host, port = EXCLUDED.port,
         tls_pinned_certificate = EXCLUDED.tls_pinned_certificate,

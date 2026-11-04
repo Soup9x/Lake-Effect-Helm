@@ -161,7 +161,7 @@ describe('sending through Microsoft 365', () => {
     const [mail] = graph.sent;
     expect(mail).toMatchObject({ tenant: 'northwind.onmicrosoft.com', mailbox: MAILBOX, saveToSentItems: false });
     expect(mail!.message.toRecipients).toEqual([{ emailAddress: { address: 'new-graph@northwind.test' } }]);
-    expect(mail!.message.subject).toMatch(/Set up your Lake Effect Helm account/);
+    expect(mail!.message.subject).toMatch(/Set up your Helm account/);
     expect(mail!.message.body.content).toContain('https://helm.northwind.test/sign-in/reset?token=');
     expect(mail!.message.internetMessageHeaders).toContainEqual({ name: 'X-Helm-Notification', value: '1' });
     expect((await emailRow('new-graph@northwind.test'))!.status).toBe('sent');

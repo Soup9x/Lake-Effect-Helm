@@ -1,4 +1,4 @@
-# Running Lake Effect Helm on an on-premises server
+# Running Helm on an on-premises server
 
 A working install from a bare host, and the operational facts that come with
 holding every client's credentials on a machine you own.

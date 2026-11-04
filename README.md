@@ -1,4 +1,4 @@
-# Lake Effect Helm
+# Helm
 
 [![CI](https://github.com/Soup9x/Lake-Effect-Helm/actions/workflows/ci.yml/badge.svg)](https://github.com/Soup9x/Lake-Effect-Helm/actions/workflows/ci.yml)
 

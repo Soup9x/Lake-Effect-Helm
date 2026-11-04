@@ -1,5 +1,5 @@
 # =============================================================================
-# Lake Effect Helm — production image
+# Helm — production image
 #
 # One image, two entry points: the web tier (`next start` over the standalone
 # build) and the background worker (a single bundled file). They share a build

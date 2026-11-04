@@ -18,7 +18,7 @@ import type { EncryptionContext } from '../crypto/kek';
 import { getKekProvider } from '../services';
 import { base32Encode, buildOtpAuthUri, verifyTotp } from '../crypto/totp';
 
-const ISSUER = 'Lake Effect Helm';
+const ISSUER = 'Helm';
 const PERIOD_SECONDS = 30;
 const RECOVERY_CODES = 10;
 /** A sign-in that shows a new seed reuses it for this long, so a resubmission matches. */

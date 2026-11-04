@@ -182,7 +182,7 @@ export function slack(event: NotificationEvent): unknown {
  *
  * `content` AND `embeds`: content is what appears in a notification preview and
  * a mobile banner, the embed is what is readable in the channel. An embed alone
- * produces a push notification that says only "Lake Effect Helm sent a message".
+ * produces a push notification that says only "Helm sent a message".
  *
  * Discord caps an embed at 25 fields and 1024 characters per value; the slice
  * and truncation below are those limits, not taste. Exceeding either is a 400,
@@ -285,7 +285,7 @@ function titleFor(event: string): string {
     case 'task.overdue':
       return 'Checklist step overdue';
     default:
-      return 'Lake Effect Helm';
+      return 'Helm';
   }
 }
 

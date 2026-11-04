@@ -1,4 +1,4 @@
-# Lake Effect Helm — UniFi Network Integration
+# Helm — UniFi Network Integration
 
 Documentation goes stale because keeping it current is manual. A client's switch
 stack changes and nobody updates the page. This reads the controller instead:

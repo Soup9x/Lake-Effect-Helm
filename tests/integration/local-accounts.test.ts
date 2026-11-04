@@ -61,7 +61,7 @@ async function configureRelay(): Promise<void> {
     INSERT INTO smtp_setting (tenant_id, enabled, host, port, security, tls_verify, tls_pinned_certificate,
                               from_address, from_name, allowed_recipient_domains)
     VALUES (${IDS.tenant1}::uuid, true, ${relay.host}, ${relay.port}, 'starttls', true, ${relay.certificatePem},
-            'helm@northwind.test', 'Lake Effect Helm', '{}')
+            'helm@northwind.test', 'Helm', '{}')
     ON CONFLICT (tenant_id) DO UPDATE SET enabled = true, host = EXCLUDED.host, port = EXCLUDED.port,
       tls_pinned_certificate = EXCLUDED.tls_pinned_certificate`);
 }
@@ -163,7 +163,7 @@ describe('Helm emails a link', () => {
     expect(relay.received).toHaveLength(1);
     const mail = relay.received[0]!;
     expect(mail.to).toEqual(['new-sam@northwind.test']);
-    expect(subjectOf(mail)).toMatch(/Set up your Lake Effect Helm account/);
+    expect(subjectOf(mail)).toMatch(/Set up your Helm account/);
     const link = linkIn(bodyOf(mail));
     expect(link?.[2]).toBe('&setup=1');
     expect((await emails('new-sam@northwind.test'))[0]!.status).toBe('sent');

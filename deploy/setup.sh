@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Lake Effect Helm — turnkey on-premises setup
+# Helm — turnkey on-premises setup
 #
 #   sudo ./deploy/setup.sh
 #
@@ -78,7 +78,7 @@ die()   { printf '\n%sFAILED:%s %s\n\n' "$BOLD$RED" "$RESET" "$*" >&2; exit 1; }
 
 usage() {
   cat <<'USAGE'
-Lake Effect Helm — turnkey on-premises setup
+Helm — turnkey on-premises setup
 
   sudo ./deploy/setup.sh [options]
 
@@ -786,7 +786,7 @@ updater() {
 
   cat > /etc/systemd/system/helm-updater.service <<UNIT
 [Unit]
-Description=Lake Effect Helm updater (installs updates requested on Administration > Updates)
+Description=Helm updater (installs updates requested on Administration > Updates)
 After=docker.service
 Wants=docker.service
 
@@ -1070,7 +1070,7 @@ NEXT
 # -----------------------------------------------------------------------------
 main() {
   printf '%s\n' "$BOLD"
-  printf 'Lake Effect Helm — on-premises setup\n'
+  printf 'Helm — on-premises setup\n'
   printf '%s' "$RESET"
   note "$REPO_ROOT"
 

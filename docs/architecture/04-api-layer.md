@@ -1,4 +1,4 @@
-# Lake Effect Helm — API Layer
+# Helm — API Layer
 
 How a request becomes a tenant-scoped database transaction, and what stops it
 becoming an untenanted one. Companion to `01-security-model.md` (guarantees) and

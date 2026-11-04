@@ -1,4 +1,4 @@
-# Lake Effect Helm — Web Interface
+# Helm — Web Interface
 
 Next.js App Router, Tailwind CSS v4 and a shadcn/ui-shaped component layer.
 Every page is a server component rendering inside one authenticated shell; the

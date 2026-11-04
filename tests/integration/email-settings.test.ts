@@ -81,7 +81,7 @@ const VALID = {
   username: 'helm',
   password: 'relay-secret',
   fromAddress: 'helm@northwind.test',
-  fromName: 'Lake Effect Helm',
+  fromName: 'Helm',
   allowedRecipientDomains: ['northwind.test'],
 };
 

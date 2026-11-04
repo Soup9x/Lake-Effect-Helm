@@ -405,7 +405,7 @@ export function SmtpSettingsCard({
                   id="smtp-from-name"
                   value={form.fromName ?? ''}
                   onChange={(e) => set('fromName', e.target.value || null)}
-                  placeholder="Lake Effect Helm"
+                  placeholder="Helm"
                   maxLength={120}
                 />
                 <FieldHint>What appears before the address in a mail client.</FieldHint>
