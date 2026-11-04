@@ -373,11 +373,30 @@ the interface retries the original action as a new request rather than replaying
 one (`src/lib/ui/step-up.ts`).
 
 RADIUS users can step up: `attemptLocalLogin()` tries the directory first, and
-the recorded method is `password` either way. An account with no local password
-and no RADIUS — SSO-only — **cannot** step up, and the route says so specifically
-rather than answering "wrong password" forever. `step_up_verification.method`
-already permits `webauthn`, `totp` and `sso_reauth`; none of those factors exists
-in this product yet.
+the recorded method is `password` either way. An account linked to a sign-in
+provider (the OpenID Connect card, or Entra from `.env`) can instead **sign in to
+that provider again** (1270, `src/lib/auth/sso-reauth.ts`):
+
+- The prompt opens `/api/auth/reauth/sso/start?t=<ticket>` in a small window. It
+  sends the person to the provider with `prompt=login`, `max_age=0`, PKCE and a
+  nonce, on the **same redirect URI as sign-in**, so nothing new is registered at
+  the provider. state, nonce, verifier and user ride in an AES-GCM cookie keyed
+  from `AUTH_SECRET`, scoped to `/api/auth/callback`.
+- The Auth.js catch-all hands a callback to `finishSsoReauth()` first; it claims
+  it only when that cookie is present and its state matches. The code is swapped
+  for an id_token, whose signature (provider JWKS), issuer, audience, expiry and
+  nonce are checked; its `sub` must be an `auth_account` already linked to the
+  session's user; and `auth_time` (or `iat`) must be after the button was pressed.
+- Then `helm.record_sso_reauth(ticket)` writes an ordinary step-up row with method
+  `sso_reauth`, so a protected reveal is satisfied exactly as by the password.
+- The one-shot actions (Field view upgrade, update request, extension pairing)
+  pass `ssoTicket` instead of `password`; `helm.consume_sso_reauth()` spends it
+  once, within five minutes. When the action asks for the authenticator code and
+  the person has one set up in Helm, it is still required.
+
+An account with no local password, no RADIUS and no linked provider cannot step
+up, and the route says so specifically rather than answering "wrong password"
+forever. `webauthn` and `totp` remain permitted methods with no writer.
 
 **An asymmetry worth knowing.** The two gates do not key on the same column:
 

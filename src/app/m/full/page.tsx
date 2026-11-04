@@ -14,8 +14,8 @@ export default function FieldFullSite() {
         <h1 className="text-lg font-semibold tracking-tight text-ink">Open the full site</h1>
       </div>
       <p className="text-sm text-ink-muted">
-        Field view is read-only. The full site lets this session make changes, so it asks for your
-        password again first.
+        Field view is read-only. The full site lets this session make changes, so it asks you to
+        confirm it is you first.
       </p>
       <FieldUpgradeForm />
     </div>

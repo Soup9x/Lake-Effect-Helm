@@ -1,5 +1,5 @@
 -- =============================================================================
--- 1270 — Test notifications say "Helm"
+-- 1280 — Test notifications say "Helm"
 -- =============================================================================
 --
 -- The product is now called Helm. Migrations are immutable, so the test
