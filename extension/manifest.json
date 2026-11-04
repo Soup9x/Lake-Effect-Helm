@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Helm",
   "short_name": "Helm",
-  "version": "0.5.1",
+  "version": "0.6.1",
   "description": "Look up, fill, save and copy credentials from your Helm server for the site you are on.",
   "minimum_chrome_version": "116",
   "icons": {

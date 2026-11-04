@@ -80,7 +80,7 @@ root.innerHTML = `<style>
   .icon.locked { background: #4b5563; }
   iframe { position: absolute; z-index: 2147483647; border: 0; border-radius: 10px; box-shadow: 0 8px 28px #0005;
     color-scheme: normal; background: transparent; }
-  iframe.bar { position: fixed; top: 12px; right: 12px; width: 380px; }
+  iframe.bar { position: fixed; top: 12px; right: 12px; width: 400px; }
 </style>`;
 
 let status: Status = { show: false, count: 0, locked: false };
@@ -118,8 +118,8 @@ async function openMenu(field: HTMLInputElement): Promise<void> {
   frame.src = `${chrome.runtime.getURL('menu.html')}#${opened.token}`;
   frame.title = 'Helm';
   frame.setAttribute('allowtransparency', 'true');
-  frame.style.width = `${Math.max(280, Math.min(360, field.offsetWidth))}px`;
-  frame.style.height = `${Math.min(64 + Math.max(1, status.count) * 52, 300)}px`;
+  frame.style.width = `${Math.max(300, Math.min(380, field.offsetWidth))}px`;
+  frame.style.height = `${Math.min(70 + Math.max(1, status.count) * 56, 320)}px`;
   place(field, frame, true);
   root.append(frame);
   menu = { frame, field, token: opened.token };
@@ -261,7 +261,7 @@ chrome.runtime.onMessage.addListener((message: { kind?: string; token?: string; 
   } else if (message.kind === 'helm-bar-size' && bar && typeof message.height === 'number') {
     bar.frame.style.height = `${Math.min(Math.max(message.height, 60), 520)}px`;
   } else if (message.kind === 'helm-menu-size' && menu && typeof message.height === 'number') {
-    menu.frame.style.height = `${Math.min(Math.max(message.height, 40), 320)}px`;
+    menu.frame.style.height = `${Math.min(Math.max(message.height, 40), 340)}px`;
   } else if (message.kind === 'helm-menu-close') closeMenu();
   else if (message.kind === 'helm-status-changed') void refreshStatus(true);
   return false;
