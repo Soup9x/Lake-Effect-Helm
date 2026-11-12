@@ -1,3 +1,4 @@
+import { cspNonce } from '@/lib/ui/csp-nonce';
 import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
@@ -59,7 +60,7 @@ export default async function FieldLayout({ children }: { children: ReactNode })
 
   return (
     <>
-      <ThemeSync accountTheme={shell.preferences.theme} />
+      <ThemeSync accountTheme={shell.preferences.theme} nonce={await cspNonce()} />
       <div className="min-h-screen bg-canvas pb-20">
         <FieldTopBar name={identity.name} />
         <main className="mx-auto max-w-xl px-3 py-3">{children}</main>

@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import type { ReactNode } from 'react';
 import { THEME_SCRIPT } from '@/lib/ui/theme';
+import { cspNonce } from '@/lib/ui/csp-nonce';
+import { CspClient } from '@/components/csp-client';
 
 export const metadata: Metadata = {
   title: 'Helm',
@@ -23,7 +25,8 @@ export const viewport: Viewport = {
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const nonce = await cspNonce();
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -34,9 +37,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           arrives, and React would otherwise object to the attribute it added.
         */}
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: a constant from lib/ui/theme.ts with no interpolated input */}
-        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      <body className="min-h-screen antialiased">{children}</body>
+      <body className="min-h-screen antialiased">
+        <CspClient />
+        {children}
+      </body>
     </html>
   );
 }

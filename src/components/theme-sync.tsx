@@ -23,10 +23,14 @@ import { THEME_STORAGE_KEY } from '@/lib/ui/theme';
  * from the account on every load costs nothing and keeps the account value
  * authoritative until somebody overrides it here.
  *
+ * `nonce` is this response's script nonce (lib/ui/csp.ts), which the layout
+ * reads with cspNonce(); without it the page's Content Security Policy would
+ * refuse to run this.
+ *
  * `system` emits nothing at all: there is no attribute to set, and removing one
  * would undo the choice the first script just made.
  */
-export function ThemeSync({ accountTheme }: { accountTheme: Theme }) {
+export function ThemeSync({ accountTheme, nonce }: { accountTheme: Theme; nonce?: string | undefined }) {
   const theme = readTheme(accountTheme);
   if (theme === 'system') return null;
 
@@ -49,5 +53,5 @@ export function ThemeSync({ accountTheme }: { accountTheme: Theme }) {
     + `document.documentElement.setAttribute('data-theme','${theme}')}}catch(e2){}}})();`;
 
   // biome-ignore lint/security/noDangerouslySetInnerHtml: built above from a value narrowed to 'light' | 'dark'
-  return <script dangerouslySetInnerHTML={{ __html: script }} />;
+  return <script nonce={nonce} dangerouslySetInnerHTML={{ __html: script }} />;
 }
