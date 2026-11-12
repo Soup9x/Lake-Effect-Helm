@@ -747,12 +747,14 @@ SELECT helm_test.check('none of them accepts a user id from the caller',
 SELECT helm_test.check('helm_app still cannot delete from auth_session directly',
   NOT has_table_privilege('helm_app', 'auth_session', 'DELETE'));
 
--- The reference is a hash, so what the page renders is not a bearer token.
-SELECT helm_test.check('a session reference is not the session token',
-  helm.session_ref('a-token-that-is-at-least-32-characters-long')
-    <> 'a-token-that-is-at-least-32-characters-long');
-SELECT helm_test.check('a session reference is 32 hex characters',
-  helm.session_ref('a-token-that-is-at-least-32-characters-long') ~ '^[0-9a-f]{32}$');
+-- The table holds a hash of the token (1290), and the reference is a prefix of
+-- that hash, so neither the table nor the page holds a bearer token.
+SELECT helm_test.check('a session reference is the first 32 characters of the stored hash',
+  helm.session_ref(encode(sha256(convert_to('a-token-that-is-at-least-32-characters-long', 'UTF8')), 'hex'))
+    = substr(encode(sha256(convert_to('a-token-that-is-at-least-32-characters-long', 'UTF8')), 'hex'), 1, 32));
+SELECT helm_test.check('auth_session accepts only a hash in session_token',
+  EXISTS (SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'auth_session'::regclass AND conname = 'auth_session_token_is_hash'));
 ROLLBACK;
 
 \echo ''

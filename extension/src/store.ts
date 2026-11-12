@@ -91,7 +91,7 @@ export async function setPairing(pairing: Pairing): Promise<void> {
 
 /** Forget the pairing, and any lock on it (lock.ts), whose sealed token was its. */
 export async function clearPairing(): Promise<void> {
-  await chrome.storage.local.remove(['pairing', 'lock', 'lastActive']);
+  await chrome.storage.local.remove(['pairing', 'lock', 'lastActive', 'lockRequired']);
   await chrome.storage.session.remove('unlocked');
   await deleteKey('device');
 }

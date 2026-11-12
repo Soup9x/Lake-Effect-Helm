@@ -12,6 +12,11 @@ update a password that changed, and a **+** in the popup to add a login by
 hand. Settings live in the popup, including the timeout and whether it locks
 or signs out. There is no password generator, on purpose.
 
+Since 0.7.0 the extension tells Helm how it is locked (PIN, password or not at
+all) with every request, so an administrator can require a lock under
+Administration → Browser extensions. With that on, a browser with no lock is
+refused and its popup offers the place to set one.
+
 How it is secured, and why, is in
 [docs/architecture/01-security-model.md §4.6](../docs/architecture/01-security-model.md).
 

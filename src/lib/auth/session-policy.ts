@@ -14,6 +14,7 @@
  * refused, and the person's session list does not show a session nobody holds.
  */
 import { db } from '../db/client';
+import { storedSessionToken } from './session-cookie';
 
 /** How often a live session's last_seen_at is written, at most. */
 const TOUCH_EVERY_SECONDS = 60;
@@ -22,6 +23,7 @@ export type SessionVerdict = 'live' | 'idle' | 'expired' | 'missing';
 
 export async function enforceSessionPolicy(sessionToken: string): Promise<SessionVerdict> {
   const sql = db('auth');
+  const stored = storedSessionToken(sessionToken);
   const [row] = await sql<{
     idle: boolean; expired: boolean; stale: boolean; field_idle: boolean; field_expired: boolean;
   }[]>`
@@ -36,18 +38,18 @@ export async function enforceSessionPolicy(sessionToken: string): Promise<Sessio
     FROM auth_session s
     CROSS JOIN LATERAL helm.session_policy_for_user(s.user_id) p
     CROSS JOIN LATERAL helm.field_policy_for_user(s.user_id) f
-    WHERE s.session_token = ${sessionToken}
+    WHERE s.session_token = ${stored}
   `;
   if (!row) return 'missing';
 
   const idle = row.idle || row.field_idle;
   const expired = row.expired || row.field_expired;
   if (idle || expired) {
-    await sql`DELETE FROM auth_session WHERE session_token = ${sessionToken}`;
+    await sql`DELETE FROM auth_session WHERE session_token = ${stored}`;
     return expired ? 'expired' : 'idle';
   }
   if (row.stale) {
-    await sql`UPDATE auth_session SET last_seen_at = now() WHERE session_token = ${sessionToken}`;
+    await sql`UPDATE auth_session SET last_seen_at = now() WHERE session_token = ${stored}`;
   }
   return 'live';
 }

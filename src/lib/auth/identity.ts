@@ -22,7 +22,7 @@ import { verifyDeviceSignature } from './device-signature';
 import { extensionMayCall } from '../extension/routes';
 import { getSessionUser } from './session';
 import { sessionCookieName } from './session-cookie';
-import { fieldMayCall, markFieldUserAgent, sessionIsField } from './field-session';
+import { FIELD_READ_ONLY_MESSAGE, fieldMayCall, markFieldUserAgent, sessionIsField } from './field-session';
 import { isIP } from 'node:net';
 import { envInt } from '../env';
 
@@ -157,9 +157,7 @@ async function resolveSessionIdentity(
   const token = request.cookies.get(sessionCookieName())?.value;
   const fieldMode = token ? await sessionIsField(token) : false;
   if (fieldMode && !fieldMayCall(request.method, request.nextUrl.pathname)) {
-    throw ApiError.forbidden(
-      'Field view is read-only. Open the full site, which asks for your password again, to make changes.',
-    );
+    throw ApiError.forbidden(FIELD_READ_ONLY_MESSAGE);
   }
 
   return {

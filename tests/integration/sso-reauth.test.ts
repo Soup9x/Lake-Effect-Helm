@@ -59,7 +59,8 @@ let currentUser: SessionUser | null = null;
 interface Grant {
   nonce: string;
   sub: string;
-  authTime?: number;
+  /** Left out of the id_token when null. */
+  authTime?: number | null;
   /** Sign with a key the provider does not publish. */
   foreignKey?: boolean;
 }
@@ -118,7 +119,7 @@ class FakeProvider {
             nonce: grant.nonce,
             iat: now,
             exp: now + 300,
-            ...(grant.authTime !== undefined ? { auth_time: grant.authTime } : {}),
+            ...(typeof grant.authTime === 'number' ? { auth_time: grant.authTime } : {}),
           });
           send(200, { access_token: 'x', token_type: 'Bearer', id_token: idToken });
         });
@@ -338,6 +339,22 @@ describe('a confirmation round trip', () => {
     const { done } = await confirm({ authTime: Math.floor(Date.now() / 1000) - 3600 });
     expect(done.searchParams.get('error')).toMatch(/did not ask for your sign-in again/);
     expect(await verifications()).toHaveLength(0);
+  });
+
+  it('refuses a token that does not say when the person signed in, whenever it was issued', async () => {
+    // No auth_time. The token's iat is "now", which is what used to pass.
+    const { done } = await confirm({ authTime: null });
+    expect(done.searchParams.get('error')).toMatch(/did not say when you last signed in/);
+    expect(done.searchParams.get('error')).toMatch(/auth_time/);
+    expect(await verifications()).toHaveLength(0);
+  });
+
+  it('asks the provider for auth_time by name', async () => {
+    const started = await startRoute(get(`/api/auth/reauth/sso/start?t=${newTicket()}`));
+    const location = new URL(started.headers.get('location')!);
+    expect(JSON.parse(location.searchParams.get('claims')!)).toEqual({
+      id_token: { auth_time: { essential: true } },
+    });
   });
 
   it('refuses when the browser is signed in to Helm as somebody else by the time it returns', async () => {

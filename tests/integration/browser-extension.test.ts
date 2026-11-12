@@ -66,6 +66,7 @@ import { POST as saveRoute } from '../../src/app/api/extension/logins/route';
 import { POST as updateRoute } from '../../src/app/api/extension/logins/update/route';
 import { POST as rotateRoute } from '../../src/app/api/secrets/[secretId]/rotate/route';
 import { POST as createAsset } from '../../src/app/api/assets/route';
+import { PUT as putExtensionPolicy } from '../../src/app/api/tenant/extension-policy/route';
 import type { ExtensionDestinations, ExtensionLoginCheck, ExtensionSaved } from '../../src/lib/extension/types';
 
 // Comparing a typed password with a stored one uses the blind index (1200).
@@ -941,3 +942,98 @@ describe('saving and updating logins (1200)', () => {
     expect(refused.status).toBe(403);
   });
 });
+
+describe('requiring a lock on the extension (1300)', () => {
+  const ADMIN: SessionUser = { id: IDS.admin1, email: 'admin@northwind.test' };
+  let device: Device;
+  let token = '';
+
+  /** As signed(), saying how the browser is locked. */
+  const locked = (how: string | null, path: string, method = 'GET', payload?: unknown) => {
+    const request = signed(device, token, path, method, payload);
+    if (how !== null) request.headers.set('x-helm-extension-lock', how);
+    return request;
+  };
+  const setPolicy = async (user: SessionUser, requireLock: unknown) => {
+    currentUser = user;
+    try {
+      return await putExtensionPolicy(sessionRequest('/api/tenant/extension-policy', 'PUT', { requireLock }));
+    } finally {
+      currentUser = null;
+    }
+  };
+
+  beforeAll(async () => {
+    device = newDevice();
+    token = (await json<ExtensionPairing>(await pairAs(TECH, device, 'Lock tests'))).token;
+  });
+
+  afterAll(async () => {
+    await su((sql) => sql`DELETE FROM extension_policy`);
+  });
+
+  it('is off until an administrator turns it on, and an unlocked extension works', async () => {
+    const who = await json<{ requireLock: boolean }>(await me(locked('off', '/api/extension/me')));
+    expect(who.requireLock).toBe(false);
+    expect((await match(locked('off', '/api/extension/match', 'POST', { url: 'https://portal.acme-corp.test/' }))).status).toBe(200);
+    // And one too old to say anything.
+    expect((await match(locked(null, '/api/extension/match', 'POST', { url: 'https://portal.acme-corp.test/' }))).status).toBe(200);
+  });
+
+  it('is for somebody who manages people, from a Helm tab, with an audit row', async () => {
+    expect((await setPolicy(TECH, true)).status).toBe(403);
+    expect((await putExtensionPolicy(locked('pin', '/api/tenant/extension-policy', 'PUT', { requireLock: true }))).status).toBe(403);
+    expect((await setPolicy(ADMIN, 'yes')).status).toBe(400);
+
+    const saved = await setPolicy(ADMIN, true);
+    expect(saved.status).toBe(200);
+    expect((await json<{ policy: { requireLock: boolean } }>(saved)).policy.requireLock).toBe(true);
+    const audits = await su((sql) => sql`SELECT 1 FROM audit_log WHERE action = 'extension_policy.updated'`);
+    expect(audits.length).toBeGreaterThan(0);
+  });
+
+  it('then refuses an extension with no lock, on its own routes and on a reveal', async () => {
+    const lookup = await match(locked('off', '/api/extension/match', 'POST', { url: 'https://portal.acme-corp.test/' }));
+    expect(lookup.status).toBe(403);
+    const body = await json<{ error: { message: string; details?: { reason?: string } } }>(lookup);
+    expect(body.error.details?.reason).toBe('lock_required');
+    expect(body.error.message).toMatch(/PIN or password/);
+
+    const shown = await reveal(
+      locked('off', `/api/secrets/${portal.secretId}/reveal`, 'POST', {}),
+      params('secretId', portal.secretId),
+    );
+    expect(shown.status).toBe(403);
+    expect((await json<{ error: { details?: { reason?: string } } }>(shown)).error.details?.reason).toBe('lock_required');
+  });
+
+  it('refuses one too old to report a lock, and says to update', async () => {
+    const lookup = await match(locked(null, '/api/extension/match', 'POST', { url: 'https://portal.acme-corp.test/' }));
+    expect(lookup.status).toBe(403);
+    expect((await json<{ error: { message: string } }>(lookup)).error.message).toMatch(/Update the extension to 0\.7\.0/);
+    // A value that is not one of the two locks is not a lock.
+    expect((await match(locked('yes', '/api/extension/match', 'POST', { url: 'https://portal.acme-corp.test/' }))).status).toBe(403);
+  });
+
+  it('still tells an unlocked extension who it is, and that a lock is required', async () => {
+    const who = await me(locked('off', '/api/extension/me'));
+    expect(who.status).toBe(200);
+    expect((await json<{ requireLock: boolean }>(who)).requireLock).toBe(true);
+  });
+
+  it('answers a locked extension as before', async () => {
+    for (const how of ['pin', 'password']) {
+      expect((await match(locked(how, '/api/extension/match', 'POST', { url: 'https://portal.acme-corp.test/' }))).status).toBe(200);
+    }
+  });
+
+  it('does not ask a signed-in Helm tab for a lock', async () => {
+    currentUser = TECH;
+    try {
+      expect((await listInstalls(sessionRequest('/api/extension/installs'))).status).toBe(200);
+    } finally {
+      currentUser = null;
+    }
+  });
+});
+

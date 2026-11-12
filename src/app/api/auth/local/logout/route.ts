@@ -10,14 +10,14 @@
  */
 import { NextResponse } from 'next/server';
 import { publicRoute } from '@/lib/api/handler';
-import { clearSessionCookie, sessionCookieName } from '@/lib/auth/session-cookie';
+import { clearSessionCookie, sessionCookieName, storedSessionToken } from '@/lib/auth/session-cookie';
 import { db } from '@/lib/db/client';
 
 export const POST = publicRoute(async (request) => {
   const token = request.cookies.get(sessionCookieName())?.value;
 
   if (token) {
-    await db('auth')`DELETE FROM auth_session WHERE session_token = ${token}`;
+    await db('auth')`DELETE FROM auth_session WHERE session_token = ${storedSessionToken(token)}`;
   }
 
   const response = NextResponse.json({ ok: true });

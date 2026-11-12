@@ -1,3 +1,4 @@
+import { cspNonce } from '@/lib/ui/csp-nonce';
 import type { ReactNode } from 'react';
 import { AppChrome } from '@/components/shell/app-chrome';
 import {
@@ -70,7 +71,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
    */
   return (
     <>
-      <ThemeSync accountTheme={preferences.theme} />
+      <ThemeSync accountTheme={preferences.theme} nonce={await cspNonce()} />
       <AppChrome
         identity={identity}
         unreadNotifications={unreadNotifications}

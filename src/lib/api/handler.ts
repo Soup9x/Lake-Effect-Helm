@@ -22,6 +22,7 @@ import { SecretAccessDeniedError, StaleSecretVersionError } from '../secrets/err
 import { HelmCryptoError } from '../crypto/errors';
 import { ApiError, toErrorBody, type ErrorCode } from './errors';
 import { resolveIdentity, type RequestIdentity } from '../auth/identity';
+import { assertExtensionLock } from '../extension/policy';
 import { installSessionResolver } from '../auth/bootstrap';
 import { readTextBounded } from './body';
 import { assertNotCrossSite } from './cross-site';
@@ -92,6 +93,7 @@ export function tenantRoute<T>(
         actorFor(identity, requestId),
         async (tx, session) => {
           assertPermitted(session, options);
+          await assertExtensionLock(tx, identity, request);
           return handler({ tx, session, identity, request, requestId, params });
         },
         options.role ? { role: options.role } : {},
@@ -164,8 +166,9 @@ export function serviceRoute<T>(
       const params = args?.params ? await args.params : {};
       const actor = actorFor(identity, requestId);
 
-      const session = await withTenant(actor, async (_tx, resolved) => {
+      const session = await withTenant(actor, async (tx, resolved) => {
         assertPermitted(resolved, options);
+        await assertExtensionLock(tx, identity, request);
         return resolved;
       });
 

@@ -1,3 +1,4 @@
+import { cspNonce } from '@/lib/ui/csp-nonce';
 import type { ReactNode } from 'react';
 import {
   getServerIdentity,
@@ -33,7 +34,7 @@ export default async function PrintLayout({ children }: { children: ReactNode })
   return (
     <>
       {/* biome-ignore lint/security/noDangerouslySetInnerHtml: a constant with no interpolated input */}
-      <script dangerouslySetInnerHTML={{ __html: LIGHT_SCRIPT }} />
+      <script nonce={await cspNonce()} dangerouslySetInnerHTML={{ __html: LIGHT_SCRIPT }} />
       {/* The page's margins, so a PDF saved with the dialog's defaults still has a white border. */}
       <style>{'@page { margin: 16mm 14mm; }'}</style>
       <div className="min-h-screen bg-white text-ink">{children}</div>

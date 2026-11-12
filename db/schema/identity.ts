@@ -146,6 +146,17 @@ export const fieldViewPolicy = pgTable('field_view_policy', {
   updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
 });
 
+/**
+ * Browser extension settings one tenant's administrators set (1300). Reached
+ * only through helm.extension_policy() / helm.set_extension_policy().
+ */
+export const extensionPolicy = pgTable('extension_policy', {
+  tenantId: uuid('tenant_id').primaryKey().references(() => tenant.id, { onDelete: 'cascade' }),
+  requireLock: boolean('require_lock').notNull().default(false),
+  updatedAt: tstz('updated_at').notNull().defaultNow(),
+  updatedBy: uuid('updated_by').references(() => appUser.id, { onDelete: 'set null' }),
+});
+
 export const authVerificationToken = pgTable('auth_verification_token', {
   identifier: text('identifier').notNull(),
   token: text('token').notNull(),

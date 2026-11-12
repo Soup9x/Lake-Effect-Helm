@@ -23,6 +23,7 @@ import { issuePasswordReset } from '@/lib/auth/local';
 import { getResetDelivery, resetDeliveryAvailable } from '@/lib/auth/reset-delivery';
 import { clientIp } from '@/lib/auth/identity';
 import { getServerIdentity, NotAuthenticatedError } from '@/lib/auth/server-identity';
+import { refuseFieldWrite } from '@/lib/auth/field-server';
 import { withTenant } from '@/lib/db/client';
 
 interface ResetBody {
@@ -50,6 +51,12 @@ export const POST = publicRoute(async (request) => {
   const ip = clientIp(request);
 
   if (body.outOfBand === true) {
+    // An administrator's link for somebody else is a write on that person's
+    // account. A Field view session may not make it. (The public "forgot my
+    // password" branch below is not a signed-in action and is not refused: a
+    // person whose phone session is still open must still be able to ask.)
+    const refused = await refuseFieldWrite(request);
+    if (refused) return refused;
     return issueOutOfBand(body.email, ip, request);
   }
 

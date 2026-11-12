@@ -17,6 +17,7 @@
  *     the same way for both.
  *   * No role but helm_auth can read a password hash.
  */
+import { storedSessionToken } from '../../src/lib/auth/session-cookie';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import {
@@ -146,7 +147,7 @@ describe('signing in', () => {
     // The whole design rests on this: a local session is the same row an SSO
     // session is, so revoking one revokes the other the same way.
     const [session] = await auth()<{ user_id: string; expires: Date }[]>`
-      SELECT user_id, expires FROM auth_session WHERE session_token = ${result.sessionToken}
+      SELECT user_id, expires FROM auth_session WHERE session_token = ${storedSessionToken(result.sessionToken)}
     `;
     expect(session!.user_id).toBe(IDS.admin1);
     expect(session!.expires.getTime()).toBeGreaterThan(Date.now());

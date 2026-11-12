@@ -11,6 +11,7 @@
  * it through the route to prove the translation is right — a 403 an
  * administrator can act on, rather than a 500 with a Postgres error code.
  */
+import { storedSessionToken } from '../../src/lib/auth/session-cookie';
 import { NextRequest } from 'next/server';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { useSessionResolver, type SessionUser } from '../../src/lib/auth/session';
@@ -336,7 +337,7 @@ describe('PATCH and DELETE /api/users/[userId] — lockout', () => {
     try {
       await sql`
         INSERT INTO auth_session (session_token, user_id, expires)
-        VALUES ('revocation-test-token', ${IDS.acmeViewer}::uuid, now() + interval '1 day')
+        VALUES (${storedSessionToken('revocation-test-token')}, ${IDS.acmeViewer}::uuid, now() + interval '1 day')
         ON CONFLICT (session_token) DO NOTHING
       `;
     } finally {
