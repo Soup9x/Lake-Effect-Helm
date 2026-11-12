@@ -3,6 +3,7 @@ import { publicRoute } from '@/lib/api/handler';
 import { readJsonObjectOrEmpty } from '@/lib/api/body';
 import { attemptLocalLogin } from '@/lib/auth/local';
 import { clientIp } from '@/lib/auth/identity';
+import { refuseFieldWrite } from '@/lib/auth/field-server';
 import { actorOf, getServerIdentity, NotAuthenticatedError, type ServerIdentity } from '@/lib/auth/server-identity';
 import { withTenant } from '@/lib/db/client';
 import {
@@ -49,6 +50,10 @@ export const GET = publicRoute(async () => {
 });
 
 export const POST = publicRoute(async (request) => {
+  // Setting up or removing an authenticator is a change to the account, and
+  // Field view is read-only.
+  const refused = await refuseFieldWrite(request);
+  if (refused) return refused;
   const identity = await signedIn();
   if (identity instanceof NextResponse) return identity;
   const body = (await readJsonObjectOrEmpty(request)) as Body;
@@ -81,6 +86,8 @@ export const POST = publicRoute(async (request) => {
 });
 
 export const DELETE = publicRoute(async (request) => {
+  const refused = await refuseFieldWrite(request);
+  if (refused) return refused;
   const identity = await signedIn();
   if (identity instanceof NextResponse) return identity;
   const body = (await readJsonObjectOrEmpty(request)) as Body;

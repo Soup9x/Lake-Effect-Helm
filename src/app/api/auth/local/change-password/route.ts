@@ -17,6 +17,7 @@ import { readJsonObjectOrEmpty } from '@/lib/api/body';
 import { attemptLocalLogin, setLocalPassword } from '@/lib/auth/local';
 import { clientIp } from '@/lib/auth/identity';
 import { getServerIdentity, NotAuthenticatedError } from '@/lib/auth/server-identity';
+import { refuseFieldWrite } from '@/lib/auth/field-server';
 
 interface ChangeBody {
   currentPassword?: unknown;
@@ -24,6 +25,9 @@ interface ChangeBody {
 }
 
 export const POST = publicRoute(async (request) => {
+  const refused = await refuseFieldWrite(request);
+  if (refused) return refused;
+
   const body = (await readJsonObjectOrEmpty(request)) as ChangeBody;
 
   if (typeof body.currentPassword !== 'string' || typeof body.newPassword !== 'string') {

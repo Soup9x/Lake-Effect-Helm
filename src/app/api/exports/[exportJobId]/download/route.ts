@@ -20,6 +20,15 @@ const idSchema = z.guid();
  */
 export const GET = serviceRoute(
   async ({ identity, params, request, actor }) => {
+    // A GET, so Field view's read-only rule lets it through; but an export is
+    // every password in its scope in one file, which is exactly what a phone
+    // session must not be able to carry away.
+    if (identity.fieldMode) {
+      throw ApiError.forbidden(
+        'Exports cannot be downloaded from Field view. Open the full site, which asks for your password again.',
+      );
+    }
+
     const exportJobId = idSchema.safeParse(params.exportJobId);
     if (!exportJobId.success) throw ApiError.invalid('invalid export id');
 

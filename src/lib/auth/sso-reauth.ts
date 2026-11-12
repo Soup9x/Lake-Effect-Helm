@@ -209,6 +209,11 @@ export async function startSsoReauth(input: {
   // Ask for the credentials again, not a silent single sign-on.
   url.searchParams.set('prompt', 'login');
   url.searchParams.set('max_age', '0');
+  // And ask, in the standard way, for the id_token to say WHEN the person last
+  // signed in. The callback refuses a token that does not (see there). max_age
+  // already obliges a conforming provider to include auth_time; this request
+  // is for the ones that only include it when asked by name.
+  url.searchParams.set('claims', JSON.stringify({ id_token: { auth_time: { essential: true } } }));
   url.searchParams.set('login_hint', input.email);
 
   const pending: Pending = {
@@ -320,8 +325,24 @@ export async function finishSsoReauth(request: NextRequest): Promise<Response | 
       );
     }
 
-    const authenticatedAt = typeof claims.auth_time === 'number' ? claims.auth_time : claims.iat;
-    if (typeof authenticatedAt !== 'number' || authenticatedAt < pending.at / 1000 - SKEW_S) {
+    /*
+     * auth_time, and nothing in its place. It is the provider's statement of
+     * when the person last presented their credentials. This used to fall
+     * back to iat when auth_time was missing, and iat is when the TOKEN was
+     * issued, which is always just now: a provider that signed the person in
+     * silently (ignoring prompt=login) would have counted as a confirmation.
+     * Without auth_time there is no evidence of a fresh sign-in, so there is
+     * no confirmation.
+     */
+    if (typeof claims.auth_time !== 'number') {
+      return finish(
+        `${provider.displayName} did not say when you last signed in, so this cannot count as a confirmation. `
+        + 'An administrator needs to add the auth_time claim to the ID token for Helm '
+        + '(in Microsoft Entra: App registrations, Helm, Token configuration, Add optional claim, ID, auth_time).',
+      );
+    }
+    const authenticatedAt = claims.auth_time;
+    if (authenticatedAt < pending.at / 1000 - SKEW_S) {
       return finish(`${provider.displayName} did not ask for your sign-in again, so this cannot count as a confirmation.`);
     }
 

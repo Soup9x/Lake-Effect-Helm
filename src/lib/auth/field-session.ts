@@ -18,6 +18,7 @@
  * browser nor helm_app can clear it.
  */
 import { db } from '../db/client';
+import { storedSessionToken } from './session-cookie';
 
 const UUID = '[0-9a-fA-F-]{36}';
 
@@ -38,6 +39,10 @@ const FIELD_WRITES: readonly [method: string, pattern: RegExp][] = [
   ['POST', /^\/api\/auth\/field\/upgrade$/],
   ['POST', /^\/api\/auth\/local\/logout$/],
 ];
+
+/** What a Field view session is told when it tries to change something. */
+export const FIELD_READ_ONLY_MESSAGE =
+  'Field view is read-only. Open the full site, which asks for your password again, to make changes.';
 
 export function fieldMayCall(method: string, pathname: string): boolean {
   const m = method.toUpperCase();
@@ -64,7 +69,7 @@ export function isFieldUserAgent(userAgent: string | null | undefined): boolean 
 export async function sessionIsField(sessionToken: string): Promise<boolean> {
   const sql = db('auth');
   const [row] = await sql<{ field_mode: boolean }[]>`
-    SELECT field_mode FROM auth_session WHERE session_token = ${sessionToken}
+    SELECT field_mode FROM auth_session WHERE session_token = ${storedSessionToken(sessionToken)}
   `;
   return row?.field_mode ?? false;
 }
@@ -72,7 +77,7 @@ export async function sessionIsField(sessionToken: string): Promise<boolean> {
 /** Into or out of Field view. The caller has already decided it may. */
 export async function setSessionField(sessionToken: string, field: boolean): Promise<void> {
   const sql = db('auth');
-  await sql`UPDATE auth_session SET field_mode = ${field} WHERE session_token = ${sessionToken}`;
+  await sql`UPDATE auth_session SET field_mode = ${field} WHERE session_token = ${storedSessionToken(sessionToken)}`;
 }
 
 export interface UserFieldPolicy {
