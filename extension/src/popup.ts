@@ -41,7 +41,7 @@
  * generator, on purpose.
  */
 import type { ExtensionDestinations, ExtensionEntry, ExtensionLookup, ExtensionSaved } from '../../src/lib/extension/types';
-import { call, renewIfDue, type Result } from './api';
+import { LOCK_REQUIRED, call, renewIfDue, type Result } from './api';
 import { formInPage, type FillValues, type FormProbe } from './fill';
 import { MAX_FAILURES, getLock, lockNow, lockState, unlock, type LockConfig } from './lock';
 import { destinationPicker } from './picker';
@@ -702,6 +702,14 @@ async function start(): Promise<void> {
   searchInput.focus();
   const result = await call<ExtensionLookup>('/api/extension/match', { json: { url: active?.url ?? '' } });
   if (!result.ok) {
+    if (result.reason === LOCK_REQUIRED) {
+      // The administrator requires a lock and this browser has none: nothing
+      // works until one is set, so offer the place to set it.
+      const open = el('button', { type: 'button', class: 'primary' }, 'Set a PIN or password');
+      open.addEventListener('click', openSettings);
+      render(el('section', { class: 'card empty' }, el('p', {}, result.message), el('div', { class: 'row' }, open)));
+      return;
+    }
     render(emptyCard(result.message));
     return;
   }

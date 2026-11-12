@@ -31,6 +31,7 @@ import {
 } from '@db/schema/identity';
 import { useSessionResolver } from './session';
 import { enforceSessionPolicy } from './session-policy';
+import { storedSessionToken } from './session-cookie';
 import { clientIp } from './identity';
 import { withForwardedOrigin } from './forwarded-origin';
 import {
@@ -252,6 +253,65 @@ function stampingAdapter(base: Adapter, method: 'sso' | 'oidc', request: Request
 }
 
 /**
+ * Wrap the adapter so auth_session holds a HASH of each session token (1290).
+ *
+ * Auth.js's adapter writes the token it puts in the cookie straight into the
+ * table. This is the innermost wrapper, so every statement the adapter runs
+ * against auth_session sees storedSessionToken(token), while Auth.js and the
+ * wrappers outside this one go on handling the token itself: what comes back
+ * out carries the token the caller passed in, never the stored hash, so the
+ * cookie Auth.js sets (and refreshes) is still the token.
+ */
+function hashingAdapter(base: Adapter): Adapter {
+  const createSession = base.createSession?.bind(base);
+  const getSessionAndUser = base.getSessionAndUser?.bind(base);
+  const updateSession = base.updateSession?.bind(base);
+  const deleteSession = base.deleteSession?.bind(base);
+
+  return {
+    ...base,
+    ...(createSession
+      ? {
+          async createSession(session) {
+            const created = await createSession({
+              ...session,
+              sessionToken: storedSessionToken(session.sessionToken),
+            });
+            return { ...created, sessionToken: session.sessionToken };
+          },
+        }
+      : {}),
+    ...(getSessionAndUser
+      ? {
+          async getSessionAndUser(sessionToken) {
+            const found = await getSessionAndUser(storedSessionToken(sessionToken));
+            return found ? { ...found, session: { ...found.session, sessionToken } } : found;
+          },
+        }
+      : {}),
+    ...(updateSession
+      ? {
+          async updateSession(session) {
+            const updated = await updateSession({
+              ...session,
+              sessionToken: storedSessionToken(session.sessionToken),
+            });
+            return updated ? { ...updated, sessionToken: session.sessionToken } : updated;
+          },
+        }
+      : {}),
+    ...(deleteSession
+      ? {
+          async deleteSession(sessionToken) {
+            // Nothing reads what this returns, so the stored row is not handed back.
+            await deleteSession(storedSessionToken(sessionToken));
+          },
+        }
+      : {}),
+  };
+}
+
+/**
  * Wrap the adapter so reading a session enforces the session policy (0890):
  * one idle too long, or older than the absolute limit, is ended and reads as
  * no session at all.
@@ -325,10 +385,10 @@ async function buildConfig(request: Request | undefined): Promise<NextAuthConfig
     // flavour; without it `Parameters<typeof DrizzleAdapter>` is a union across
     // every dialect the package supports and resolves to none of them.
     adapter: policyAdapter(stampingAdapter(
-      DrizzleAdapter(
+      hashingAdapter(DrizzleAdapter(
         authDb,
         adapterTables as unknown as Parameters<typeof DrizzleAdapter<typeof authDb>>[1],
-      ),
+      )),
       // A session created while an OIDC provider is in play came through that
       // door. Entra and the built-in pages leave this as 'sso'.
       oidcProviders.length > 0 ? 'oidc' : 'sso',

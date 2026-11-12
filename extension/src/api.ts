@@ -18,7 +18,21 @@ import { clearPairing, getKey, getPairing, getServer, sha256Hex, toBase64Url } f
 
 export type Result<T> =
   | { ok: true; value: T }
-  | { ok: false; status: number; code: string; message: string };
+  | { ok: false; status: number; code: string; message: string; reason?: string };
+
+/** `reason` on a refusal because the administrator requires a lock and this browser has none. */
+export const LOCK_REQUIRED = 'lock_required';
+
+/**
+ * Whether Helm last said the administrator requires a lock (0.7.0). Learned
+ * from the answers themselves: "who am I" states it, and a refusal for the
+ * want of a lock implies it. Only what the settings page says depends on it;
+ * the rule is Helm's to enforce.
+ */
+export async function lockRequired(): Promise<boolean> {
+  const { lockRequired: required } = (await chrome.storage.local.get('lockRequired')) as { lockRequired?: boolean };
+  return required === true;
+}
 
 const NETWORK = 'Helm did not answer. Check the address in settings and your connection.';
 
@@ -71,6 +85,9 @@ async function send<T>(server: string, privateKey: CryptoKey, token: string, pat
       cache: 'no-store',
       headers: {
         authorization: `Bearer ${token}`,
+        // How this browser is locked, which Helm asks for when the
+        // administrator requires a lock. Helm cannot see the lock itself.
+        'x-helm-extension-lock': (await getLock())?.method ?? 'off',
         'x-helm-device-timestamp': timestamp,
         'x-helm-device-signature': toBase64Url(signature),
         ...(body ? { 'content-type': 'application/json' } : {}),
@@ -82,7 +99,13 @@ async function send<T>(server: string, privateKey: CryptoKey, token: string, pat
   }
 
   const payload = await response.json().catch(() => null);
-  if (response.ok) return { ok: true, value: payload as T };
+  if (response.ok) {
+    const required = (payload as { requireLock?: unknown } | null)?.requireLock;
+    if (path === '/api/extension/me' && typeof required === 'boolean') {
+      await chrome.storage.local.set({ lockRequired: required });
+    }
+    return { ok: true, value: payload as T };
+  }
 
   if (response.status === 401) {
     await clearPairing();
@@ -94,12 +117,17 @@ async function send<T>(server: string, privateKey: CryptoKey, token: string, pat
     };
   }
 
-  const error = (payload as { error?: { code?: string; message?: string } } | null)?.error;
+  const error = (payload as {
+    error?: { code?: string; message?: string; details?: { reason?: unknown } };
+  } | null)?.error;
+  const reason = typeof error?.details?.reason === 'string' ? error.details.reason : undefined;
+  if (reason === LOCK_REQUIRED) await chrome.storage.local.set({ lockRequired: true });
   return {
     ok: false,
     status: response.status,
     code: error?.code ?? 'http',
     message: error?.message ?? `Helm answered ${response.status}.`,
+    ...(reason ? { reason } : {}),
   };
 }
 

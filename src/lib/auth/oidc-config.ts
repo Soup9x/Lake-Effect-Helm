@@ -16,6 +16,7 @@
  * client secret and cannot read back the one it set.
  */
 import { db } from '../db/client';
+import { storedSessionToken } from './session-cookie';
 import { openField, sealField, wipe, type Envelope, type SecretBinding } from '../crypto/envelope';
 import type { EncryptionContext } from '../crypto/kek';
 import { getKekProvider } from '../services';
@@ -238,6 +239,6 @@ export async function stampSessionMethod(
 ): Promise<void> {
   await db('auth')`
     SELECT helm.stamp_session_method(
-      ${sessionToken}, ${method}::auth_method, ${ip ?? null}::inet, ${userAgent ?? null})
+      ${storedSessionToken(sessionToken)}, ${method}::auth_method, ${ip ?? null}::inet, ${userAgent ?? null})
   `;
 }

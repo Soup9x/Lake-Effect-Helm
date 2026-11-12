@@ -20,6 +20,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { db } from '../db/client';
+import { storedSessionToken } from './session-cookie';
 import { authenticate as radiusAuthenticate } from './radius';
 import { radiusForEmail } from './radius-config';
 import { confirmEnrolment, startEnrolment, verifySecondFactor, type Enrolment } from './local-totp';
@@ -405,7 +406,7 @@ async function openSession(
   const token = randomBytes(32).toString('base64url');
   const [session] = await sql<{ create_local_session: Date }[]>`
     SELECT helm.create_local_session(
-      ${userId}::uuid, ${token}, ${SESSION_MINUTES}, ${method}::auth_method,
+      ${userId}::uuid, ${storedSessionToken(token)}, ${SESSION_MINUTES}, ${method}::auth_method,
       ${request.ip ?? null}::inet, ${request.userAgent ?? null})
   `;
   if (!session) throw new Error('helm.create_local_session returned no row');

@@ -9,6 +9,7 @@
  * and only somebody with tenant:write may change any of it or sign everybody
  * out.
  */
+import { storedSessionToken } from '../../src/lib/auth/session-cookie';
 import { NextRequest } from 'next/server';
 import { randomBytes } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -43,14 +44,14 @@ async function plantSession(userId: string, ages: { idleMinutes?: number; ageHou
   const token = randomBytes(32).toString('base64url');
   await su`
     INSERT INTO auth_session (session_token, user_id, expires, created_at, last_seen_at)
-    VALUES (${token}, ${userId}::uuid, now() + interval '1 day',
+    VALUES (${storedSessionToken(token)}, ${userId}::uuid, now() + interval '1 day',
             now() - make_interval(hours => ${ages.ageHours ?? 0}),
             now() - make_interval(mins => ${ages.idleMinutes ?? 0}))
   `;
   return token;
 }
 const exists = async (token: string) =>
-  (await su`SELECT 1 FROM auth_session WHERE session_token = ${token}`).length === 1;
+  (await su`SELECT 1 FROM auth_session WHERE session_token = ${storedSessionToken(token)}`).length === 1;
 
 beforeAll(async () => {
   resetDatabase();
@@ -100,7 +101,7 @@ describe('enforcing it when a session is read', () => {
     const token = await plantSession(IDS.admin1, { idleMinutes: 5 });
     expect(await enforceSessionPolicy(token)).toBe('live');
     const [row] = await su<{ fresh: boolean }[]>`
-      SELECT now() - last_seen_at < interval '10 seconds' AS fresh FROM auth_session WHERE session_token = ${token}`;
+      SELECT now() - last_seen_at < interval '10 seconds' AS fresh FROM auth_session WHERE session_token = ${storedSessionToken(token)}`;
     expect(row!.fresh).toBe(true);
   });
 

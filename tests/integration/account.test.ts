@@ -17,7 +17,7 @@ import { NextRequest } from 'next/server';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { useSessionResolver, type SessionUser } from '../../src/lib/auth/session';
 import { resetServices, setKekProvider } from '../../src/lib/services';
-import { sessionRef } from '../../src/lib/auth/session-cookie';
+import { sessionRef, storedSessionToken } from '../../src/lib/auth/session-cookie';
 import {
   buildHarness,
   connectPools,
@@ -74,12 +74,12 @@ async function makeSession(
       // the new columns were ever made NOT NULL without a default.
       await sql`
         INSERT INTO auth_session (session_token, user_id, expires)
-        VALUES (${token}, ${userId}::uuid, now() + interval '8 hours')
+        VALUES (${storedSessionToken(token)}, ${userId}::uuid, now() + interval '8 hours')
       `;
     } else {
       await sql`
         SELECT helm.create_local_session(
-          ${userId}::uuid, ${token}, 480, ${method}::auth_method,
+          ${userId}::uuid, ${storedSessionToken(token)}, 480, ${method}::auth_method,
           '203.0.113.9'::inet, 'Mozilla/5.0 (test)')
       `;
     }
@@ -256,7 +256,7 @@ describe('listing your own sessions', () => {
     try {
       await sql`
         UPDATE auth_session SET expires = now() - interval '1 hour'
-        WHERE session_token = ${token}
+        WHERE session_token = ${storedSessionToken(token)}
       `;
     } finally {
       await sql.end({ timeout: 5 });

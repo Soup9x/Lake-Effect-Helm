@@ -89,9 +89,30 @@ export function clearSessionCookie(response: NextResponse): void {
 }
 
 /**
+ * What auth_session holds for a session: sha256 of the cookie's token, in hex
+ * (1290).
+ *
+ * The cookie carries the token; the database carries only this. So a copy of
+ * the table — a backup, a replica, somebody with SQL access — holds nothing a
+ * browser can present, exactly as with API tokens and reset codes. Plain
+ * sha256 rather than Argon2 because the token is 32 random bytes: there is no
+ * dictionary to slow down.
+ *
+ * EVERY statement that names auth_session.session_token passes the token
+ * through here first, including the Auth.js adapter's (hashingAdapter in
+ * config.ts). A caller that forgets finds no row, which fails closed.
+ */
+export function storedSessionToken(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+/**
  * The public handle for a session: sha256 of the token, hex, first 32 chars.
  *
- * MUST agree byte for byte with helm.session_ref() in 0360 — the account page
+ * That is the first 32 characters of what the database stores (above), which
+ * is how helm.session_ref() computes it since 1290.
+ *
+ * MUST agree byte for byte with helm.session_ref() — the account page
  * lists sessions by the identifier the database computes and revokes them by
  * the identifier computed here, so a divergence would silently make "this
  * device" unmatchable and "sign out everywhere else" sign you out of

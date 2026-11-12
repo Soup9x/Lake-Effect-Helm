@@ -14,11 +14,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { useSessionResolver, type SessionUser } from '../../src/lib/auth/session';
 import { enforceSessionPolicy } from '../../src/lib/auth/session-policy';
 import { setLocalPassword } from '../../src/lib/auth/local';
-import { sessionCookieName } from '../../src/lib/auth/session-cookie';
+import { sessionCookieName, storedSessionToken } from '../../src/lib/auth/session-cookie';
 import { GET as getPolicy, PUT as putPolicy } from '../../src/app/api/tenant/field-view/route';
 import { POST as enterField } from '../../src/app/api/auth/field/enter/route';
 import { POST as upgradeField } from '../../src/app/api/auth/field/upgrade/route';
 import { GET as listOrganizations, POST as createOrganization } from '../../src/app/api/organizations/route';
+import { POST as resetRoute } from '../../src/app/api/auth/local/reset/route';
+import { DELETE as totpDelete, POST as totpRoute } from '../../src/app/api/account/totp/route';
+import { POST as changePassword } from '../../src/app/api/auth/local/change-password/route';
+import { GET as downloadExport } from '../../src/app/api/exports/[exportJobId]/download/route';
 import { connectPools, disconnectPools, IDS, resetDatabase, superuserSql } from './harness';
 
 const ADMIN_EMAIL = 'admin@northwind.test';
@@ -54,7 +58,7 @@ async function plantSession(
   const token = randomBytes(32).toString('base64url');
   await su`
     INSERT INTO auth_session (session_token, user_id, expires, created_at, last_seen_at, field_mode)
-    VALUES (${token}, ${userId}::uuid, now() + interval '1 day',
+    VALUES (${storedSessionToken(token)}, ${userId}::uuid, now() + interval '1 day',
             now() - make_interval(hours => ${opts.ageHours ?? 0}),
             now() - make_interval(mins => ${opts.idleMinutes ?? 0}),
             ${opts.field ?? false})
@@ -62,7 +66,7 @@ async function plantSession(
   return token;
 }
 const fieldFlag = async (token: string) =>
-  (await su<{ field_mode: boolean }[]>`SELECT field_mode FROM auth_session WHERE session_token = ${token}`)[0]
+  (await su<{ field_mode: boolean }[]>`SELECT field_mode FROM auth_session WHERE session_token = ${storedSessionToken(token)}`)[0]
     ?.field_mode;
 
 beforeAll(async () => {
@@ -150,6 +154,55 @@ describe('a Field view session is read-only on the server', () => {
       payload: { slug: 'from-desk', name: 'From desk', status: 'active', relationship: 'client', timezone: 'UTC' },
     }), noParams);
     expect(write.status).toBeLessThan(300);
+  });
+});
+
+describe('the routes that find the signed-in person their own way', () => {
+  // These three authenticate through getServerIdentity(), not the API's
+  // identity resolver, so the read-only rule has to be applied by hand in
+  // each. tests/unit/field-routes.test.ts keeps that list honest.
+  it('will not issue a reset link for a colleague from Field view', async () => {
+    asAdmin();
+    const token = await plantSession(IDS.admin1, { field: true });
+    const r = await resetRoute(request('POST', '/api/auth/local/reset', {
+      token, payload: { email: 'tech1@northwind.test', outOfBand: true },
+    }));
+    expect(r.status).toBe(403);
+    expect(JSON.stringify(await body(r))).toMatch(/read-only/);
+    expect(await su`SELECT 1 FROM password_reset`).toHaveLength(0);
+  });
+
+  it('will not set up, confirm or remove an authenticator from Field view', async () => {
+    asAdmin();
+    const token = await plantSession(IDS.admin1, { field: true });
+    for (const action of ['start', 'confirm', 'recovery']) {
+      const r = await totpRoute(request('POST', '/api/account/totp', { token, payload: { action, code: '000000' } }));
+      expect(r.status, action).toBe(403);
+    }
+    const removed = await totpDelete(request('DELETE', '/api/account/totp', { token, payload: { password: ADMIN_PASSWORD } }));
+    expect(removed.status).toBe(403);
+    expect(await su`SELECT 1 FROM local_totp WHERE user_id = ${IDS.admin1}::uuid`).toHaveLength(0);
+  });
+
+  it('will not change the password from Field view, even with the current one', async () => {
+    asAdmin();
+    const token = await plantSession(IDS.admin1, { field: true });
+    const r = await changePassword(request('POST', '/api/auth/local/change-password', {
+      token, payload: { currentPassword: ADMIN_PASSWORD, newPassword: 'twenty-one silver bicycles' },
+    }));
+    expect(r.status).toBe(403);
+  });
+
+  it('will not hand an export to a Field view session, though it is a GET', async () => {
+    asAdmin();
+    const token = await plantSession(IDS.admin1, { field: true });
+    const id = '11111111-2222-4333-8444-555555555555';
+    const r = await downloadExport(
+      request('GET', `/api/exports/${id}/download`, { token }),
+      { params: Promise.resolve({ exportJobId: id }) } as never,
+    );
+    expect(r.status).toBe(403);
+    expect(JSON.stringify(await body(r))).toMatch(/Field view/);
   });
 });
 

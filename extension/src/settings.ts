@@ -16,7 +16,7 @@
  */
 import { PAIR_PATH } from '../../src/lib/extension/pairing-protocol';
 import type { ExtensionMe } from '../../src/lib/extension/types';
-import { call, signOut } from './api';
+import { call, lockRequired, signOut } from './api';
 import { browserName, platformName } from './browser';
 import { normaliseServer } from './server';
 import { applyTheme, type Theme } from './theme';
@@ -207,7 +207,12 @@ export function mountSettings(root: HTMLElement): { refresh: () => Promise<void>
     const note = el('p', { class: 'muted small', role: 'status' });
     const parts: Node[] = [];
 
+    const required = await lockRequired();
     if (state === 'off' || !lock) {
+      if (required) {
+        parts.push(el('p', { class: 'notice' },
+          'Your administrator requires a lock. Helm will not answer this browser until you turn one on below.'));
+      }
       const method = select('lock-method', [['pin', 'A PIN'], ['password', 'A password']], 'pin');
       const fields = el('div', { class: 'lock-fields' });
       let secret = secretInput('pin', 'lock-secret', 'New PIN');
@@ -283,6 +288,9 @@ export function mountSettings(root: HTMLElement): { refresh: () => Promise<void>
       parts.push(
         el('p', {}, `Unlock with a ${noun(lock.method)}. It locks when the browser closes.`),
         el('div', { class: 'row' }, button('Lock now', () => void lockNow().then(refresh))),
+        ...(required
+          ? [el('p', { class: 'muted small' }, 'Your administrator requires a lock. Turned off, Helm stops answering this browser until you set one again.')]
+          : []),
         el('label', { for: 'lock-current' }, `To stop asking, enter your ${noun(lock.method)}`),
         el('div', { class: 'row' }, current, turnOff),
       );

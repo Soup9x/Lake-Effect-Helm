@@ -386,7 +386,12 @@ that provider again** (1270, `src/lib/auth/sso-reauth.ts`):
   it only when that cookie is present and its state matches. The code is swapped
   for an id_token, whose signature (provider JWKS), issuer, audience, expiry and
   nonce are checked; its `sub` must be an `auth_account` already linked to the
-  session's user; and `auth_time` (or `iat`) must be after the button was pressed.
+  session's user; and `auth_time` must be present and after the button was pressed. A token
+  without `auth_time` is refused: `iat` only says when the token was issued,
+  which is always now, so it is no evidence of a fresh sign-in. Helm asks for
+  the claim by name (`claims={"id_token":{"auth_time":{"essential":true}}}`) as
+  well as with `max_age=0`; in Microsoft Entra, add `auth_time` as an optional
+  ID-token claim on the app registration if it is still left out.
 - Then `helm.record_sso_reauth(ticket)` writes an ordinary step-up row with method
   `sso_reauth`, so a protected reveal is satisfied exactly as by the password.
 - The one-shot actions (Field view upgrade, update request, extension pairing)
@@ -581,6 +586,17 @@ nothing presses Sign in.
 and what then happens: lock, with a PIN or password set, or sign out, which
 revokes the pairing in Helm and forgets it locally.
 
+**Requiring the lock (1300).** The lock lives in the browser, so Helm cannot
+see it. From 0.7.0 the extension states it on every request
+(`X-Helm-Extension-Lock: pin | password | off`), and when an administrator
+turns on *Require a PIN or password lock* (Administration → Browser
+extensions, `user:write`), `tenantRoute` and `serviceRoute` refuse an
+extension token that does not report a lock, or reports nothing, on every
+route but "who am I", sign out and renew (`src/lib/extension/policy.ts`). This
+is the extension's word, not proof: it makes every honest copy set a lock, and
+does not stop somebody who already holds an unsealed pairing and edits the
+extension. Revoking the browser is the answer to that.
+
 ### 4.7 Cross-site requests
 
 The session cookie is `SameSite=Lax`, which keeps it off a request from another
@@ -593,6 +609,29 @@ bearer token is exempt, because no page can attach one to another origin
 without a preflight Helm never answers; so is a request with no
 `Sec-Fetch-Site` at all (a server, or a browser older than Safari 16.4), which
 keeps SameSite as its only defence.
+
+### 4.8 Content Security Policy
+
+Every page is served with a Content Security Policy carrying a fresh nonce
+(`src/proxy.ts`, `src/lib/ui/csp.ts`). Scripts run only with that nonce, or
+when loaded by one that has it (`'strict-dynamic'`); there is no
+`'unsafe-inline'` or `'unsafe-eval'` for scripts in a production build. A page
+may connect and post forms only to Helm, load images only from Helm (plus
+`data:` and `blob:`), and be framed by nothing. Styles keep `'unsafe-inline'`
+because React writes `style` attributes, which a nonce cannot cover.
+
+Helm has no known way to get a script into a page; this is the second lock. The
+API's file responses and the Homarr page (`/embed/`) set their own, stricter
+policies and are not touched by the proxy.
+
+### 4.9 Field view is read-only in two places
+
+A Field view session (1250) is refused every write by the API's identity
+resolver. Three account routes authenticate through `getServerIdentity()`
+instead (an administrator's reset link, the authenticator, change password);
+each calls `refuseFieldWrite()` first, and `tests/unit/field-routes.test.ts`
+fails if a new route of that kind forgets. Export downloads are a GET and are
+refused for Field view by the route itself.
 
 ---
 
@@ -757,20 +796,22 @@ its private section. The tab's URL is parsed with `new URL()`, so a Unicode
 lookalike arrives as punycode and never equals an ASCII host; an IP address or
 intranet name only ever matches exactly.
 
-### 7.6 Session tokens are stored as issued
+### 7.6 Session tokens are stored as hashes; provider tokens are not
 
-API tokens and password-reset tokens are stored as SHA-256 digests, so a copy
-of those tables yields nothing usable. Session tokens are not: `auth_session`
-holds the cookie value itself, and `auth_account` holds identity-provider
-access and refresh tokens in the clear. A database dump or backup of the
-`helm_auth`-owned tables therefore yields live sessions until they expire or
-are revoked. `helm_app` cannot read either table (§6), so this is about backups
-and database-host compromise, not about a request-path bug.
+API tokens, password-reset tokens and, since `1290`, session tokens are stored
+as SHA-256 digests, so a copy of those tables yields nothing a browser or a
+client can present. The cookie carries the session token; `auth_session` holds
+`sha256(token)`, and every statement that names the column goes through
+`storedSessionToken()` (`src/lib/auth/session-cookie.ts`), including the
+Auth.js adapter's, which is wrapped. A CHECK constraint refuses anything that
+is not a 64-character hash, so a code path that forgot would fail rather than
+store a token.
 
-Hashing them means wrapping the Auth.js adapter's session methods, the local
-and RADIUS session functions in SQL, and a migration that hashes existing rows
-(the presented cookie is then hashed on lookup, so nobody is signed out). It is
-a deliberate change for its own review, not a cleanup.
+What remains: `auth_account` holds identity-provider access and refresh tokens
+in the clear, as the Auth.js adapter writes them. Helm does not use them after
+sign-in. A database dump of the `helm_auth`-owned tables therefore yields those
+until the provider expires them. `helm_app` cannot read the table (§6), so this
+is about backups and database-host compromise, not about a request-path bug.
 
 ---
 

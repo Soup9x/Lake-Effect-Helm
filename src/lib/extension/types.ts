@@ -57,6 +57,8 @@ export interface ExtensionMe {
   expiresAt: string;
   /** Whether this pairing may save and update logins (1200); false for one paired before. */
   canSave: boolean;
+  /** The administrator requires a PIN or password lock on the extension (1300). */
+  requireLock: boolean;
 }
 
 export interface ExtensionPairing {

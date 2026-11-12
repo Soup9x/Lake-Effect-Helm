@@ -28,6 +28,7 @@
  *                        Asserted on the raw Set-Cookie header, which is what
  *                        the browser actually parses.
  */
+import { storedSessionToken } from '../../src/lib/auth/session-cookie';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
@@ -292,7 +293,7 @@ describe('POST /api/auth/local/login — the session cookie', () => {
     expect(token).toBeTruthy();
 
     const [session] = await db('auth')<{ user_id: string }[]>`
-      SELECT user_id FROM auth_session WHERE session_token = ${token!}
+      SELECT user_id FROM auth_session WHERE session_token = ${storedSessionToken(token!)}
     `;
     expect(session!.user_id).toBe(IDS.admin1);
   });
@@ -323,7 +324,7 @@ describe('POST /api/auth/local/logout', () => {
 
     // The row first — a cleared cookie over a live row is a session anyone who
     // copied the cookie still holds.
-    const rows = await db('auth')`SELECT 1 FROM auth_session WHERE session_token = ${token}`;
+    const rows = await db('auth')`SELECT 1 FROM auth_session WHERE session_token = ${storedSessionToken(token)}`;
     expect(rows.length).toBe(0);
     expect(response.headers.get('set-cookie')).toMatch(/Max-Age=0/i);
   });
@@ -644,7 +645,7 @@ describe('POST /api/auth/local/change-password', () => {
 
     // They proved they know both passwords, so there is nothing to revoke —
     // and signing them out of the tab they are working in would be hostile.
-    const rows = await db('auth')`SELECT 1 FROM auth_session WHERE session_token = ${token}`;
+    const rows = await db('auth')`SELECT 1 FROM auth_session WHERE session_token = ${storedSessionToken(token)}`;
     expect(rows.length).toBe(1);
 
     expect((await loginRoute(post('/api/auth/local/login',

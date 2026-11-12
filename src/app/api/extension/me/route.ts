@@ -3,6 +3,7 @@ import { ApiError } from '@/lib/api/errors';
 import { requireExtensionCaller, requireExtensionToken } from '@/lib/extension/http';
 import { listMyBrowsers, revokeMyBrowser } from '@/lib/extension/pairing';
 import { canSave } from '@/lib/extension/save';
+import { readExtensionPolicy } from '@/lib/extension/policy';
 import type { ExtensionMe } from '@/lib/extension/types';
 
 /**
@@ -36,6 +37,7 @@ export const GET = tenantRoute(async ({ tx, identity, session }): Promise<Extens
     tenantName: who?.tenant_name ?? '',
     expiresAt: current.expiresAt,
     canSave: canSave(session.permissions),
+    requireLock: (await readExtensionPolicy(tx)).requireLock,
   };
 });
 
