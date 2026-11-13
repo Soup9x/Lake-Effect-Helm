@@ -132,6 +132,7 @@ async function withJobLock<T>(
   sql: HelmSql,
   key: number,
   fn: () => Promise<T>,
+  onAcquired?: () => void,
 ): Promise<T | null> {
   // Reserve one connection for the whole lock lifetime. Taking the lock on a
   // pooled connection and releasing it on a different one is a silent no-op
@@ -143,6 +144,7 @@ async function withJobLock<T>(
       `;
       if (!row?.locked) return null;
 
+      onAcquired?.();
       try {
         return await fn();
       } finally {
@@ -168,13 +170,41 @@ export interface RuntimeOptions {
    * every connection was a held lock and every job waited forever for another.
    */
   readonly maxConcurrent?: number;
+  /**
+   * Called every tick with what the runtime is doing, so a stalled worker can
+   * be seen from outside it (1310). main.ts writes it to the database on a
+   * connection of its own; a failure here is logged and never stops a tick.
+   */
+  readonly heartbeat?: (snapshot: RuntimeSnapshot) => Promise<void>;
+}
+
+/** What the runtime is doing right now, for the heartbeat. */
+export interface RuntimeSnapshot {
+  readonly startedAt: Date;
+  /** Job name → when it started (or began waiting for a database connection). */
+  readonly running: Record<string, { since: string; phase: 'connecting' | 'running' }>;
+  /** Job name → when another process first held its lock, for as long as it still does. */
+  readonly lockedOut: Record<string, string>;
 }
 
 interface JobState {
   lastRunAt: number;
   running: boolean;
   consecutiveFailures: number;
+  /** When the current run began; 0 when not running. */
+  startedAt: number;
+  /** 'connecting' until the job has a connection and its lock. */
+  phase: 'connecting' | 'running';
+  /** When another process was first found holding this job's lock; 0 when it is not. */
+  lockedOutSince: number;
+  /** When "still running" / "lock held elsewhere" was last logged, so it is said every so often, not every tick. */
+  lastWarnedAt: number;
 }
+
+/** A job running longer than this is worth a warning in the log. */
+const LONG_RUN_MS = 30 * 60 * 1000;
+/** A lock held elsewhere for longer than this is worth a warning. */
+const LOCKED_OUT_WARN_MS = 10 * 60 * 1000;
 
 export class WorkerRuntime {
   readonly #jobs: Job[];
@@ -182,6 +212,9 @@ export class WorkerRuntime {
   readonly #log: JobLogger;
   readonly #tickMs: number;
   readonly #maxConcurrent: number;
+  readonly #heartbeat: RuntimeOptions['heartbeat'];
+  readonly #startedAt = new Date();
+  #heartbeatBusy = false;
   #timer: NodeJS.Timeout | null = null;
   #stopping = false;
   /**
@@ -205,8 +238,12 @@ export class WorkerRuntime {
     this.#log = options.logger ?? createLogger('worker');
     this.#tickMs = options.tickMs ?? 15_000;
     this.#maxConcurrent = Math.max(1, options.maxConcurrent ?? Math.floor(poolMax() / 2));
+    this.#heartbeat = options.heartbeat;
     for (const job of jobs) {
-      this.#state.set(job.name, { lastRunAt: 0, running: false, consecutiveFailures: 0 });
+      this.#state.set(job.name, {
+        lastRunAt: 0, running: false, consecutiveFailures: 0,
+        startedAt: 0, phase: 'connecting', lockedOutSince: 0, lastWarnedAt: 0,
+      });
     }
   }
 
@@ -236,6 +273,7 @@ export class WorkerRuntime {
 
     const tick = (): void => {
       if (this.#stopping) return;
+      this.#watch();
       for (const job of this.#jobs) {
         // Full: the rest wait for a later tick. lastRunAt is untouched, so a
         // job skipped here is still due and starts as soon as a slot frees.
@@ -243,6 +281,7 @@ export class WorkerRuntime {
         if (this.#inFlight.size >= this.#maxConcurrent) break;
         void this.#track(this.#runJob(job, false));
       }
+      this.#beat();
     };
 
     tick();
@@ -280,20 +319,39 @@ export class WorkerRuntime {
     if (!force && Date.now() - state.lastRunAt < job.everyMs) return true;
 
     state.running = true;
+    state.phase = 'connecting';
     const log = this.#log.child({ job: job.name });
     const startedAt = Date.now();
+    state.startedAt = startedAt;
 
     try {
-      const result = await withJobLock(db('worker'), job.lockKey, () =>
-        job.run({ log, stopping: () => this.#stopping }),
+      const result = await withJobLock(
+        db('worker'), job.lockKey,
+        () => job.run({ log, stopping: () => this.#stopping }),
+        () => { state.phase = 'running'; },
       );
 
       state.lastRunAt = Date.now();
       state.consecutiveFailures = 0;
 
       if (result === null) {
-        log.debug('skipped: another runtime holds the lock');
-      } else if (!result.idle) {
+        // Another process holds this job's lock. Normal for a moment when two
+        // workers run; for ten minutes it means the job is not running here
+        // at all, and that used to be a debug line nobody saw.
+        const now = Date.now();
+        if (!state.lockedOutSince) state.lockedOutSince = now;
+        if (now - state.lockedOutSince >= LOCKED_OUT_WARN_MS && now - state.lastWarnedAt >= LOCKED_OUT_WARN_MS) {
+          state.lastWarnedAt = now;
+          log.warn('not run: another process has held this job\'s lock', {
+            since: new Date(state.lockedOutSince).toISOString(),
+          });
+        } else {
+          log.debug('skipped: another runtime holds the lock');
+        }
+        return true;
+      }
+      state.lockedOutSince = 0;
+      if (!result.idle) {
         log.info('completed', { ms: Date.now() - startedAt, ...(result.counts ?? {}) });
       } else {
         log.debug('nothing to do', { ms: Date.now() - startedAt });
@@ -310,7 +368,42 @@ export class WorkerRuntime {
       return false;
     } finally {
       state.running = false;
+      state.startedAt = 0;
     }
+  }
+
+  /** Says, every so often, which jobs have been running far longer than any should. */
+  #watch(): void {
+    const now = Date.now();
+    for (const job of this.#jobs) {
+      const state = this.#state.get(job.name);
+      if (!state?.running || now - state.startedAt < LONG_RUN_MS) continue;
+      if (now - state.lastWarnedAt < LONG_RUN_MS) continue;
+      state.lastWarnedAt = now;
+      this.#log.warn(
+        state.phase === 'connecting' ? 'still waiting for a database connection' : 'still running',
+        { job: job.name, since: new Date(state.startedAt).toISOString(), minutes: Math.round((now - state.startedAt) / 60_000) },
+      );
+    }
+  }
+
+  /** What the runtime is doing now. */
+  snapshot(): RuntimeSnapshot {
+    const running: RuntimeSnapshot['running'] = {};
+    const lockedOut: Record<string, string> = {};
+    for (const [name, state] of this.#state) {
+      if (state.running) running[name] = { since: new Date(state.startedAt).toISOString(), phase: state.phase };
+      if (state.lockedOutSince) lockedOut[name] = new Date(state.lockedOutSince).toISOString();
+    }
+    return { startedAt: this.#startedAt, running, lockedOut };
+  }
+
+  #beat(): void {
+    if (!this.#heartbeat || this.#heartbeatBusy) return;
+    this.#heartbeatBusy = true;
+    this.#heartbeat(this.snapshot())
+      .catch((error: unknown) => this.#log.warn('heartbeat not recorded', describeError(error)))
+      .finally(() => { this.#heartbeatBusy = false; });
   }
 
   /** Whether a scheduled tick should start this job now. */

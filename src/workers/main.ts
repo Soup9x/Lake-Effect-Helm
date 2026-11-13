@@ -14,10 +14,11 @@
  *   ONE-SHOT (--once). Run every job once and exit, for a deployment that
  *   prefers its own cron or a Kubernetes CronJob. Same code, same locking.
  */
-import { closeAllPools } from '../lib/db/client';
+import { hostname } from 'node:os';
+import { closeAllPools, dedicatedClient } from '../lib/db/client';
 import { describeKeyCustody } from '../lib/services';
 import { allJobs } from './jobs';
-import { WorkerRuntime, createLogger, type LogLevel } from './runtime';
+import { WorkerRuntime, createLogger, type LogLevel, type RuntimeSnapshot } from './runtime';
 
 async function main(): Promise<void> {
   const once = process.argv.includes('--once');
@@ -33,9 +34,8 @@ async function main(): Promise<void> {
     hostHoldsMasterKey: custody.hostHoldsMasterKey,
   });
 
-  const runtime = new WorkerRuntime(allJobs(), { logger: log });
-
   if (once) {
+    const runtime = new WorkerRuntime(allJobs(), { logger: log });
     const { failed } = await runtime.runOnce();
     await closeAllPools();
     // Non-zero when any job failed, so a CronJob or systemd timer reports it.
@@ -46,6 +46,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  // The heartbeat (1310) has a connection of its own: when every pooled
+  // connection is stuck in a hung job, this is what still says so, and the
+  // integration cards show it rather than a "Queued" that never moves.
+  const heartbeatDb = dedicatedClient('worker');
+  const instance = `${hostname()}:${process.pid}`;
+  const heartbeat = async (s: RuntimeSnapshot): Promise<void> => {
+    await heartbeatDb`
+      SELECT helm.record_worker_heartbeat(${instance}, ${s.startedAt}, ${heartbeatDb.json(s.running)},
+                                          ${heartbeatDb.json(s.lockedOut)})
+    `;
+  };
+  const runtime = new WorkerRuntime(allJobs(), { logger: log, heartbeat });
   runtime.start();
 
   // Graceful shutdown: stop scheduling, let in-flight jobs finish, then release

@@ -64,7 +64,7 @@ export function proxmoxSyncJob(): Job {
 }
 
 async function syncProxmox(ctx: JobContext): Promise<JobResult> {
-  const due = (await db('worker')<DueRow[]>`SELECT * FROM helm.sync_due(25)`)
+  const due = (await db('worker')<DueRow[]>`SELECT * FROM helm.sync_due(25, 'proxmox')`)
     .filter((row) => row.provider === 'proxmox');
   if (due.length === 0) return { idle: true };
 

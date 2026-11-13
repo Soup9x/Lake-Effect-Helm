@@ -63,7 +63,7 @@ export async function listProxmoxConnections(tx: Tx): Promise<ProxmoxConnection[
     JOIN organization o ON o.id = c.organization_id
     LEFT JOIN LATERAL (
       SELECT * FROM integration_sync_run s WHERE s.connection_id = c.id
-      ORDER BY s.started_at DESC NULLS LAST LIMIT 1
+      ORDER BY coalesce(s.started_at, s.requested_at) DESC NULLS LAST LIMIT 1
     ) r ON true
     WHERE c.provider = 'proxmox'
     ORDER BY lower(o.name), lower(c.display_name)

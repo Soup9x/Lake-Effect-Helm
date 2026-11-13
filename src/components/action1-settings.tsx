@@ -17,7 +17,7 @@
  * either name, and sorts by name or device count. All of it in the browser:
  * the whole list is already here.
  */
-import { useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronDown, ChevronRight, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
@@ -30,6 +30,7 @@ import { formatDateTime } from '@/lib/ui/format';
 import { apiFetch, type Feedback } from '@/lib/ui/api';
 import { ACTION1_REGIONS } from '@/lib/action1/client';
 import type { Action1Settings } from '@/lib/action1/queries';
+import { SyncWaitingNotice } from './sync-waiting-notice';
 
 interface OrganizationOption {
   id: string;
@@ -191,14 +192,35 @@ export function Action1SettingsCard({
       [k, target.has(k) && (v === '' || v === internalOrganizationId) ? NEW_CLIENT : v])));
   }
 
+  /** Runs, health and the worker's heartbeat again; not the organisations, which may be mid-edit. */
+  const refreshRuns = useCallback(async () => {
+    const result = await apiFetch<Action1Settings>('/api/integrations/action1');
+    if (!result.ok) return;
+    setSettings((s) => ({ ...s, connection: result.value.connection, runs: result.value.runs, worker: result.value.worker }));
+  }, []);
+
+  // While a run is queued or running, keep the table current: every 10 seconds, for at most 20 minutes.
+  const open = settings.runs.some((r) => r.status === 'queued' || r.status === 'running');
+  useEffect(() => {
+    if (!open) return;
+    let polls = 0;
+    const timer = setInterval(() => {
+      polls += 1;
+      if (polls > 120) clearInterval(timer);
+      void refreshRuns();
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [open, refreshRuns]);
+
   async function syncNow() {
     setSyncBusy(true);
     setMappingFeedback(null);
     try {
       const result = await apiFetch('/api/integrations/action1/sync', { method: 'POST' });
       setMappingFeedback(result.ok
-        ? { ok: true, message: 'Queued. The sync starts within a minute; refresh to see it here.' }
+        ? { ok: true, message: 'Queued. It is listed under Recent runs and starts within a minute.' }
         : { ok: false, message: result.message });
+      if (result.ok) await refreshRuns();
     } finally {
       setSyncBusy(false);
     }
@@ -420,6 +442,10 @@ export function Action1SettingsCard({
           </section>
         )}
 
+        {connection && (
+          <SyncWaitingNotice worker={settings.worker} jobName="action1.sync" runs={settings.runs} label="Action1" />
+        )}
+
         {settings.runs.length > 0 && (
           <section className="space-y-2">
             <h3 className="text-sm font-medium text-ink">Recent runs</h3>
@@ -438,9 +464,12 @@ export function Action1SettingsCard({
               <TableBody>
                 {settings.runs.map((run) => (
                   <TableRow key={run.id}>
-                    <TableCell className="text-ink-muted">{run.startedAt ? formatDateTime(run.startedAt) : '—'}</TableCell>
+                    <TableCell className="text-ink-muted">
+                      {run.startedAt ? formatDateTime(run.startedAt)
+                        : run.requestedAt ? `Asked ${formatDateTime(run.requestedAt)}` : '—'}
+                    </TableCell>
                     <TableCell>
-                      <Badge tone={RUN_TONE[run.status] ?? 'neutral'}>{run.status}</Badge>
+                      <Badge tone={RUN_TONE[run.status] ?? 'neutral'}>{run.status === 'queued' ? 'waiting to start' : run.status}</Badge>
                       {run.error && <span className="mt-1 block max-w-md text-xs text-ink-muted">{run.error}</span>}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{run.seen}</TableCell>

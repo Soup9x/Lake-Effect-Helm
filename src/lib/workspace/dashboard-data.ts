@@ -87,7 +87,7 @@ export async function listIntegrationHealth(tx: HelmTx): Promise<IntegrationHeal
       SELECT status::text AS status, error_summary
       FROM integration_sync_run
       WHERE connection_id = c.id AND finished_at IS NOT NULL
-      ORDER BY started_at DESC
+      ORDER BY coalesce(started_at, requested_at) DESC NULLS LAST
       LIMIT 1
     ) r ON true
     WHERE c.disabled_at IS NULL

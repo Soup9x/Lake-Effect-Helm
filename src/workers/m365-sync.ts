@@ -57,7 +57,7 @@ export function m365SyncJob(): Job {
 }
 
 async function syncM365(ctx: JobContext): Promise<JobResult> {
-  const due = (await db('worker')<DueRow[]>`SELECT * FROM helm.sync_due(25)`)
+  const due = (await db('worker')<DueRow[]>`SELECT * FROM helm.sync_due(25, 'microsoft_graph')`)
     .filter((row) => row.provider === 'microsoft_graph');
   if (due.length === 0) return { idle: true };
 
