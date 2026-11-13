@@ -82,3 +82,12 @@ export const helmDeploy = pgTable('helm_deploy', {
   hostUser: text('host_user'),
   host: text('host'),
 });
+
+// 1310: one row per worker process, written every tick (helm.record_worker_heartbeat).
+export const helmWorkerHeartbeat = pgTable('helm_worker_heartbeat', {
+  instance: text('instance').primaryKey(),
+  startedAt: tstz('started_at').notNull(),
+  seenAt: tstz('seen_at').notNull().defaultNow(),
+  running: jsonb('running').notNull().default({}),
+  lockedOut: jsonb('locked_out').notNull().default({}),
+});

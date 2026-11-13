@@ -92,3 +92,36 @@ describe('stop', () => {
     expect(finished).toBe(true);
   });
 });
+
+describe('heartbeat', () => {
+  it('reports each tick what is running and which locks another process holds', async () => {
+    const snapshots: import('../../src/workers/runtime').RuntimeSnapshot[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const slow = job('slow', async () => { await held; return { idle: false }; });
+    const elsewhere = job('elsewhere', async () => ({ idle: true }));
+
+    // Another process holds 'elsewhere's lock.
+    const { db } = await import('../../src/lib/db/client');
+    const other = await db('worker').reserve();
+    await other`SELECT pg_advisory_lock(${elsewhere.lockKey}::bigint)`;
+
+    const runtime = new WorkerRuntime([slow, elsewhere], {
+      logger: quiet, tickMs: 30,
+      heartbeat: async (s) => { snapshots.push(s); },
+    });
+    runtime.start();
+    await sleep(200);
+    try {
+      const last = snapshots.at(-1)!;
+      expect(last.running.slow).toMatchObject({ phase: 'running' });
+      expect(last.lockedOut.elsewhere).toBeDefined();
+      expect(last.running.elsewhere).toBeUndefined();
+    } finally {
+      release();
+      await runtime.stop();
+      await other`SELECT pg_advisory_unlock(${elsewhere.lockKey}::bigint)`;
+      other.release();
+    }
+  });
+});

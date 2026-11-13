@@ -16,7 +16,7 @@ import { NextRequest } from 'next/server';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { useSessionResolver, type SessionUser } from '../../src/lib/auth/session';
 import { resetServices, setKekProvider } from '../../src/lib/services';
-import { withTenant } from '../../src/lib/db/client';
+import { db, withTenant } from '../../src/lib/db/client';
 import {
   IDS, buildHarness, connectPools, disconnectPools, resetDatabase, superuserSql, type Harness,
 } from './harness';
@@ -510,6 +510,72 @@ describe('the sync worker', () => {
     asAdmin();
     expect((await syncNow(req('POST', '/api/integrations/ninja/sync'))).status).toBe(200);
     expect(await runSync()).toMatchObject({ connections: 1 });
+  });
+
+  it('shows a Sync now in Recent runs straight away, and runs that same row', async () => {
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }];
+    await configure();
+    await runSync();
+
+    asAdmin();
+    expect((await syncNow(req('POST', '/api/integrations/ninja/sync'))).status).toBe(200);
+    let settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    const queued = settings.runs[0]!;
+    expect(queued).toMatchObject({ status: 'queued', trigger: 'manual', startedAt: null });
+    expect(queued.requestedAt).not.toBeNull();
+
+    // Pressing it again while it waits does not stack a second one.
+    expect((await syncNow(req('POST', '/api/integrations/ninja/sync'))).status).toBe(200);
+    settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(settings.runs.filter((r) => r.status === 'queued')).toHaveLength(1);
+
+    // The worker takes over that row rather than colliding with it and skipping.
+    expect(await runSync()).toMatchObject({ connections: 1 });
+    settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(settings.runs[0]).toMatchObject({ id: queued.id, status: 'success', trigger: 'manual' });
+    expect(settings.runs[0]!.startedAt).not.toBeNull();
+  });
+
+  it('closes a Sync now nobody picked up within an hour, saying so', async () => {
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }];
+    await configure();
+    await runSync();
+    const [old] = await su((sql) => sql<{ id: string }[]>`
+      INSERT INTO integration_sync_run (tenant_id, connection_id, status, trigger_source, requested_at)
+      SELECT tenant_id, id, 'queued', 'manual', now() - interval '2 hours'
+      FROM integration_connection WHERE provider = 'ninja_one'
+      RETURNING id
+    `);
+
+    asAdmin();
+    expect((await syncNow(req('POST', '/api/integrations/ninja/sync'))).status).toBe(200);
+    const settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(settings.runs[0]).toMatchObject({ status: 'queued' });
+    const closed = settings.runs.find((r) => r.id === old!.id);
+    expect(closed).toMatchObject({ status: 'cancelled' });
+    expect(closed!.error).toMatch(/background worker did not pick this up/);
+  });
+
+  it('tells the card when the worker last checked in', async () => {
+    ninja.organizations = [{ id: 11, name: 'Acme Corp' }];
+    await configure();
+    await su((sql) => sql`DELETE FROM helm_worker_heartbeat`);
+
+    asAdmin();
+    let settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(settings.worker).toBeNull();
+
+    await db('worker')`
+      SELECT helm.record_worker_heartbeat('test:1', now() - interval '1 hour',
+        ${db('worker').json({ 'ninja.sync': { since: '2026-11-13T10:00:00.000Z', phase: 'connecting' } })},
+        ${db('worker').json({})})
+    `;
+    settings = await json<NinjaSettings>(await getNinja(req('GET', '/api/integrations/ninja')));
+    expect(settings.worker?.running['ninja.sync']).toMatchObject({ phase: 'connecting' });
+    expect(Date.parse(settings.worker!.now) - Date.parse(settings.worker!.seenAt)).toBeLessThan(60_000);
+
+    // Only the worker writes it.
+    await expect(db('app')`SELECT helm.record_worker_heartbeat('x', now())`).rejects.toThrow(/permission denied/);
   });
 
   it('is not blocked forever by a run the worker never finished', async () => {

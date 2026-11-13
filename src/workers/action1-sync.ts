@@ -63,7 +63,7 @@ export function action1SyncJob(): Job {
 }
 
 async function syncAction1(ctx: JobContext): Promise<JobResult> {
-  const due = (await db('worker')<DueRow[]>`SELECT * FROM helm.sync_due(25)`)
+  const due = (await db('worker')<DueRow[]>`SELECT * FROM helm.sync_due(25, 'action1')`)
     .filter((row) => row.provider === 'action1');
   if (due.length === 0) return { idle: true };
 

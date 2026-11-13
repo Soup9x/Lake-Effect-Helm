@@ -66,7 +66,7 @@ export function ninjaSyncJob(): Job {
 }
 
 async function syncNinja(ctx: JobContext): Promise<JobResult> {
-  const due = (await db('worker')<DueRow[]>`SELECT * FROM helm.sync_due(25)`)
+  const due = (await db('worker')<DueRow[]>`SELECT * FROM helm.sync_due(25, 'ninja_one')`)
     .filter((row) => row.provider === 'ninja_one');
   if (due.length === 0) return { idle: true };
 

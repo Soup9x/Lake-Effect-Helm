@@ -51,6 +51,8 @@ export const integrationSyncRun = pgTable('integration_sync_run', {
   connectionId: uuid('connection_id').notNull(),
   status: syncRunStatus('status').notNull().default('queued'),
   triggerSource: text('trigger_source').notNull().default('schedule'),
+  // 1310: when it was asked for. NULL on runs from before then.
+  requestedAt: tstz('requested_at'),
   startedAt: tstz('started_at'),
   finishedAt: tstz('finished_at'),
   recordsSeen: integer('records_seen').notNull().default(0),
