@@ -274,6 +274,9 @@ export class WorkerRuntime {
     const tick = (): void => {
       if (this.#stopping) return;
       this.#watch();
+      // Before starting this tick's jobs, so it shows what carried over from
+      // earlier ticks rather than every job it just launched.
+      this.#beat();
       for (const job of this.#jobs) {
         // Full: the rest wait for a later tick. lastRunAt is untouched, so a
         // job skipped here is still due and starts as soon as a slot frees.
@@ -281,7 +284,6 @@ export class WorkerRuntime {
         if (this.#inFlight.size >= this.#maxConcurrent) break;
         void this.#track(this.#runJob(job, false));
       }
-      this.#beat();
     };
 
     tick();
